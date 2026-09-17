@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-electron/
+release/
+.idea/
+*.log
+.env
+.DS_Store
+Thumbs.db
+
+# Lokalne dane Google OAuth — nigdy nie commituj
+google-oauth.local.json
+client_secret_*.apps.googleusercontent.com.json
+
+# Lokalna baza prototypowa zawiera konta, logowania i rozliczenia
+server/data/database.json
+server/data/database.json.*
