@@ -77,10 +77,10 @@ export function BrowserPage() {
     <div className="browser-page page-enter">
       <div className="browser-topline">
         <div>
-          <span className="eyebrow">WBUDOWANA PRZEGLĄDARKA</span>
-          <h1>{browser.title || 'Przeglądarka'}</h1>
+          <span className="eyebrow"><span className="live-dot" /> PRZEGLĄDARKA</span>
+          <h1>{browser.title || 'Nowa karta'}</h1>
         </div>
-        <div className="browser-security"><LockKeyhole size={14} /> Chromium / sandbox</div>
+        <div className="browser-security"><LockKeyhole size={13} /> Bezpieczna karta</div>
       </div>
 
       <div className="browser-toolbar">
@@ -92,21 +92,22 @@ export function BrowserPage() {
         </div>
 
         <form className="browser-address" onSubmit={submit}>
-          <Globe2 size={15} />
+          <Globe2 size={14} />
           <input
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            placeholder="Wpisz adres strony lub szukaj w Google…"
+            placeholder="Wpisz adres lub wyszukaj…"
             spellCheck={false}
           />
           <button type="submit" title="Przejdź"><Search size={16} /></button>
         </form>
 
-        <button className="browser-external" onClick={() => void window.lockOn.browser.openExternal()} title="Otwórz w domyślnej przeglądarce">
+        <button className="browser-external" onClick={() => void window.lockOn.browser.openExternal()} title="Otwórz poza ServiceOS">
           <ExternalLink size={17} />
         </button>
       </div>
 
+      <div className={'browser-loading ' + (browser.loading ? 'active' : '')}><span /></div>
       <div className="browser-host-frame">
         <div ref={hostRef} className="browser-host" />
       </div>
