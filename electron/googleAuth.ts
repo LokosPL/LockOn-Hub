@@ -1,4 +1,4 @@
-import { app, shell } from 'electron';
+import { app, safeStorage, shell } from 'electron';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -7,6 +7,7 @@ import { APP_CONFIG, hasGoogleClientId, type UserRole } from './appConfig';
 import {
   backendDevOwnerLogin,
   backendGoogleLogin,
+  backendLogout,
   backendMe,
   type BackendAuthPayload,
   type BackendRequestedPoint
@@ -41,6 +42,13 @@ export interface AuthState {
   message?: string;
 }
 
+interface StoredSessionFile {
+  encryptedApiToken?: string;
+  apiToken?: string;
+  provider: 'google' | 'local';
+  savedAt: string;
+}
+
 interface StoredSession {
   apiToken: string;
   provider: 'google' | 'local';
@@ -57,23 +65,57 @@ interface GoogleCredentialFile {
 const SESSION_FILE = 'auth-session.json';
 const sessionPath = () => path.join(app.getPath('userData'), SESSION_FILE);
 
+const writeStoredSession = (session: StoredSession) => {
+  fs.mkdirSync(path.dirname(sessionPath()), { recursive: true });
+
+  const payload: StoredSessionFile = {
+    provider: session.provider,
+    savedAt: session.savedAt
+  };
+
+  if (safeStorage.isEncryptionAvailable()) {
+    payload.encryptedApiToken = safeStorage.encryptString(session.apiToken).toString('base64');
+  } else {
+    // Fallback is intended only for development environments where the OS keychain
+    // may be unavailable. Packaged Windows builds use DPAPI through safeStorage.
+    payload.apiToken = session.apiToken;
+  }
+
+  fs.writeFileSync(sessionPath(), JSON.stringify(payload, null, 2), {
+    encoding: 'utf8',
+    mode: 0o600
+  });
+};
+
 const readStoredSession = (): StoredSession | null => {
   try {
-    const parsed = JSON.parse(fs.readFileSync(sessionPath(), 'utf8')) as Partial<StoredSession>;
-    if (!parsed.apiToken) return null;
+    const parsed = JSON.parse(fs.readFileSync(sessionPath(), 'utf8')) as Partial<StoredSessionFile>;
+    let apiToken = '';
+
+    if (parsed.encryptedApiToken && safeStorage.isEncryptionAvailable()) {
+      apiToken = safeStorage.decryptString(Buffer.from(parsed.encryptedApiToken, 'base64'));
+    } else if (parsed.apiToken) {
+      apiToken = parsed.apiToken;
+
+      // Transparent migration from the old plaintext session file.
+      if (safeStorage.isEncryptionAvailable()) {
+        writeStoredSession({
+          apiToken,
+          provider: parsed.provider ?? 'google',
+          savedAt: parsed.savedAt ?? new Date().toISOString()
+        });
+      }
+    }
+
+    if (!apiToken) return null;
     return {
-      apiToken: parsed.apiToken,
+      apiToken,
       provider: parsed.provider ?? 'google',
       savedAt: parsed.savedAt ?? new Date().toISOString()
     };
   } catch {
     return null;
   }
-};
-
-const writeStoredSession = (session: StoredSession) => {
-  fs.mkdirSync(path.dirname(sessionPath()), { recursive: true });
-  fs.writeFileSync(sessionPath(), JSON.stringify(session, null, 2), 'utf8');
 };
 
 const clearStoredSession = () => {
@@ -137,6 +179,12 @@ export const getAuthState = async (development: boolean): Promise<AuthState> => 
 };
 
 export const logout = async (development: boolean) => {
+  const stored = readStoredSession();
+  if (stored?.apiToken) {
+    try { await backendLogout(stored.apiToken); } catch {
+      // Lokalne dane sesji i tak usuwamy. Backend wygaśnie sesję automatycznie.
+    }
+  }
   clearStoredSession();
   return emptyState(development);
 };
@@ -190,6 +238,25 @@ const resolveGoogleClientSecret = () => {
   return '';
 };
 
+const oauthHtmlHeaders = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'Cache-Control': 'no-store, max-age=0',
+  'Pragma': 'no-cache',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+};
+
+const escapeHtml = (value: string) =>
+  value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[char] ?? char);
+
 export const loginLocalStarter = async (development: boolean): Promise<AuthState> => {
   if (!APP_CONFIG.auth.allowLocalStarterLogin || !development) {
     throw new Error('Logowanie lokalne jest dostępne tylko w development.');
@@ -206,7 +273,7 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
   if (!clientSecret) {
     return emptyState(
       development,
-      'Brak Google Client Secret. Zostaw plik client_secret_*.json w katalogu projektu lub Pobrane albo ustaw LOCKON_GOOGLE_CLIENT_SECRET.'
+      'Brak konfiguracji Google OAuth dla tej kompilacji.'
     );
   }
 
@@ -223,10 +290,9 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
 
     const server = http.createServer(async (request, response) => {
       try {
-        const host = request.headers.host || '127.0.0.1';
-        const callbackUrl = new URL(request.url || '/', `http://${host}`);
+        const callbackUrl = new URL(request.url || '/', 'http://127.0.0.1');
         if (callbackUrl.pathname !== '/oauth2/callback') {
-          response.writeHead(404).end('Not found');
+          response.writeHead(404, oauthHtmlHeaders).end('Not found');
           return;
         }
 
@@ -244,6 +310,7 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          redirect: 'error',
           body: new URLSearchParams({
             client_id: APP_CONFIG.auth.googleClientId,
             client_secret: clientSecret,
@@ -255,27 +322,28 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         });
 
         if (!tokenResponse.ok) {
-          const details = await tokenResponse.text();
-          throw new Error(`Google odrzucił logowanie (${tokenResponse.status}): ${details}`);
+          throw new Error(`Google odrzucił logowanie (HTTP ${tokenResponse.status}).`);
         }
 
-        const tokens = (await tokenResponse.json()) as { access_token?: string };
-        if (!tokens.access_token) throw new Error('Brak access token po logowaniu Google.');
+        const tokens = (await tokenResponse.json()) as { id_token?: string };
+        if (!tokens.id_token) throw new Error('Google nie zwrócił tokena tożsamości.');
 
-        // Backend sam weryfikuje access token w Google i dopiero wtedy tworzy/odświeża konto.
-        const payload = await backendGoogleLogin(tokens.access_token);
+        // Backend weryfikuje podpis, issuer, czas ważności i audience ID tokena.
+        const payload = await backendGoogleLogin(tokens.id_token);
         writeStoredSession({ apiToken: payload.token, provider: 'google', savedAt: new Date().toISOString() });
         const state = toAuthState(payload, development);
 
         const statusText = payload.user.status === 'ACTIVE'
-          ? `Rola: <b>${payload.user.role}</b>.`
-          : 'Konto zostało zapisane i czeka na przypisanie punktu oraz akceptację właściciela.';
+          ? `Dostęp aktywny: <b>${escapeHtml(String(payload.user.role ?? ''))}</b>.`
+          : 'Konto zostało zapisane i czeka na akceptację właściciela.';
 
-        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        response.writeHead(200, oauthHtmlHeaders);
         response.end(`
-          <html><body style="font-family:Arial;background:#111;color:#fff;padding:40px">
+          <!doctype html>
+          <html lang="pl"><head><meta charset="utf-8"><title>LockOn ServiceOS</title></head>
+          <body style="font-family:Arial;background:#111;color:#fff;padding:40px">
             <h2>LockOn ServiceOS</h2>
-            <p>Zalogowano jako <b>${payload.user.email.replace(/[<>]/g, '')}</b>.</p>
+            <p>Zalogowano jako <b>${escapeHtml(payload.user.email)}</b>.</p>
             <p>${statusText}</p>
             <p>Możesz zamknąć tę kartę i wrócić do aplikacji.</p>
           </body></html>
@@ -286,7 +354,7 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
           resolve(state);
         });
       } catch (error) {
-        response.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+        response.writeHead(500, oauthHtmlHeaders);
         response.end('<h2>Logowanie nie powiodło się. Wróć do LockOn ServiceOS.</h2>');
         finish(() => {
           server.close();
@@ -294,6 +362,9 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         });
       }
     });
+
+    server.maxHeadersCount = 40;
+    server.requestTimeout = 15_000;
 
     server.on('error', (error) => finish(() => reject(error)));
     server.listen(0, '127.0.0.1', async () => {
@@ -312,7 +383,6 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         state: stateToken,
         code_challenge: challenge,
         code_challenge_method: 'S256',
-        access_type: 'offline',
         prompt: 'select_account'
       }).toString();
       await shell.openExternal(authUrl.toString());
