@@ -2,10 +2,8 @@ name: Build and publish LockOn ServiceOS
 
 on:
   push:
-    branches: ["main"]
     paths:
-      - "source-bundle/**"
-      - ".github/workflows/release.yml"
+      - "RELEASE"
   workflow_dispatch:
 
 permissions:
@@ -13,7 +11,7 @@ permissions:
 
 concurrency:
   group: lockon-release
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   release-windows:
@@ -22,42 +20,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Restore LockOn ServiceOS source
-        shell: pwsh
-        run: |
-          $parts = Get-ChildItem "source-bundle\part*.b64" | Sort-Object Name
-          if ($parts.Count -ne 10) {
-            Write-Error "Nie znaleziono kompletu źródła LockOn ServiceOS (oczekiwano 10 części)."
-            exit 1
-          }
-
-          $base64 = ($parts | ForEach-Object {
-            (Get-Content $_.FullName -Raw).Trim()
-          }) -join ""
-
-          [IO.File]::WriteAllBytes(
-            "$PWD\lockon-source.tar.gz",
-            [Convert]::FromBase64String($base64)
-          )
-
-          $expected = "1ee50c9e2f70411efaaa5d09fe29ff2e44afa8d0e84c86bc04b860b3d3d96fae"
-          $actual = (Get-FileHash "$PWD\lockon-source.tar.gz" -Algorithm SHA256).Hash.ToLower()
-
-          if ($actual -ne $expected) {
-            Write-Error "Archiwum źródła ma nieprawidłową sumę SHA-256."
-            Write-Host "Oczekiwano: $expected"
-            Write-Host "Otrzymano:  $actual"
-            exit 1
-          }
-
-          New-Item -ItemType Directory -Force -Path "$PWD\app" | Out-Null
-          tar -xzf "$PWD\lockon-source.tar.gz" -C "$PWD\app"
-
-          if (!(Test-Path "$PWD\app\src\App.tsx") -or !(Test-Path "$PWD\app\electron\main.ts")) {
-            Write-Error "Nie udało się odtworzyć kompletnego źródła aplikacji."
-            exit 1
-          }
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -70,13 +32,12 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.LOCKON_GOOGLE_CLIENT_SECRET }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:GOOGLE_CLIENT_SECRET)) {
-            Write-Error "Brak sekretu LOCKON_GOOGLE_CLIENT_SECRET w Settings > Secrets and variables > Actions."
+            Write-Error "Brak sekretu LOCKON_GOOGLE_CLIENT_SECRET."
             exit 1
           }
 
       - name: Inject Google OAuth secret
         shell: pwsh
-        working-directory: app
         env:
           GOOGLE_CLIENT_SECRET: ${{ secrets.LOCKON_GOOGLE_CLIENT_SECRET }}
         run: |
@@ -84,25 +45,27 @@ jobs:
           "export const GOOGLE_CLIENT_SECRET = '$escaped';" | Set-Content -Path electron/generatedSecrets.ts -Encoding utf8
 
       - name: Install dependencies
-        working-directory: app
         run: npm install
 
-      - name: Typecheck
-        working-directory: app
+      - name: Typecheck renderer
         run: npm run typecheck
 
-      - name: Build Windows installer
-        working-directory: app
-        run: |
-          npm run build
-          npx electron-builder --win --publish never
+      - name: Build application
+        run: npm run build
 
-      - name: Read app version
+      - name: Build Windows installer
+        run: npx electron-builder --win --publish never
+
+      - name: Verify release version
         id: version
         shell: pwsh
-        working-directory: app
         run: |
           $version = node -p "require('./package.json').version"
+          $requested = (Get-Content RELEASE -Raw).Trim()
+          if ($version -ne $requested) {
+            Write-Error "RELEASE ($requested) nie zgadza się z package.json ($version)."
+            exit 1
+          }
           "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Publish GitHub Release
@@ -113,10 +76,10 @@ jobs:
           body: |
             Oficjalne wydanie LockOn ServiceOS.
 
-            **Instalator Windows:** LockOn-ServiceOS-Setup.exe
-
-            W kolejnych wydaniach aplikacja sprawdza aktualizacje przez GitHub Releases.
+            Pobierz **LockOn-ServiceOS-Setup.exe**. Kolejne wersje aplikacja wykrywa przez GitHub Releases.
           make_latest: true
           overwrite_files: true
           files: |
-            app/release/*
+            release/LockOn-ServiceOS-Setup.exe
+            release/LockOn-ServiceOS-Setup.exe.blockmap
+            release/latest.yml
