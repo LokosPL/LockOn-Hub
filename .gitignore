@@ -8,10 +8,10 @@ release/
 .DS_Store
 Thumbs.db
 
-# Lokalne dane Google OAuth — nigdy nie commituj
-google-oauth.local.json
+# OAuth credentials
 client_secret_*.apps.googleusercontent.com.json
+google-oauth.local.json
 
-# Lokalna baza prototypowa zawiera konta, logowania i rozliczenia
+# Runtime/local database
 server/data/database.json
 server/data/database.json.*

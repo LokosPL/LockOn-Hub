@@ -1,0 +1,16 @@
+LockOn ServiceOS 0.5.0
+======================
+
+- Usunięto pole wiadomości przy zgłoszeniu dostępu.
+- Nowy użytkownik wybiera punkt, miasto i rolę, o którą prosi.
+- Role do wyboru: Szef, Koordynator, Wsparcie LockOnOS, Serwisant, Użytkownik.
+- Rola i punkt nadal wymagają zatwierdzenia Właściciela aplikacji.
+- Właściciel widzi zgłoszoną rolę i może ją zmienić przed akceptacją.
+- Panel Administracja ma zakładki: Do akceptacji / Aktywne konta / Dziennik logowań.
+- Dodano wyszukiwarkę użytkowników i auto-odświeżanie panelu co 10 s.
+- Dziennik logowań pokazuje również zakres punktów.
+- Użytkownik oczekujący ma automatyczne sprawdzanie statusu co 8 s.
+- Po akceptacji interfejs odblokowuje się automatycznie bez ponownego logowania.
+- Zgłoszenie można edytować podczas oczekiwania albo ponownie wysłać po odrzuceniu.
+- Sesja LockOn API działa do 90 dni i jest automatycznie przedłużana przy aktywnym korzystaniu.
+- Przy ponownym uruchomieniu aplikacji działa autologowanie z zapisanej sesji.

@@ -1,0 +1,62 @@
+import { GOOGLE_CLIENT_SECRET } from './generatedSecrets';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const loadLocalEnv = () => {
+  try {
+    const envPath = path.join(process.cwd(), '.env');
+    if (!fs.existsSync(envPath)) return;
+    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const index = trimmed.indexOf('=');
+      if (index <= 0) continue;
+      const key = trimmed.slice(0, index).trim();
+      let value = trimmed.slice(index + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+      if (!(key in process.env)) process.env[key] = value;
+    }
+  } catch {
+    // .env jest wygodą developerską, brak pliku nie jest błędem.
+  }
+};
+
+loadLocalEnv();
+
+export type UserRole = 'OWNER' | 'BOSS' | 'COORDINATOR' | 'SUPPORT' | 'TECHNICIAN' | 'USER';
+
+export const APP_CONFIG = {
+  name: 'LockOn ServiceOS',
+  author: 'Bartłomiej Motłoch',
+  defaultPoint: {
+    id: 'nowogard',
+    name: 'Punkt Nowogard'
+  },
+  backend: {
+    // Development: lokalny serwer z katalogu /server uruchamiany przez npm run dev.
+    // Produkcja: ustaw LOCKON_API_URL na publiczny adres wdrożonego API.
+    apiBaseUrl: process.env.LOCKON_API_URL || 'http://127.0.0.1:8787'
+  },
+  updateRepository: {
+    owner: 'LokosPL',
+    repo: 'LockOn-Hub'
+  },
+  auth: {
+    googleClientId:
+      '996585439932-e10mu53j95s6u13vrua841tm4oco38so.apps.googleusercontent.com',
+
+    // Do developmentu można wkleić secret tutaj albo zostawić puste.
+    // Preferowane: LOCKON_GOOGLE_CLIENT_SECRET w lokalnym .env lub plik client_secret_*.json w Pobrane.
+    googleClientSecret: process.env.LOCKON_GOOGLE_CLIENT_SECRET || GOOGLE_CLIENT_SECRET,
+
+    // Tylko development; backend /auth/dev-owner działa, gdy LOCKON_ALLOW_DEV_LOGIN=1.
+    allowLocalStarterLogin: true
+  },
+  browser: {
+    homeUrl: 'https://www.google.com/'
+  }
+} as const;
+
+export const hasGoogleClientId = () =>
+  Boolean(APP_CONFIG.auth.googleClientId) &&
+  !APP_CONFIG.auth.googleClientId.startsWith('PASTE_');

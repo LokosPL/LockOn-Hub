@@ -79,6 +79,9 @@
         "releaseType": "release"
       }
     ],
-    "artifactName": "LockOn-ServiceOS-Setup.${ext}"
+    "artifactName": "LockOn-ServiceOS-Setup.${ext}",
+    "asarUnpack": [
+      "server/**/*"
+    ]
   }
 }

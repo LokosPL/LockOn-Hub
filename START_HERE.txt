@@ -1,0 +1,67 @@
+LOCKON SERVICEOS 0.5.0 — START
+================================
+
+1. Otwórz ten katalog w IntelliJ IDEA.
+2. W terminalu wykonaj:
+
+   npm install
+
+3. Uruchom:
+
+   npm run dev
+
+   albo użyj konfiguracji "LockOn ServiceOS" z górnego przycisku RUN.
+
+Co startuje npm run dev:
+- LockOn API na http://127.0.0.1:8787
+- React/Vite na http://localhost:5173
+- Electron LockOn ServiceOS
+
+NOWY UŻYTKOWNIK
+---------------
+1. Loguje się przez Google.
+2. Wpisuje nazwę punktu i miasto.
+3. Wybiera rolę, o którą prosi.
+4. Wysyła zgłoszenie.
+5. Aplikacja sama sprawdza, czy konto zostało zatwierdzone.
+6. OWNER w Administracja -> Do akceptacji zatwierdza lub zmienia rolę/punkt.
+7. Użytkownik przechodzi dalej automatycznie, bez ponownego logowania Google.
+
+AUTOLOGOWANIE
+-------------
+Po pierwszym logowaniu sesja jest zapamiętywana.
+Ponowne uruchomienie aplikacji nie wymaga Google, dopóki sesja LockOn jest ważna.
+Sesja backendu działa w modelu sliding do 90 dni.
+
+PANEL OWNER
+-----------
+Administracja ma zakładki:
+- Do akceptacji
+- Aktywne konta
+- Dziennik logowań
+
+Jest wyszukiwarka i auto-odświeżanie co 10 sekund.
+Konto OWNER: nowogar@gmail.com
+
+ROLE
+----
+OWNER        Właściciel aplikacji — pełny globalny dostęp
+BOSS         Szef — wszystkie punkty i rozliczenia
+COORDINATOR  Koordynator — wybrane punkty
+SUPPORT      Wsparcie LockOnOS — wybrane punkty + centrum wsparcia
+TECHNICIAN   Serwisant — punkt + własne rozliczenia
+USER         Użytkownik — podstawowe funkcje punktu
+
+ROZLICZENIA
+------------
+Serwisant sam wpisuje przychód.
+OWNER lub BOSS zatwierdza albo odrzuca zgłoszenie.
+Po zatwierdzeniu podział jest zawsze:
+50% Serwisant / 50% Szef.
+
+WAŻNE — WIELE KOMPUTERÓW
+-------------------------
+Wersja developerska uruchamia API lokalnie na tym samym komputerze.
+Jeśli pracownicy mają logować się z różnych komputerów i OWNER ma widzieć wszystkich w jednym miejscu,
+katalog /server musi działać na jednym wspólnym serwerze/VPS w Internecie.
+Następnie aplikacje muszą używać tego samego LOCKON_API_URL.
