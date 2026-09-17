@@ -1,5 +1,5 @@
-import { Headphones, MessageSquareText, ShieldCheck, UsersRound } from 'lucide-react';
-import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
+import { Headphones, MessageSquareText, ShieldCheck } from 'lucide-react';
+import type { UserRole } from '../config/roles';
 
 interface SupportDeskProps {
   role: UserRole;
@@ -12,34 +12,29 @@ export function SupportDesk({ role, onOpenChat }: SupportDeskProps) {
   return (
     <div className="support-page page-enter">
       <section className="support-hero">
-        <div className="support-hero-icon"><Headphones size={28} /></div>
         <div>
-          <div className="eyebrow light">LOCKON SUPPORT</div>
-          <h1>Centrum wsparcia</h1>
-          <p>
-            Panel przeznaczony dla właściciela aplikacji i roli Wsparcie. Czat pomocy jest dostępny z boku aplikacji. Rola Wsparcie LockOnOS może być przypisana do konkretnych punktów przez Właściciela.
-          </p>
+          <div className="eyebrow"><span className="live-dot" /> POMOC LOCKON</div>
+          <h1>Pomoc bez zajmowania całego ekranu.</h1>
+          <p>Panel otwiera się z prawej strony i zostawia Ci widok aplikacji. W obecnej wersji rozmowa jest zapisywana lokalnie na komputerze.</p>
+          <button className="button primary" onClick={onOpenChat}>
+            <MessageSquareText size={17} /> Otwórz pomoc
+          </button>
         </div>
+        <div className="support-hero-icon"><Headphones size={30} /></div>
       </section>
 
-      <section className="support-grid">
+      <section className="support-grid compact-support-grid">
         <article className="panel-card support-card">
-          <ShieldCheck size={22} />
-          <span>Aktualna rola</span>
-          <strong>{ROLE_DEFINITIONS[role].label}</strong>
-          <small>{isSupport ? 'Dostęp do trybu obsługi wsparcia aktywny.' : 'Podgląd interfejsu bez realnych uprawnień wsparcia.'}</small>
+          <ShieldCheck size={20} />
+          <span>Tryb</span>
+          <strong>{isSupport ? 'Wsparcie aktywne' : 'Pomoc użytkownika'}</strong>
+          <small>{isSupport ? 'Możesz pisać jako Wsparcie LockOn.' : 'Możesz opisać problem w panelu pomocy.'}</small>
         </article>
         <article className="panel-card support-card">
-          <UsersRound size={22} />
-          <span>Kolejka zgłoszeń</span>
-          <strong>0</strong>
-          <small>Gotowe miejsce pod zgłoszenia użytkowników z wielu punktów.</small>
-        </article>
-        <article className="panel-card support-card">
-          <MessageSquareText size={22} />
-          <span>Czat pomocy</span>
-          <strong>LOCAL</strong>
-          <button className="button primary" onClick={onOpenChat}>Otwórz czat</button>
+          <MessageSquareText size={20} />
+          <span>Rozmowa</span>
+          <strong>Lokalna</strong>
+          <small>Historia zostaje na tym urządzeniu i nie udaje jeszcze centralnego systemu zgłoszeń.</small>
         </article>
       </section>
     </div>
