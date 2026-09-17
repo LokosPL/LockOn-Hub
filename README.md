@@ -1,63 +1,38 @@
-# LockOn ServiceOS 0.5.0
+# LockOn ServiceOS
 
-Desktopowy system dla serwisu telefonów: Electron + React + TypeScript z Google OAuth, autologowaniem, wbudowaną przeglądarką Chromium, rolami, centralnym panelem akceptacji użytkowników i rozliczeniami 50/50.
+Desktopowa aplikacja LockOn do codziennej pracy serwisu. Aktualny kierunek projektu to prosty, spójny interfejs oparty na funkcjach, które są już realnie dostępne: pulpit, wbudowana przeglądarka, logowanie Google, administracja dostępu, rozliczenia, pomoc oraz aktualizacje.
 
-## Uruchomienie
+**Autor:** Bartłomiej Motłoch — Punkt Nowogard
 
-```bash
-npm install
-npm run dev
-```
+## Pobieranie
 
-`npm run dev` uruchamia równocześnie API (`127.0.0.1:8787`), Vite i Electron.
+Oficjalny instalator Windows jest publikowany w **GitHub Releases** jako:
 
-## Nowy przepływ konta
+`LockOn-ServiceOS-Setup.exe`
 
-1. Użytkownik loguje się przez Google.
-2. Przy pierwszym wejściu wpisuje nazwę punktu i miasto.
-3. Wybiera rolę, o którą prosi: `BOSS`, `COORDINATOR`, `SUPPORT`, `TECHNICIAN` albo `USER`.
-4. Konto pozostaje `PENDING` — użytkownik nie ma jeszcze dostępu do danych punktu.
-5. Właściciel `nowogar@gmail.com` widzi zgłoszenie w **Administracja → Do akceptacji**.
-6. Właściciel może zaakceptować proponowaną rolę, zmienić ją, przypisać zgłoszony punkt lub wybrać istniejący punkt.
-7. Ekran oczekiwania sprawdza status automatycznie. Po akceptacji użytkownik przechodzi do aplikacji bez ponownego logowania Google.
+Stały link strony pobierania wskazuje zawsze na najnowsze wydanie.
 
-Nie ma już pola „wiadomość dla właściciela”. Zgłoszenie jest krótkie i jednoznaczne: konto Google + punkt + miasto + żądana rola.
+## Aktualizacje
 
-## Autologowanie
+Aplikacja korzysta z `electron-updater` i GitHub Releases. Wydanie zawiera instalator, `latest.yml` oraz `.blockmap`, dzięki czemu ServiceOS może wykryć nową wersję i przeprowadzić aktualizację.
 
-Po udanym logowaniu aplikacja zapisuje lokalnie sesję LockOn API. Backend utrzymuje sesję w trybie sliding do 90 dni. Przy kolejnym uruchomieniu aplikacja najpierw próbuje odtworzyć sesję i — jeśli nadal jest ważna — nie uruchamia ponownie OAuth Google.
+## Wydawanie
 
-Wylogowanie ręczne usuwa lokalną sesję.
+Kod aplikacji znajduje się bezpośrednio w repozytorium. Workflow wydania uruchamia się po zmianie pliku `RELEASE`, sprawdza zgodność wersji z `package.json`, buduje aplikację na Windows i publikuje release.
 
-## Panel właściciela
+Sekret Google OAuth jest przechowywany jako GitHub Actions Secret:
 
-Panel **Administracja** ma trzy czytelne zakładki:
+`LOCKON_GOOGLE_CLIENT_SECRET`
 
-- **Do akceptacji** — nowe zgłoszenia z proponowaną rolą i punktem,
-- **Aktywne konta** — zmiana ról i przypisanych punktów,
-- **Dziennik logowań** — kto i kiedy logował się do aplikacji.
+Nie jest zapisywany w publicznym kodzie repozytorium.
 
-Panel odświeża się automatycznie co 10 sekund. Można też wyszukiwać po imieniu, e-mailu i punkcie.
+## Weryfikacja
 
-Role:
+Każda zmiana źródła jest sprawdzana przez CI:
+- TypeScript renderer,
+- kompilacja Electron,
+- build Vite.
 
-- `OWNER` — Właściciel aplikacji, globalny pełny dostęp,
-- `BOSS` — Szef, globalny dostęp do wszystkich punktów i rozliczeń,
-- `COORDINATOR` — Koordynator wybranych punktów,
-- `SUPPORT` — Wsparcie LockOnOS wybranych punktów,
-- `TECHNICIAN` — Serwisant,
-- `USER` — podstawowy Użytkownik punktu.
+## Aktualna wersja
 
-## Rozliczenia 50/50
-
-Serwisant sam wpisuje kwotę przychodu, datę, punkt i notatkę. Zgłoszenie ma status `PENDING`. OWNER lub BOSS może je zatwierdzić albo odrzucić. Po zatwierdzeniu backend zawsze liczy 50% dla Serwisanta i 50% dla Szefa.
-
-## Google OAuth
-
-Client ID jest w `electron/appConfig.ts`. Client Secret nie jest dołączony do projektu. Development może odczytać plik `client_secret_*.apps.googleusercontent.com.json` z katalogu projektu lub `Pobrane`, albo zmienną `LOCKON_GOOGLE_CLIENT_SECRET`.
-
-## Backend i wiele komputerów
-
-Katalog `server/` zawiera działający prototyp API oparty na pliku JSON. Lokalnie wystarcza do testów całego przepływu. Aby OWNER widział logowania i użytkowników z różnych komputerów, API musi być uruchomione pod jednym wspólnym publicznym adresem. Wszystkie aplikacje muszą wskazywać ten sam `LOCKON_API_URL`.
-
-Przed wdrożeniem produkcyjnym zalecane jest zastąpienie pliku JSON bazą PostgreSQL, HTTPS/reverse proxy, rotacja ujawnionych wcześniej danych OAuth oraz backupy.
+**0.6.0**
