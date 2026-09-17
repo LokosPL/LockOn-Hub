@@ -64,3 +64,42 @@ jobs:
 
       - name: Build renderer
         run: npm run build:web
+
+      - name: Package smoke build
+        run: npx electron-builder --win --dir
+
+      - name: Smoke test packaged local API
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "release/win-unpacked/LockOn ServiceOS.exe"
+          $server = Resolve-Path "release/win-unpacked/resources/app.asar.unpacked/server/index.mjs"
+          $data = Join-Path $env:RUNNER_TEMP "lockon-smoke-database.json"
+          $env:ELECTRON_RUN_AS_NODE = "1"
+          $env:LOCKON_API_HOST = "127.0.0.1"
+          $env:LOCKON_API_PORT = "18787"
+          $env:LOCKON_DATA_FILE = $data
+          $env:LOCKON_OWNER_EMAIL = "nowogar@gmail.com"
+          $env:LOCKON_GOOGLE_CLIENT_ID = "996585439932-e10mu53j95s6u13vrua841tm4oco38so.apps.googleusercontent.com"
+
+          $process = Start-Process -FilePath $exe -ArgumentList @($server) -PassThru -WindowStyle Hidden
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 20; $i++) {
+              Start-Sleep -Milliseconds 350
+              if ($process.HasExited) {
+                throw "Pakietowany backend zakończył się przed uruchomieniem."
+              }
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:18787/health" -TimeoutSec 2
+                if ($health.ok -eq $true) {
+                  $ok = $true
+                  break
+                }
+              } catch {}
+            }
+            if (-not $ok) {
+              throw "Pakietowany backend nie odpowiedział na /health."
+            }
+          } finally {
+            if (-not $process.HasExited) { $process.Kill() }
+          }
