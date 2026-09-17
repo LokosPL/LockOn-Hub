@@ -73,6 +73,20 @@ jobs:
       - name: Build Windows installer
         run: npx electron-builder --win --publish never
 
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            "release/LockOn-ServiceOS-Setup.exe",
+            "release/LockOn-ServiceOS-Setup.exe.blockmap",
+            "release/latest.yml"
+          )
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $([System.IO.Path]::GetFileName($file))"
+          }
+          Set-Content -Path release/SHA256SUMS.txt -Value $lines -Encoding ascii
+
       - name: Generate build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
@@ -80,6 +94,7 @@ jobs:
             release/LockOn-ServiceOS-Setup.exe
             release/LockOn-ServiceOS-Setup.exe.blockmap
             release/latest.yml
+            release/SHA256SUMS.txt
 
       - name: Prepare release notes
         shell: pwsh
@@ -100,4 +115,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "v$env:VERSION" "release/LockOn-ServiceOS-Setup.exe" "release/LockOn-ServiceOS-Setup.exe.blockmap" "release/latest.yml" --title "LockOn ServiceOS v$env:VERSION" --notes-file release-notes.md --latest
+          gh release create "v$env:VERSION" "release/LockOn-ServiceOS-Setup.exe" "release/LockOn-ServiceOS-Setup.exe.blockmap" "release/latest.yml" "release/SHA256SUMS.txt" --title "LockOn ServiceOS v$env:VERSION" --notes-file release-notes.md --latest
