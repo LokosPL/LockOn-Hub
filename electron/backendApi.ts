@@ -52,7 +52,12 @@ export async function backendRequest<T>(
 
   let response: Response;
   try {
-    response = await fetch(endpoint(path), { ...options, headers });
+    response = await fetch(endpoint(path), {
+      ...options,
+      headers,
+      redirect: 'error',
+      cache: 'no-store'
+    });
   } catch {
     throw new Error(
       `Nie można połączyć się z LockOn API (${APP_CONFIG.backend.apiBaseUrl}). ` +
@@ -77,13 +82,16 @@ export async function backendRequest<T>(
   return data as T;
 }
 
-export const backendGoogleLogin = (accessToken: string) =>
+export const backendGoogleLogin = (idToken: string) =>
   backendRequest<BackendLoginPayload>('/auth/google', {
     method: 'POST',
-    body: JSON.stringify({ accessToken })
+    body: JSON.stringify({ idToken })
   });
 
 export const backendDevOwnerLogin = () =>
   backendRequest<BackendLoginPayload>('/auth/dev-owner', { method: 'POST', body: '{}' });
 
 export const backendMe = (token: string) => backendRequest<BackendAuthPayload>('/me', {}, token);
+
+export const backendLogout = (token: string) =>
+  backendRequest<{ ok: true }>('/auth/logout', { method: 'POST', body: '{}' }, token);
