@@ -1,0 +1,39 @@
+name: Verify LockOn ServiceOS
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "electron/**"
+      - "server/**"
+      - "package.json"
+      - "tsconfig.json"
+      - "vite.config.ts"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lockon-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Typecheck renderer
+        run: npm run typecheck
+      - name: Compile Electron
+        run: npm run build:electron
+      - name: Build renderer
+        run: npm run build:web
