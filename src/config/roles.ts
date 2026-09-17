@@ -20,8 +20,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   OWNER: {
     label: 'Właściciel aplikacji',
     shortLabel: 'Właściciel',
-    description: 'Pełna administracja LockOnOS: wszystkie punkty, konta, role, logowania, finanse, wsparcie i aktualizacje.',
-    navigation: ['dashboard', 'administration', 'repairs', 'customers', 'parts', 'offers', 'earnings', 'browser', 'ai', 'support', 'settings'],
+    description: 'Pełny dostęp do obecnych funkcji ServiceOS, administracji, rozliczeń, wsparcia i aktualizacji.',
+    navigation: ['dashboard', 'browser', 'earnings', 'administration', 'support', 'settings'],
     canManageUpdates: true,
     canManageSettings: true,
     canUseSupportDesk: true,
@@ -31,8 +31,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   BOSS: {
     label: 'Szef',
     shortLabel: 'Szef',
-    description: 'Widok biznesowy wszystkich punktów, zleceń i rozliczeń. Może zatwierdzać przychody serwisantów.',
-    navigation: ['dashboard', 'repairs', 'customers', 'parts', 'offers', 'earnings', 'browser', 'ai'],
+    description: 'Widok wszystkich punktów oraz dostęp do przeglądarki i rozliczeń.',
+    navigation: ['dashboard', 'browser', 'earnings'],
     canManageUpdates: false,
     canManageSettings: false,
     canUseSupportDesk: false,
@@ -42,8 +42,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   COORDINATOR: {
     label: 'Koordynator',
     shortLabel: 'Koordynator',
-    description: 'Koordynuje pracę wybranych punktów i ma wgląd w ich operacje bez globalnej administracji aplikacji.',
-    navigation: ['dashboard', 'repairs', 'customers', 'parts', 'offers', 'browser', 'ai'],
+    description: 'Dostęp do pulpitu i przeglądarki w zakresie przypisanych punktów.',
+    navigation: ['dashboard', 'browser'],
     canManageUpdates: false,
     canManageSettings: false,
     canUseSupportDesk: false,
@@ -53,8 +53,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   SUPPORT: {
     label: 'Wsparcie LockOnOS',
     shortLabel: 'Wsparcie',
-    description: 'Wsparcie techniczne przypisywane do wybranych punktów. Ma dostęp do centrum pomocy i narzędzi diagnostycznych.',
-    navigation: ['dashboard', 'browser', 'ai', 'support'],
+    description: 'Dostęp do pulpitu, przeglądarki i obecnego modułu pomocy.',
+    navigation: ['dashboard', 'browser', 'support'],
     canManageUpdates: false,
     canManageSettings: false,
     canUseSupportDesk: true,
@@ -64,8 +64,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   TECHNICIAN: {
     label: 'Serwisant',
     shortLabel: 'Serwisant',
-    description: 'Obsługuje naprawy i sam zgłasza swój przychód. Zatwierdzony przychód jest dzielony automatycznie 50/50 z Szefem.',
-    navigation: ['dashboard', 'repairs', 'customers', 'parts', 'offers', 'earnings', 'browser', 'ai'],
+    description: 'Dostęp do pulpitu, przeglądarki i własnych rozliczeń 50/50.',
+    navigation: ['dashboard', 'browser', 'earnings'],
     canManageUpdates: false,
     canManageSettings: false,
     canUseSupportDesk: false,
@@ -75,8 +75,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   USER: {
     label: 'Użytkownik',
     shortLabel: 'Użytkownik',
-    description: 'Podstawowy dostęp do zleceń, klientów, przeglądarki i pomocy dla przypisanego punktu.',
-    navigation: ['dashboard', 'repairs', 'customers', 'browser'],
+    description: 'Podstawowy dostęp do pulpitu, przeglądarki i pomocy.',
+    navigation: ['dashboard', 'browser'],
     canManageUpdates: false,
     canManageSettings: false,
     canUseSupportDesk: false,
@@ -85,4 +85,5 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   }
 };
 
-export const roleCanNavigate = (role: UserRole, key: NavigationKey) => ROLE_DEFINITIONS[role].navigation.includes(key);
+export const roleCanNavigate = (role: UserRole, key: NavigationKey) =>
+  ROLE_DEFINITIONS[role].navigation.includes(key);
