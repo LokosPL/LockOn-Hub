@@ -1,0 +1,17 @@
+LockOn ServiceOS 0.6.0
+
+NAJWAŻNIEJSZE
+- Ujednolicony wygląd aplikacji i strony pobierania.
+- Pulpit pokazuje wyłącznie funkcje, które obecnie faktycznie działają.
+- Usunięte z nawigacji puste skróty do niedokończonych modułów.
+- Przebudowana wbudowana przeglądarka z czytelniejszym paskiem i stanem ładowania.
+- Pomoc działa jako kompaktowy panel po prawej stronie zamiast rozciągać interfejs.
+- Uporządkowane widoki administracji, rozliczeń, logowania, oczekiwania na akceptację i ustawień.
+- Nowy ekran startowy zgodny wizualnie ze stroną LockOn ServiceOS.
+- Aktualizacje nadal korzystają z GitHub Releases.
+
+TECHNICZNE
+- Źródło aplikacji jest teraz normalnie przechowywane w repozytorium.
+- Pipeline wydania buduje bezpośrednio aktualne źródło, a nie archiwum starszej wersji.
+- Dodany automatyczny CI: TypeScript, Electron i Vite.
+- Wersja: 0.6.0
