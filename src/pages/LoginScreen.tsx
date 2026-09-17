@@ -14,7 +14,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
 
   const loginGoogle = async () => {
     setBusy('google');
-    setMessage('Otwieram bezpieczne logowanie Google w przeglądarce systemowej…');
+    setMessage('Otwieram logowanie Google…');
     try {
       const state = await window.lockOn.auth.loginGoogle();
       if (state.authenticated) onAuthenticated(state);
@@ -45,18 +45,18 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
 
       <section className="login-card">
         <div className="login-brand">
-          <div className="login-logo-wrap"><img src={logo} alt="LockOn ServiceOS" /></div>
+          <div className="login-logo-wrap"><img src={logo} alt="" /></div>
           <div>
             <div className="eyebrow light">LOCKON SERVICEOS</div>
-            <h1>Zaloguj się do LockOnOS</h1>
-            <p>Po pierwszym logowaniu podasz swój punkt i wybierzesz rolę, o którą prosisz. Właściciel aplikacji zatwierdzi lub zmieni dostęp.</p>
+            <h1>Wróć do swojego serwisu.</h1>
+            <p>Zaloguj się kontem Google. ServiceOS zapamięta sesję, więc przy kolejnym uruchomieniu wrócisz prosto do pracy.</p>
           </div>
         </div>
 
         <div className="login-features">
-          <div><ShieldCheck size={18} /><span>Google OAuth 2.0 + PKCE</span></div>
-          <div><Building2 size={18} /><span>Punkt + rola do akceptacji</span></div>
-          <div><CheckCircle2 size={18} /><span>Autologowanie po pierwszym logowaniu</span></div>
+          <div><ShieldCheck size={17} /><span>Bezpieczne logowanie Google</span></div>
+          <div><CheckCircle2 size={17} /><span>Autologowanie po pierwszym wejściu</span></div>
+          <div><Building2 size={17} /><span>Dostęp po akceptacji konta</span></div>
         </div>
 
         <button className="google-login-button" disabled={Boolean(busy)} onClick={() => void loginGoogle()}>
@@ -67,21 +67,21 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
 
         {!auth.configured && (
           <div className="auth-config-note">
-            Google nie jest jeszcze skonfigurowany. Wklej Client ID w <code>electron/appConfig.ts</code>.
+            Logowanie Google nie jest jeszcze poprawnie skonfigurowane w tej kompilacji.
           </div>
         )}
 
         {auth.localStarterLoginAllowed && (
           <button className="local-login-button" disabled={Boolean(busy)} onClick={() => void loginLocal()}>
             {busy === 'local' ? <LoaderCircle className="spin" size={16} /> : <Building2 size={16} />}
-            Wejdź lokalnie jako Właściciel (DEV)
+            Tryb lokalny właściciela (DEV)
           </button>
         )}
 
         {message && <div className="login-message">{message}</div>}
 
         <div className="login-help">
-          Nowe konto nie dostaje dostępu automatycznie. Wskazujesz punkt i rolę, a po akceptacji aplikacja odblokuje się bez ponownego logowania Google.
+          Pierwsze konto bez nadanego dostępu przejdzie przez prostą weryfikację punktu i roli.
         </div>
       </section>
     </div>
