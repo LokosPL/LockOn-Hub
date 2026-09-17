@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { OAuth2Client } from 'google-auth-library';
 
 const loadLocalEnv = () => {
   try {
@@ -25,9 +26,13 @@ const PORT = Number(process.env.LOCKON_API_PORT || 8787);
 const HOST = process.env.LOCKON_API_HOST || '127.0.0.1';
 const DATA_FILE = process.env.LOCKON_DATA_FILE || path.join(process.cwd(), 'server', 'data', 'database.json');
 const OWNER_EMAIL = (process.env.LOCKON_OWNER_EMAIL || 'nowogar@gmail.com').trim().toLowerCase();
+const GOOGLE_CLIENT_ID = (process.env.LOCKON_GOOGLE_CLIENT_ID || '996585439932-e10mu53j95s6u13vrua841tm4oco38so.apps.googleusercontent.com').trim();
 const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
-const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 90;
-const SESSION_REFRESH_THRESHOLD_MS = 1000 * 60 * 60 * 24 * 30;
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+const SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 90;
+const SESSION_REFRESH_THRESHOLD_MS = 1000 * 60 * 60 * 24 * 7;
+const BODY_LIMIT_BYTES = 64 * 1024;
+const googleVerifier = new OAuth2Client();
 
 const ROLES = ['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER'];
 const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
@@ -121,7 +126,9 @@ const authPayload = (user) => ({
 });
 
 const findUserByEmail = (email) => db.users.find((u) => normalizeEmail(u.email) === normalizeEmail(email));
+const findUserByGoogleSub = (sub) => sub ? db.users.find((u) => u.googleSub === sub) : null;
 const findUserById = (userId) => db.users.find((u) => u.id === userId);
+const sessionTokenHash = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
 const ensureOwner = (profile = {}) => {
   let owner = findUserByEmail(OWNER_EMAIL);
@@ -160,49 +167,89 @@ const json = (res, status, body) => {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(data),
-    'Cache-Control': 'no-store'
+    'Cache-Control': 'no-store, max-age=0',
+    'Pragma': 'no-cache',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()'
   });
   res.end(data);
 };
 
 const readBody = (req) => new Promise((resolve, reject) => {
   let body = '';
+  let size = 0;
+  let settled = false;
   req.on('data', (chunk) => {
+    if (settled) return;
+    size += Buffer.byteLength(chunk);
+    if (size > BODY_LIMIT_BYTES) {
+      settled = true;
+      reject(new Error('PAYLOAD_TOO_LARGE'));
+      return;
+    }
     body += chunk;
-    if (body.length > 1_000_000) reject(new Error('Payload too large'));
   });
   req.on('end', () => {
+    if (settled) return;
+    settled = true;
     if (!body) return resolve({});
-    try { resolve(JSON.parse(body)); } catch { reject(new Error('Invalid JSON')); }
+    try { resolve(JSON.parse(body)); } catch { reject(new Error('INVALID_JSON')); }
   });
-  req.on('error', reject);
+  req.on('error', (error) => {
+    if (settled) return;
+    settled = true;
+    reject(error);
+  });
 });
 
 const createSession = (user) => {
   const token = crypto.randomBytes(32).toString('base64url');
   const createdAt = Date.now();
-  db.sessions = db.sessions.filter((s) => Number(s.expiresAt) > Date.now());
-  db.sessions.push({ token, userId: user.id, createdAt, expiresAt: createdAt + SESSION_TTL_MS });
+  db.sessions = db.sessions.filter((s) => Number(s.expiresAt) > createdAt && Number(s.absoluteExpiresAt || s.expiresAt) > createdAt);
+  db.sessions.push({
+    tokenHash: sessionTokenHash(token),
+    userId: user.id,
+    createdAt,
+    lastSeenAt: createdAt,
+    expiresAt: createdAt + SESSION_TTL_MS,
+    absoluteExpiresAt: createdAt + SESSION_ABSOLUTE_TTL_MS
+  });
   return token;
+};
+
+const findSession = (token) => {
+  if (!token) return null;
+  const now = Date.now();
+  const hash = sessionTokenHash(token);
+  const session = db.sessions.find((s) => {
+    const tokenMatches = s.tokenHash ? s.tokenHash === hash : s.token === token;
+    return tokenMatches && Number(s.expiresAt) > now && Number(s.absoluteExpiresAt || s.expiresAt) > now;
+  });
+  if (!session) return null;
+
+  // Migracja starych sesji: od tej wersji na dysku backendu zostaje tylko hash tokena.
+  if (!session.tokenHash) {
+    session.tokenHash = hash;
+    delete session.token;
+  }
+  session.lastSeenAt = now;
+  const absoluteExpiry = Number(session.absoluteExpiresAt || (Number(session.createdAt) + SESSION_ABSOLUTE_TTL_MS));
+  session.absoluteExpiresAt = absoluteExpiry;
+  if (Number(session.expiresAt) - now < SESSION_REFRESH_THRESHOLD_MS) {
+    session.expiresAt = Math.min(now + SESSION_TTL_MS, absoluteExpiry);
+  }
+  saveDb();
+  return session;
 };
 
 const currentUser = (req) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  if (!token) return null;
-  const now = Date.now();
-  const session = db.sessions.find((s) => s.token === token && Number(s.expiresAt) > now);
-  if (!session) return null;
-
-  // Sesja działa w trybie "sliding": jeżeli zostało mniej niż 30 dni,
-  // przedłużamy ją do 90 dni. Dzięki temu aplikacja może logować użytkownika
-  // automatycznie przy kolejnych uruchomieniach bez ponownego OAuth Google.
-  if (Number(session.expiresAt) - now < SESSION_REFRESH_THRESHOLD_MS) {
-    session.expiresAt = now + SESSION_TTL_MS;
-    saveDb();
-  }
-
-  return findUserById(session.userId) || null;
+  const session = findSession(token);
+  return session ? (findUserById(session.userId) || null) : null;
 };
 
 const requireUser = (req, res) => {
@@ -248,15 +295,17 @@ const recordLogin = (user) => {
   db.loginEvents = db.loginEvents.slice(0, 1000);
 };
 
-const verifyGoogleAccessToken = async (accessToken) => {
-  const response = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
-    headers: { Authorization: `Bearer ${accessToken}` }
+const verifyGoogleIdToken = async (idToken) => {
+  const ticket = await googleVerifier.verifyIdToken({
+    idToken,
+    audience: GOOGLE_CLIENT_ID
   });
-  if (!response.ok) throw new Error('Google nie potwierdził tokena użytkownika.');
-  const profile = await response.json();
-  if (!profile.email) throw new Error('Google nie zwrócił adresu e-mail.');
+  const profile = ticket.getPayload();
+  if (!profile?.sub || !profile.email || profile.email_verified !== true) {
+    throw new Error('Google nie potwierdził tożsamości użytkownika.');
+  }
   return {
-    sub: profile.sub || null,
+    sub: profile.sub,
     email: normalizeEmail(profile.email),
     name: cleanText(profile.name || profile.email, 120),
     picture: profile.picture || null
@@ -264,7 +313,7 @@ const verifyGoogleAccessToken = async (accessToken) => {
 };
 
 const loginProfile = (profile) => {
-  let user = findUserByEmail(profile.email);
+  let user = findUserByGoogleSub(profile.sub) || findUserByEmail(profile.email);
   const timestamp = nowIso();
 
   if (normalizeEmail(profile.email) === OWNER_EMAIL) {
@@ -329,12 +378,12 @@ const handle = async (req, res) => {
 
   if (method === 'POST' && url.pathname === '/auth/google') {
     const body = await readBody(req);
-    if (!body.accessToken) return json(res, 400, { error: 'MISSING_TOKEN', message: 'Brak tokena Google.' });
+    if (!body.idToken) return json(res, 400, { error: 'MISSING_TOKEN', message: 'Brak tokena tożsamości Google.' });
     try {
-      const profile = await verifyGoogleAccessToken(body.accessToken);
+      const profile = await verifyGoogleIdToken(String(body.idToken));
       return json(res, 200, loginProfile(profile));
-    } catch (error) {
-      return json(res, 401, { error: 'GOOGLE_AUTH_FAILED', message: error instanceof Error ? error.message : 'Błąd Google.' });
+    } catch {
+      return json(res, 401, { error: 'GOOGLE_AUTH_FAILED', message: 'Google nie potwierdził tożsamości.' });
     }
   }
 
@@ -348,6 +397,17 @@ const handle = async (req, res) => {
     const user = requireUser(req, res);
     if (!user) return;
     return json(res, 200, authPayload(user));
+  }
+
+  if (method === 'POST' && url.pathname === '/auth/logout') {
+    const auth = req.headers.authorization || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    const session = findSession(token);
+    if (session) {
+      db.sessions = db.sessions.filter((candidate) => candidate !== session);
+      saveDb();
+    }
+    return json(res, 200, { ok: true });
   }
 
   if (method === 'POST' && url.pathname === '/access/request-point') {
@@ -562,10 +622,19 @@ const handle = async (req, res) => {
 const server = http.createServer((req, res) => {
   handle(req, res).catch((error) => {
     console.error('[LockOn API]', error);
-    if (!res.headersSent) json(res, 500, { error: 'SERVER_ERROR', message: error instanceof Error ? error.message : 'Błąd serwera.' });
+    if (!res.headersSent) {
+      if (error instanceof Error && error.message === 'PAYLOAD_TOO_LARGE') return json(res, 413, { error: 'PAYLOAD_TOO_LARGE', message: 'Żądanie jest zbyt duże.' });
+      if (error instanceof Error && error.message === 'INVALID_JSON') return json(res, 400, { error: 'INVALID_JSON', message: 'Nieprawidłowe dane żądania.' });
+      json(res, 500, { error: 'SERVER_ERROR', message: 'Wewnętrzny błąd serwera.' });
+    }
     else res.end();
   });
 });
+
+server.maxHeadersCount = 60;
+server.requestTimeout = 15_000;
+server.headersTimeout = 10_000;
+server.keepAliveTimeout = 5_000;
 
 server.listen(PORT, HOST, () => {
   console.log(`LockOn ServiceOS API: http://${HOST}:${PORT}`);
