@@ -3,10 +3,17 @@ name: Build and publish LockOn ServiceOS
 on:
   push:
     branches: ["main"]
+    paths:
+      - "source-bundle/**"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: lockon-release
+  cancel-in-progress: true
 
 jobs:
   release-windows:
@@ -16,49 +23,98 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify application source
-        id: guard
+      - name: Restore LockOn ServiceOS source
         shell: pwsh
         run: |
-          if ((Test-Path "src/App.tsx") -and (Test-Path "electron/main.ts")) {
-            echo "ready=true" >> $env:GITHUB_OUTPUT
-          } else {
-            echo "ready=false" >> $env:GITHUB_OUTPUT
-            Write-Host "Source migration is not complete yet - release skipped."
+          $parts = Get-ChildItem "source-bundle\part*.b64" | Sort-Object Name
+          if ($parts.Count -ne 10) {
+            Write-Error "Nie znaleziono kompletu źródła LockOn ServiceOS (oczekiwano 10 części)."
+            exit 1
+          }
+
+          $base64 = ($parts | ForEach-Object {
+            (Get-Content $_.FullName -Raw).Trim()
+          }) -join ""
+
+          [IO.File]::WriteAllBytes(
+            "$PWD\lockon-source.tar.gz",
+            [Convert]::FromBase64String($base64)
+          )
+
+          $expected = "1ee50c9e2f70411efaaa5d09fe29ff2e44afa8d0e84c86bc04b860b3d3d96fae"
+          $actual = (Get-FileHash "$PWD\lockon-source.tar.gz" -Algorithm SHA256).Hash.ToLower()
+
+          if ($actual -ne $expected) {
+            Write-Error "Archiwum źródła ma nieprawidłową sumę SHA-256."
+            Write-Host "Oczekiwano: $expected"
+            Write-Host "Otrzymano:  $actual"
+            exit 1
+          }
+
+          New-Item -ItemType Directory -Force -Path "$PWD\app" | Out-Null
+          tar -xzf "$PWD\lockon-source.tar.gz" -C "$PWD\app"
+
+          if (!(Test-Path "$PWD\app\src\App.tsx") -or !(Test-Path "$PWD\app\electron\main.ts")) {
+            Write-Error "Nie udało się odtworzyć kompletnego źródła aplikacji."
+            exit 1
           }
 
       - name: Setup Node.js
-        if: steps.guard.outputs.ready == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
+      - name: Check Google OAuth build secret
+        shell: pwsh
+        env:
+          GOOGLE_CLIENT_SECRET: ${{ secrets.LOCKON_GOOGLE_CLIENT_SECRET }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GOOGLE_CLIENT_SECRET)) {
+            Write-Error "Brak sekretu LOCKON_GOOGLE_CLIENT_SECRET w Settings > Secrets and variables > Actions."
+            exit 1
+          }
+
+      - name: Inject Google OAuth secret
+        shell: pwsh
+        working-directory: app
+        env:
+          GOOGLE_CLIENT_SECRET: ${{ secrets.LOCKON_GOOGLE_CLIENT_SECRET }}
+        run: |
+          $escaped = $env:GOOGLE_CLIENT_SECRET.Replace("'", "\\'")
+          "export const GOOGLE_CLIENT_SECRET = '$escaped';" | Set-Content -Path electron/generatedSecrets.ts -Encoding utf8
+
       - name: Install dependencies
-        if: steps.guard.outputs.ready == 'true'
+        working-directory: app
         run: npm install
 
+      - name: Typecheck
+        working-directory: app
+        run: npm run typecheck
+
       - name: Build Windows installer
-        if: steps.guard.outputs.ready == 'true'
+        working-directory: app
         run: npm run dist
 
       - name: Read app version
-        if: steps.guard.outputs.ready == 'true'
         id: version
         shell: pwsh
+        working-directory: app
         run: |
           $version = node -p "require('./package.json').version"
-          echo "version=$version" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Publish GitHub Release
-        if: steps.guard.outputs.ready == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: LockOn ServiceOS v${{ steps.version.outputs.version }}
-          generate_release_notes: true
+          body: |
+            Oficjalne wydanie LockOn ServiceOS.
+
+            **Instalator Windows:** LockOn-ServiceOS-Setup.exe
+
+            W kolejnych wydaniach aplikacja sprawdza aktualizacje przez GitHub Releases.
           make_latest: true
           overwrite_files: true
           files: |
-            release/LockOn-ServiceOS-Setup.exe
-            release/LockOn-ServiceOS-Setup.exe.blockmap
-            release/latest.yml
+            app/release/*
