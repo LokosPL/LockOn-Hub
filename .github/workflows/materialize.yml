@@ -1,0 +1,41 @@
+name: Materialize LockOn source
+
+on:
+  push:
+    paths:
+      - ".github/workflows/materialize.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat source-bundle/part*.b64 | tr -d '\r\n' | base64 -d > /tmp/lockon-source.tar.gz
+          echo "1ee50c9e2f70411efaaa5d09fe29ff2e44afa8d0e84c86bc04b860b3d3d96fae  /tmp/lockon-source.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/lockon-source
+          tar -xzf /tmp/lockon-source.tar.gz -C /tmp/lockon-source
+          rsync -a --delete             --exclude '.git/'             --exclude 'source-bundle/'             --exclude '.github/'             --exclude 'node_modules/'             --exclude 'release/'             /tmp/lockon-source/ ./
+
+      - name: Commit full source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- ':!source-bundle' ':!.github'
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git commit -m "Materialize LockOn ServiceOS 0.5.0 source"
+          git push
