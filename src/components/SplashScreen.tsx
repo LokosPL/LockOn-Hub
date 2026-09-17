@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
 import logo from '../assets/logo.svg';
-import { APP_META } from '../config/app';
 import type { SplashProgress } from '../types/electron';
 
 export function SplashScreen() {
   const [progress, setProgress] = useState<SplashProgress>({
     percent: 4,
-    label: 'Przygotowanie aplikacji…'
+    label: 'Uruchamianie ServiceOS…'
   });
 
   useEffect(() => window.lockOn.splash.onProgress(setProgress), []);
@@ -17,14 +16,14 @@ export function SplashScreen() {
         <div className="splash-glow splash-glow-one" />
         <div className="splash-glow splash-glow-two" />
 
-        <div className="splash-logo-wrap">
-          <img src={logo} alt="LockOn ServiceOS" className="splash-logo" />
+        <div className="splash-topline">
+          <div className="splash-logo-wrap"><img src={logo} alt="" className="splash-logo" /></div>
+          <div className="splash-wordmark"><strong>LockOn</strong><span>ServiceOS</span></div>
         </div>
 
         <div className="splash-copy">
-          <div className="eyebrow">{APP_META.location}</div>
-          <h1>LockOn <span>ServiceOS</span></h1>
-          <p>System obsługi serwisu telefonów</p>
+          <h1>Serwis pod kontrolą.</h1>
+          <p>Przygotowuję Twoje środowisko pracy.</p>
         </div>
 
         <div className="splash-progress-copy">
@@ -32,14 +31,11 @@ export function SplashScreen() {
           <strong>{progress.percent}%</strong>
         </div>
         <div className="splash-progress-track">
-          <div
-            className="splash-progress-fill"
-            style={{ width: `${progress.percent}%` }}
-          />
+          <div className="splash-progress-fill" style={{ width: progress.percent + '%' }} />
         </div>
 
         <div className="splash-footer">
-          Bartłomiej Motłoch • Punkt Nowogard
+          <span className="live-dot" /> LockOn ServiceOS
         </div>
       </div>
     </div>
