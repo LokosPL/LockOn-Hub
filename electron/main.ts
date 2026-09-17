@@ -1,4 +1,12 @@
-import { app, BrowserWindow, ipcMain, screen } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  Menu,
+  screen,
+  session,
+  type IpcMainInvokeEvent
+} from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -33,6 +41,8 @@ import {
   installUpdate
 } from './updater';
 
+app.enableSandbox();
+
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
@@ -50,6 +60,28 @@ const rendererUrl = (view?: string) => {
   return url.toString();
 };
 
+const isTrustedRendererUrl = (value: string) => {
+  try {
+    const url = new URL(value);
+    if (isDevelopment) {
+      return url.origin === new URL(process.env.VITE_DEV_SERVER_URL!).origin;
+    }
+    return url.protocol === 'file:';
+  } catch {
+    return false;
+  }
+};
+
+const protectLocalWindow = (window: BrowserWindow) => {
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedRendererUrl(url)) event.preventDefault();
+  });
+  window.webContents.on('will-redirect', (event, url) => {
+    if (!isTrustedRendererUrl(url)) event.preventDefault();
+  });
+};
+
 const windowSize = () => {
   const { width: workWidth, height: workHeight } = screen.getPrimaryDisplay().workAreaSize;
   return {
@@ -57,7 +89,6 @@ const windowSize = () => {
     height: Math.min(960, Math.max(680, Math.floor(workHeight * 0.86)))
   };
 };
-
 
 const shouldStartBundledApi = () => {
   if (isDevelopment) return false;
@@ -75,15 +106,23 @@ const startBundledApi = async () => {
   const dataFile = path.join(app.getPath('userData'), 'database.json');
   const serverScript = path.join(process.resourcesPath, 'app.asar.unpacked', 'server', 'index.mjs');
 
+  const childEnv: NodeJS.ProcessEnv = {
+    ELECTRON_RUN_AS_NODE: '1',
+    LOCKON_API_HOST: '127.0.0.1',
+    LOCKON_API_PORT: '8787',
+    LOCKON_DATA_FILE: dataFile,
+    LOCKON_OWNER_EMAIL: 'nowogar@gmail.com',
+    LOCKON_GOOGLE_CLIENT_ID: APP_CONFIG.auth.googleClientId,
+    PATH: process.env.PATH,
+    SystemRoot: process.env.SystemRoot,
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    USERPROFILE: process.env.USERPROFILE,
+    HOME: process.env.HOME
+  };
+
   localApiProcess = spawn(process.execPath, [serverScript], {
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: '1',
-      LOCKON_API_HOST: '127.0.0.1',
-      LOCKON_API_PORT: '8787',
-      LOCKON_DATA_FILE: dataFile,
-      LOCKON_OWNER_EMAIL: 'nowogar@gmail.com'
-    },
+    env: childEnv,
     windowsHide: true,
     stdio: 'ignore'
   });
@@ -92,9 +131,20 @@ const startBundledApi = async () => {
     localApiProcess = null;
   });
 
-  // API startuje praktycznie natychmiast, ale dajemy mu krótki bufor przed pierwszym auth requestem.
   await delay(350);
 };
+
+const secureWebPreferences = {
+  preload: path.join(__dirname, 'preload.js'),
+  contextIsolation: true,
+  nodeIntegration: false,
+  sandbox: true,
+  webSecurity: true,
+  allowRunningInsecureContent: false,
+  experimentalFeatures: false,
+  devTools: isDevelopment,
+  spellcheck: false
+} as const;
 
 const createSplashWindow = () => {
   splashWindow = new BrowserWindow({
@@ -108,13 +158,9 @@ const createSplashWindow = () => {
     alwaysOnTop: true,
     center: true,
     hasShadow: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true
-    }
+    webPreferences: secureWebPreferences
   });
+  protectLocalWindow(splashWindow);
   void splashWindow.loadURL(rendererUrl('splash'));
   splashWindow.once('ready-to-show', () => splashWindow?.show());
 };
@@ -132,14 +178,10 @@ const createMainWindow = () => {
     resizable: true,
     maximizable: true,
     title: APP_CONFIG.name,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true
-    }
+    webPreferences: secureWebPreferences
   });
 
+  protectLocalWindow(mainWindow);
   attachBrowser(mainWindow);
   mainReady = new Promise((resolve) => mainWindow?.once('ready-to-show', () => resolve()));
   void mainWindow.loadURL(rendererUrl());
@@ -196,8 +238,29 @@ const requireOwner = async () => {
   }
 };
 
+const assertTrustedIpc = (event: IpcMainInvokeEvent) => {
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Główne okno aplikacji nie jest dostępne.');
+  if (event.sender.id !== mainWindow.webContents.id) throw new Error('Odrzucono niezaufane wywołanie IPC.');
+  if (!isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Odrzucono wywołanie z niezaufanego źródła.');
+};
+
+type SecureHandler = (...args: any[]) => unknown;
+
+const secureHandle = (channel: string, listener: SecureHandler) => {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedIpc(event);
+    return listener(...args);
+  });
+};
+
+const safeId = (value: unknown, prefix: 'usr' | 'rev') => {
+  const text = String(value ?? '');
+  if (!new RegExp(`^${prefix}_[a-f0-9]{20}$`).test(text)) throw new Error('Nieprawidłowy identyfikator.');
+  return text;
+};
+
 const registerIpc = () => {
-  ipcMain.handle('app:getInfo', () => ({
+  secureHandle('app:getInfo', () => ({
     name: APP_CONFIG.name,
     author: `${APP_CONFIG.author} - ${APP_CONFIG.defaultPoint.name}`,
     version: app.getVersion(),
@@ -206,110 +269,129 @@ const registerIpc = () => {
     apiBaseUrl: APP_CONFIG.backend.apiBaseUrl
   }));
 
-  ipcMain.handle('window:minimize', () => mainWindow?.minimize());
-  ipcMain.handle('window:toggleMaximize', () => {
+  secureHandle('window:minimize', () => mainWindow?.minimize());
+  secureHandle('window:toggleMaximize', () => {
     if (!mainWindow) return;
     mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
   });
-  ipcMain.handle('window:close', () => mainWindow?.close());
+  secureHandle('window:close', () => mainWindow?.close());
 
-  ipcMain.handle('auth:getState', () => getAuthState(isDevelopment));
-  ipcMain.handle('auth:loginGoogle', () => loginWithGoogle(isDevelopment));
-  ipcMain.handle('auth:loginLocal', () => loginLocalStarter(isDevelopment));
-  ipcMain.handle('auth:logout', async () => {
+  secureHandle('auth:getState', () => getAuthState(isDevelopment));
+  secureHandle('auth:loginGoogle', () => loginWithGoogle(isDevelopment));
+  secureHandle('auth:loginLocal', () => loginLocalStarter(isDevelopment));
+  secureHandle('auth:logout', async () => {
     withMainWindow((window) => setBrowserVisible(window, false));
     return logout(isDevelopment);
   });
 
-  ipcMain.handle('access:requestPoint', async (_event, payload: { pointName: string; city: string; requestedRole: string }) => {
+  secureHandle('access:requestPoint', async (payload: { pointName?: unknown; city?: unknown; requestedRole?: unknown }) => {
     const token = requireSessionToken();
+    const safePayload = {
+      pointName: String(payload?.pointName ?? '').trim().slice(0, 90),
+      city: String(payload?.city ?? '').trim().slice(0, 90),
+      requestedRole: String(payload?.requestedRole ?? '').trim().slice(0, 30)
+    };
     await backendRequest('/access/request-point', {
       method: 'POST',
-      body: JSON.stringify(payload)
+      body: JSON.stringify(safePayload)
     }, token);
     return getAuthState(isDevelopment);
   });
 
-  ipcMain.handle('admin:getOverview', async () => {
+  secureHandle('admin:getOverview', async () => {
     const token = requireSessionToken();
     return backendRequest('/admin/overview', {}, token);
   });
-  ipcMain.handle('admin:createPoint', async (_event, payload: { name: string; city: string }) => {
+  secureHandle('admin:createPoint', async (payload: { name?: unknown; city?: unknown }) => {
     const token = requireSessionToken();
-    return backendRequest('/admin/points', { method: 'POST', body: JSON.stringify(payload) }, token);
+    return backendRequest('/admin/points', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: String(payload?.name ?? '').trim().slice(0, 90),
+        city: String(payload?.city ?? '').trim().slice(0, 90)
+      })
+    }, token);
   });
-  ipcMain.handle('admin:approveUser', async (_event, userId: string, payload: unknown) => {
+  secureHandle('admin:approveUser', async (userId: string, payload: unknown) => {
     const token = requireSessionToken();
-    return backendRequest(`/admin/users/${encodeURIComponent(userId)}/approve`, {
+    return backendRequest(`/admin/users/${encodeURIComponent(safeId(userId, 'usr'))}/approve`, {
       method: 'POST',
       body: JSON.stringify(payload)
     }, token);
   });
-  ipcMain.handle('admin:rejectUser', async (_event, userId: string) => {
+  secureHandle('admin:rejectUser', async (userId: string) => {
     const token = requireSessionToken();
-    return backendRequest(`/admin/users/${encodeURIComponent(userId)}/reject`, {
-      method: 'POST', body: '{}'
+    return backendRequest(`/admin/users/${encodeURIComponent(safeId(userId, 'usr'))}/reject`, {
+      method: 'POST',
+      body: '{}'
     }, token);
   });
-  ipcMain.handle('admin:updateUserAccess', async (_event, userId: string, payload: unknown) => {
+  secureHandle('admin:updateUserAccess', async (userId: string, payload: unknown) => {
     const token = requireSessionToken();
-    return backendRequest(`/admin/users/${encodeURIComponent(userId)}/access`, {
+    return backendRequest(`/admin/users/${encodeURIComponent(safeId(userId, 'usr'))}/access`, {
       method: 'POST',
       body: JSON.stringify(payload)
     }, token);
   });
 
-  ipcMain.handle('finance:list', async () => {
+  secureHandle('finance:list', async () => {
     const token = requireSessionToken();
     return backendRequest('/finance/revenues', {}, token);
   });
-  ipcMain.handle('finance:submit', async (_event, payload: unknown) => {
+  secureHandle('finance:submit', async (payload: unknown) => {
     const token = requireSessionToken();
     return backendRequest('/finance/revenues', { method: 'POST', body: JSON.stringify(payload) }, token);
   });
-  ipcMain.handle('finance:review', async (_event, revenueId: string, action: 'APPROVE' | 'REJECT') => {
+  secureHandle('finance:review', async (revenueId: string, action: 'APPROVE' | 'REJECT') => {
+    if (!['APPROVE', 'REJECT'].includes(action)) throw new Error('Nieprawidłowa akcja.');
     const token = requireSessionToken();
-    return backendRequest(`/finance/revenues/${encodeURIComponent(revenueId)}/review`, {
-      method: 'POST', body: JSON.stringify({ action })
+    return backendRequest(`/finance/revenues/${encodeURIComponent(safeId(revenueId, 'rev'))}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ action })
     }, token);
   });
-  ipcMain.handle('data:getDashboard', async () => {
+  secureHandle('data:getDashboard', async () => {
     const token = requireSessionToken();
     return backendRequest('/dashboard', {}, token);
   });
 
-  ipcMain.handle('browser:getState', () => getBrowserState());
-  ipcMain.handle('browser:setVisible', (_event, value: boolean) =>
+  secureHandle('browser:getState', () => getBrowserState());
+  secureHandle('browser:setVisible', (value: boolean) =>
     withMainWindow((window) => setBrowserVisible(window, Boolean(value)))
   );
-  ipcMain.handle('browser:setBounds', (_event, bounds: BrowserBounds) =>
+  secureHandle('browser:setBounds', (bounds: BrowserBounds) =>
     withMainWindow((window) => setBrowserBounds(window, bounds))
   );
-  ipcMain.handle('browser:navigate', (_event, input: string) =>
-    withMainWindow((window) => navigateBrowser(window, input))
+  secureHandle('browser:navigate', (input: string) =>
+    withMainWindow((window) => navigateBrowser(window, String(input ?? '').slice(0, 4096)))
   );
-  ipcMain.handle('browser:back', () => withMainWindow(browserBack));
-  ipcMain.handle('browser:forward', () => withMainWindow(browserForward));
-  ipcMain.handle('browser:reload', () => withMainWindow(browserReload));
-  ipcMain.handle('browser:home', () => withMainWindow(browserHome));
-  ipcMain.handle('browser:openExternal', () => withMainWindow(browserOpenExternal));
+  secureHandle('browser:back', () => withMainWindow(browserBack));
+  secureHandle('browser:forward', () => withMainWindow(browserForward));
+  secureHandle('browser:reload', () => withMainWindow(browserReload));
+  secureHandle('browser:home', () => withMainWindow(browserHome));
+  secureHandle('browser:openExternal', () => withMainWindow(browserOpenExternal));
 
-  ipcMain.handle('update:getState', () => getUpdateState());
-  ipcMain.handle('update:check', async () => {
+  secureHandle('update:getState', () => getUpdateState());
+  secureHandle('update:check', async () => {
     await requireOwner();
     return checkForUpdates();
   });
-  ipcMain.handle('update:download', async () => {
+  secureHandle('update:download', async () => {
     await requireOwner();
     return downloadUpdate();
   });
-  ipcMain.handle('update:install', async () => {
+  secureHandle('update:install', async () => {
     await requireOwner();
     return installUpdate();
   });
 };
 
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null);
+
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  session.defaultSession.setPermissionCheckHandler(() => false);
+
   await startBundledApi();
   registerIpc();
   configureUpdater();
@@ -317,6 +399,7 @@ app.whenReady().then(async () => {
   createMainWindow();
   await delay(380);
   await runStartupSequence();
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
