@@ -1,29 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
-  Bot,
-  CheckCircle2,
-  CloudDownload,
   BadgeDollarSign,
   Building2,
-  UsersRound,
-  Github,
+  CheckCircle2,
+  CloudDownload,
   Globe2,
-  PackageSearch,
+  Headphones,
   RefreshCw,
+  Settings2,
   ShieldCheck,
-  Sparkles,
-  Wrench
+  UsersRound
 } from 'lucide-react';
 import { StatusBadge } from '../components/StatusBadge';
 import type { NavigationKey } from '../components/Sidebar';
-import type { AppInfo, UpdateState, DashboardData } from '../types/electron';
+import type { AppInfo, DashboardData, UpdateState } from '../types/electron';
 import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
 
 interface DashboardProps {
   onNavigate: (key: NavigationKey) => void;
+  onOpenHelp: () => void;
   pointName: string;
   role: UserRole;
+  userName: string;
 }
 
 const initialUpdate: UpdateState = {
@@ -31,7 +30,17 @@ const initialUpdate: UpdateState = {
   message: 'Aktualizator jest gotowy.'
 };
 
-export function Dashboard({ onNavigate, pointName, role }: DashboardProps) {
+const money = (value: number) =>
+  new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN', maximumFractionDigits: 0 }).format(value || 0);
+
+const greeting = () => {
+  const hour = new Date().getHours();
+  if (hour < 11) return 'Dzień dobry';
+  if (hour < 18) return 'Miłego dnia';
+  return 'Dobry wieczór';
+};
+
+export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }: DashboardProps) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [update, setUpdate] = useState<UpdateState>(initialUpdate);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
@@ -52,6 +61,38 @@ export function Dashboard({ onNavigate, pointName, role }: DashboardProps) {
 
   const busy = update.status === 'checking' || update.status === 'downloading';
   const roleDefinition = ROLE_DEFINITIONS[role];
+  const firstName = userName.split(' ').filter(Boolean)[0] ?? userName;
+
+  const shortcuts = [
+    {
+      key: 'browser',
+      title: 'Przeglądarka',
+      description: 'Otwórz strony i narzędzia bez wychodzenia z ServiceOS.',
+      icon: Globe2,
+      action: () => onNavigate('browser')
+    },
+    ...(roleDefinition.navigation.includes('earnings') ? [{
+      key: 'earnings',
+      title: 'Rozliczenia',
+      description: role === 'TECHNICIAN' ? 'Zgłoś przychód i sprawdź historię.' : 'Sprawdź przychody i weryfikację.',
+      icon: BadgeDollarSign,
+      action: () => onNavigate('earnings')
+    }] : []),
+    ...(roleDefinition.navigation.includes('administration') ? [{
+      key: 'administration',
+      title: 'Administracja',
+      description: 'Konta, zgłoszenia dostępu i punkty w jednym miejscu.',
+      icon: UsersRound,
+      action: () => onNavigate('administration')
+    }] : []),
+    {
+      key: 'help',
+      title: 'Pomoc',
+      description: 'Otwórz kompaktowy panel pomocy z prawej strony.',
+      icon: Headphones,
+      action: onOpenHelp
+    }
+  ];
 
   return (
     <div className="dashboard page-enter">
@@ -59,144 +100,111 @@ export function Dashboard({ onNavigate, pointName, role }: DashboardProps) {
         <div className="hero-orb hero-orb-one" />
         <div className="hero-orb hero-orb-two" />
         <div className="hero-content">
-          <div className="eyebrow light">LOCKON SERVICEOS • {pointName.toUpperCase()} • {roleDefinition.shortLabel.toUpperCase()}</div>
-          <h1>Dobry wieczór.<br /><span>System jest gotowy do pracy.</span></h1>
-          <p>
-            Interfejs jest dopasowany do roli {roleDefinition.label}. Widoczne są tylko moduły,
-            które należą do tego poziomu dostępu.
-          </p>
+          <div className="eyebrow light"><span className="live-dot" /> {pointName}</div>
+          <h1>{greeting()}, {firstName}.<br /><span>Wszystko jest gotowe.</span></h1>
+          <p>Najważniejsze rzeczy masz pod ręką. Bez pustych modułów i bez przełączania się między przypadkowymi ekranami.</p>
           <div className="hero-actions">
-            {roleDefinition.navigation.includes('repairs') && (
-              <button className="button primary" onClick={() => onNavigate('repairs')}>
-                <Wrench size={17} /> Przejdź do zleceń <ArrowRight size={16} />
-              </button>
-            )}
-            {roleDefinition.navigation.includes('ai') && (
-              <button className="button ghost" onClick={() => onNavigate('ai')}>
-                <Sparkles size={17} /> LockOn AI
-              </button>
-            )}
+            <button className="button primary" onClick={() => onNavigate('browser')}>
+              <Globe2 size={17} /> Otwórz przeglądarkę <ArrowRight size={16} />
+            </button>
+            <button className="button ghost" onClick={onOpenHelp}>
+              <Headphones size={17} /> Pomoc
+            </button>
           </div>
         </div>
+
         <div className="hero-system-card">
-          <div className="system-icon"><ShieldCheck size={28} /></div>
+          <div className="system-icon"><ShieldCheck size={25} /></div>
           <div>
-            <span>Stan aplikacji</span>
-            <strong>Wszystkie podstawowe usługi aktywne</strong>
+            <span>ServiceOS</span>
+            <strong>v{appInfo?.version ?? '—'}</strong>
+            <small>{update.status === 'available' || update.status === 'downloaded' ? update.message : 'System połączony i gotowy'}</small>
           </div>
-          <StatusBadge tone="success"><CheckCircle2 size={13} /> ONLINE</StatusBadge>
+          <StatusBadge tone={updateTone}>
+            {update.status === 'available' || update.status === 'downloaded' ? 'UPDATE' : <><CheckCircle2 size={12} /> ONLINE</>}
+          </StatusBadge>
         </div>
       </section>
 
-      <section className="stats-grid">
+      <section className="stats-grid compact-stats">
         <article className="stat-card">
-          <div className="stat-icon orange"><Building2 size={20} /></div>
-          <div><span>Widoczne punkty</span><strong>{dashboardData?.pointCount ?? 0}</strong></div>
-          <small>{roleDefinition.scope === 'GLOBAL' ? 'Zakres globalny' : 'Punkty przypisane do konta'}</small>
+          <div className="stat-icon orange"><Building2 size={19} /></div>
+          <div><span>Punkty w zasięgu</span><strong>{dashboardData?.pointCount ?? 0}</strong></div>
+          <small>{roleDefinition.scope === 'GLOBAL' ? 'Widok wszystkich punktów' : 'Zakres przypisany do konta'}</small>
         </article>
+
         <article className="stat-card">
-          <div className="stat-icon"><UsersRound size={20} /></div>
+          <div className="stat-icon"><UsersRound size={19} /></div>
           <div><span>Aktywne konta</span><strong>{dashboardData?.activeUsers ?? 0}</strong></div>
-          <small>{role === 'OWNER' ? `Oczekuje na weryfikację: ${dashboardData?.pendingUsers ?? 0}` : 'W zakresie Twojego dostępu'}</small>
+          <small>{role === 'OWNER' ? String(dashboardData?.pendingUsers ?? 0) + ' czeka na akceptację' : 'W Twoim zakresie dostępu'}</small>
         </article>
+
         <article className="stat-card">
-          <div className="stat-icon orange"><BadgeDollarSign size={20} /></div>
-          <div><span>{role === 'TECHNICIAN' ? 'Moja zatwierdzona część' : 'Zatwierdzony przychód'}</span><strong>{new Intl.NumberFormat('pl-PL',{style:'currency',currency:'PLN',maximumFractionDigits:0}).format(role === 'TECHNICIAN' ? (dashboardData?.technicianShare ?? 0) : (dashboardData?.approvedRevenue ?? 0))}</strong></div>
-          <small>Rozliczenia zatwierdzone w systemie</small>
-        </article>
-        <article className="stat-card">
-          <div className="stat-icon"><Globe2 size={20} /></div>
-          <div><span>Przeglądarka</span><strong>ONLINE</strong></div>
-          <small>Chromium WebContentsView aktywny</small>
+          <div className="stat-icon orange"><BadgeDollarSign size={19} /></div>
+          <div>
+            <span>{role === 'TECHNICIAN' ? 'Moja zatwierdzona część' : 'Zatwierdzony przychód'}</span>
+            <strong>{money(role === 'TECHNICIAN' ? (dashboardData?.technicianShare ?? 0) : (dashboardData?.approvedRevenue ?? 0))}</strong>
+          </div>
+          <small>Tylko zatwierdzone wpisy</small>
         </article>
       </section>
 
-      <section className="dashboard-grid">
-        {roleDefinition.canManageUpdates && (
-          <article className="panel-card update-card">
-            <div className="panel-heading">
-              <div>
-                <span className="eyebrow">SYSTEM AKTUALIZACJI</span>
-                <h2>Aktualizacje przez GitHub</h2>
-              </div>
-              <div className="github-icon"><Github size={23} /></div>
-            </div>
+      <section className="shortcut-grid">
+        {shortcuts.map(({ key, title, description, icon: Icon, action }) => (
+          <button className="shortcut-card" key={key} onClick={action}>
+            <div className="shortcut-icon"><Icon size={21} /></div>
+            <div><strong>{title}</strong><span>{description}</span></div>
+            <ArrowRight size={16} className="shortcut-arrow" />
+          </button>
+        ))}
+      </section>
 
-            <div className="version-row">
-              <div>
-                <span>Zainstalowana wersja</span>
-                <strong>v{appInfo?.version ?? '0.4.0'}</strong>
-              </div>
-              <StatusBadge tone={updateTone}>{update.status}</StatusBadge>
-            </div>
-
-            <div className="update-message">
-              <RefreshCw className={busy ? 'spin' : ''} size={18} />
-              <span>{update.message}</span>
-            </div>
-
-            {update.status === 'downloading' && (
-              <div className="download-progress"><div style={{ width: `${update.percent}%` }} /></div>
-            )}
-
-            <div className="button-row">
-              <button className="button secondary" disabled={busy} onClick={() => void window.lockOn.updater.check()}>
-                <RefreshCw size={16} /> Sprawdź aktualizacje
-              </button>
-              {update.status === 'available' && (
-                <button className="button primary" onClick={() => void window.lockOn.updater.download()}>
-                  <CloudDownload size={16} /> Pobierz
-                </button>
-              )}
-              {update.status === 'downloaded' && (
-                <button className="button primary" onClick={() => void window.lockOn.updater.install()}>
-                  Zainstaluj i uruchom ponownie
-                </button>
-              )}
-            </div>
-
-            <div className="update-note">
-              Panel aktualizacji jest dostępny tylko dla Właściciela aplikacji. Podgląd innej roli ukrywa ten moduł.
-            </div>
-          </article>
-        )}
-
-        <article className="panel-card roadmap-card">
+      {roleDefinition.canManageUpdates && (
+        <section className="panel-card update-card">
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">DOSTĘP ROLI</span>
-              <h2>Widoczne moduły</h2>
+              <span className="eyebrow">AKTUALIZACJE</span>
+              <h2>LockOn aktualizuje się z GitHuba</h2>
+              <p>Sprawdź nową wersję i zainstaluj ją bez szukania plików ręcznie.</p>
             </div>
-            <div className="roadmap-count">{roleDefinition.navigation.length}</div>
+            <div className="github-icon"><Settings2 size={22} /></div>
           </div>
 
-          <div className="roadmap-list">
-            {[
-              ['Zlecenia serwisowe', 'repairs'],
-              ['Klienci i urządzenia', 'customers'],
-              ['Magazyn części', 'parts'],
-              ['Porównywarka ofert', 'offers'],
-              ['Przeglądarka w aplikacji', 'browser'],
-              ['LockOn AI', 'ai'],
-              ['Centrum wsparcia', 'support']
-            ]
-              .filter(([, key]) => roleDefinition.navigation.includes(key as NavigationKey))
-              .map(([name, key], index) => (
-                <button key={key} onClick={() => onNavigate(key as NavigationKey)}>
-                  <span className="roadmap-index">{String(index + 1).padStart(2, '0')}</span>
-                  <span>{name}</span>
-                  <ArrowRight size={15} />
-                </button>
-              ))}
+          <div className="version-row">
+            <div><span>Zainstalowana wersja</span><strong>v{appInfo?.version ?? '—'}</strong></div>
+            <StatusBadge tone={updateTone}>{update.status}</StatusBadge>
           </div>
-        </article>
-      </section>
+
+          <div className="update-message">
+            <RefreshCw className={busy ? 'spin' : ''} size={17} />
+            <span>{update.message}</span>
+          </div>
+
+          {update.status === 'downloading' && (
+            <div className="download-progress"><div style={{ width: update.percent + '%' }} /></div>
+          )}
+
+          <div className="button-row">
+            <button className="button secondary" disabled={busy} onClick={() => void window.lockOn.updater.check()}>
+              <RefreshCw size={16} /> Sprawdź
+            </button>
+            {update.status === 'available' && (
+              <button className="button primary" onClick={() => void window.lockOn.updater.download()}>
+                <CloudDownload size={16} /> Pobierz aktualizację
+              </button>
+            )}
+            {update.status === 'downloaded' && (
+              <button className="button primary" onClick={() => void window.lockOn.updater.install()}>
+                Zainstaluj i uruchom ponownie
+              </button>
+            )}
+          </div>
+        </section>
+      )}
 
       <footer className="dashboard-footer">
-        <span>LockOn ServiceOS</span>
-        <span>•</span>
-        <span>Bartłomiej Motłoch — Punkt Nowogard</span>
-        <span className="footer-version">v{appInfo?.version ?? '0.4.0'} • Electron + React + TypeScript</span>
+        <span>LockOn ServiceOS</span><span>•</span><span>{pointName}</span>
+        <span className="footer-version">v{appInfo?.version ?? '—'}</span>
       </footer>
     </div>
   );
