@@ -1,0 +1,64 @@
+name: Build and publish LockOn ServiceOS
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify application source
+        id: guard
+        shell: pwsh
+        run: |
+          if ((Test-Path "src/App.tsx") -and (Test-Path "electron/main.ts")) {
+            echo "ready=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "ready=false" >> $env:GITHUB_OUTPUT
+            Write-Host "Source migration is not complete yet - release skipped."
+          }
+
+      - name: Setup Node.js
+        if: steps.guard.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        if: steps.guard.outputs.ready == 'true'
+        run: npm install
+
+      - name: Build Windows installer
+        if: steps.guard.outputs.ready == 'true'
+        run: npm run dist
+
+      - name: Read app version
+        if: steps.guard.outputs.ready == 'true'
+        id: version
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub Release
+        if: steps.guard.outputs.ready == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: LockOn ServiceOS v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          make_latest: true
+          overwrite_files: true
+          files: |
+            release/LockOn-ServiceOS-Setup.exe
+            release/LockOn-ServiceOS-Setup.exe.blockmap
+            release/latest.yml
