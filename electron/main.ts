@@ -241,7 +241,8 @@ const requireOwner = async () => {
 const assertTrustedIpc = (event: IpcMainInvokeEvent) => {
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Główne okno aplikacji nie jest dostępne.');
   if (event.sender.id !== mainWindow.webContents.id) throw new Error('Odrzucono niezaufane wywołanie IPC.');
-  if (!isTrustedRendererUrl(event.senderFrame.url)) throw new Error('Odrzucono wywołanie z niezaufanego źródła.');
+  const senderFrame = event.senderFrame;
+  if (!senderFrame || !isTrustedRendererUrl(senderFrame.url)) throw new Error('Odrzucono wywołanie z niezaufanego źródła.');
 };
 
 type SecureHandler = (...args: any[]) => unknown;
