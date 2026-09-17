@@ -3,7 +3,7 @@ name: Build and publish LockOn ServiceOS
 on:
   push:
     paths:
-      - "RELEASE"
+      - "RELEASE_VERSION"
   workflow_dispatch:
 
 permissions:
@@ -61,9 +61,9 @@ jobs:
         shell: pwsh
         run: |
           $version = node -p "require('./package.json').version"
-          $requested = (Get-Content RELEASE -Raw).Trim()
+          $requested = (Get-Content RELEASE_VERSION -Raw).Trim()
           if ($version -ne $requested) {
-            Write-Error "RELEASE ($requested) nie zgadza się z package.json ($version)."
+            Write-Error "RELEASE_VERSION ($requested) nie zgadza się z package.json ($version)."
             exit 1
           }
           "version=$version" >> $env:GITHUB_OUTPUT
