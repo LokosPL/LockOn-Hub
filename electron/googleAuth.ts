@@ -223,6 +223,8 @@ const resolveGoogleClientSecret = () => {
   const envSecret = process.env.LOCKON_GOOGLE_CLIENT_SECRET?.trim();
   if (envSecret) return envSecret;
 
+  if (app.isPackaged) return '';
+
   const candidates = [
     path.join(process.cwd(), 'google-oauth.local.json'),
     ...findCredentialFile(process.cwd()),
