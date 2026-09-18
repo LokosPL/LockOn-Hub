@@ -341,3 +341,17 @@ WHERE NOT ('RECEIVED'=ANY(notify_statuses));
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-18-central-v5','Send configurable intake confirmation at RECEIVED status')
 ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v6: race-safe customer deduplication.
+CREATE UNIQUE INDEX IF NOT EXISTS customers_email_unique_idx
+  ON customers ((lower(email)))
+  WHERE email IS NOT NULL AND btrim(email)<>'';
+
+CREATE UNIQUE INDEX IF NOT EXISTS customers_phone_unique_idx
+  ON customers (phone_normalized)
+  WHERE phone_normalized IS NOT NULL AND phone_normalized<>'';
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v6','Prevent duplicate customers by normalized email or phone')
+ON CONFLICT (version) DO NOTHING;
