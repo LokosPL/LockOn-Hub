@@ -127,7 +127,7 @@ export default function App() {
             />
           )}
           {active === 'administration' && <AdministrationPage />}
-          {active === 'service' && <ServicePage auth={auth} />}
+          {active === 'service' && <ServicePage auth={auth} effectiveRole={effectiveRole!} />}
           {active === 'earnings' && <EarningsPage auth={auth} effectiveRole={effectiveRole!} />}
           {active === 'browser' && <BrowserPage />}
           {active === 'support' && <SupportDesk role={effectiveRole!} onOpenChat={() => setHelpOpen(true)} />}
