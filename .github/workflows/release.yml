@@ -2,12 +2,15 @@ name: Build and publish LockOn ServiceOS
 
 on:
   push:
+    branches: ["main"]
     paths:
       - "RELEASE_VERSION"
   workflow_dispatch:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: lockon-release
@@ -16,45 +19,23 @@ concurrency:
 jobs:
   release-windows:
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          cache: npm
 
-      - name: Check Google OAuth build secret
-        shell: pwsh
-        env:
-          GOOGLE_CLIENT_SECRET: ${{ secrets.LOCKON_GOOGLE_CLIENT_SECRET }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:GOOGLE_CLIENT_SECRET)) {
-            Write-Error "Brak sekretu LOCKON_GOOGLE_CLIENT_SECRET."
-            exit 1
-          }
+      - name: Install locked dependencies
+        run: npm ci
 
-      - name: Inject Google OAuth secret
-        shell: pwsh
-        env:
-          GOOGLE_CLIENT_SECRET: ${{ secrets.LOCKON_GOOGLE_CLIENT_SECRET }}
-        run: |
-          $escaped = $env:GOOGLE_CLIENT_SECRET.Replace("'", "\\'")
-          "export const GOOGLE_CLIENT_SECRET = '$escaped';" | Set-Content -Path electron/generatedSecrets.ts -Encoding utf8
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Typecheck renderer
-        run: npm run typecheck
-
-      - name: Build application
-        run: npm run build
-
-      - name: Build Windows installer
-        run: npx electron-builder --win --publish never
+      - name: Dependency security audit
+        run: npm audit --audit-level=high
 
       - name: Verify release version
         id: version
@@ -68,18 +49,52 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: LockOn ServiceOS v${{ steps.version.outputs.version }}
-          body: |
-            Oficjalne wydanie LockOn ServiceOS.
+      - name: Build application
+        run: npm run build
 
-            Pobierz **LockOn-ServiceOS-Setup.exe**. Kolejne wersje aplikacja wykrywa przez GitHub Releases.
-          make_latest: true
-          overwrite_files: true
-          files: |
+      - name: Build Windows installer
+        run: npx electron-builder --win --publish never
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            "release/LockOn-ServiceOS-Setup.exe",
+            "release/LockOn-ServiceOS-Setup.exe.blockmap",
+            "release/latest.yml"
+          )
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $([System.IO.Path]::GetFileName($file))"
+          }
+          Set-Content -Path release/SHA256SUMS.txt -Value $lines -Encoding ascii
+
+      - name: Generate build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
             release/LockOn-ServiceOS-Setup.exe
             release/LockOn-ServiceOS-Setup.exe.blockmap
             release/latest.yml
+            release/SHA256SUMS.txt
+
+      - name: Prepare release notes
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $notes = @"
+          Oficjalne wydanie LockOn ServiceOS v$env:VERSION.
+
+          Pobierz **LockOn-ServiceOS-Setup.exe**.
+          Instalator i pliki aktualizatora powstały w tym workflow i mają poświadczenie pochodzenia buildu w GitHub Artifact Attestations.
+          "@
+          Set-Content -Path release-notes.md -Value $notes -Encoding utf8
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "v$env:VERSION" "release/LockOn-ServiceOS-Setup.exe" "release/LockOn-ServiceOS-Setup.exe.blockmap" "release/latest.yml" "release/SHA256SUMS.txt" --title "LockOn ServiceOS v$env:VERSION" --notes-file release-notes.md --latest

@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView, shell } from 'electron';
+import { BrowserWindow, WebContentsView, session, shell } from 'electron';
 import { APP_CONFIG } from './appConfig';
 
 export interface BrowserBounds {
@@ -16,17 +16,43 @@ export interface BrowserState {
   loading: boolean;
 }
 
+const BROWSER_PARTITION = 'persist:lockon-browser';
+
 let view: WebContentsView | null = null;
 let owner: BrowserWindow | null = null;
 let visible = false;
 let lastBounds: BrowserBounds = { x: 0, y: 0, width: 0, height: 0 };
+let browserSessionConfigured = false;
 
-const isHttpUrl = (value: string) => /^https?:\/\//i.test(value);
+const isLoopbackHost = (hostname: string) =>
+  hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]';
+
+const isAllowedBrowserUrl = (value: string) => {
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'https:') return true;
+    return url.protocol === 'http:' && isLoopbackHost(url.hostname);
+  } catch {
+    return false;
+  }
+};
 
 export const normalizeBrowserInput = (raw: string) => {
   const value = raw.trim();
   if (!value) return APP_CONFIG.browser.homeUrl;
-  if (isHttpUrl(value)) return value;
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === 'https:') return parsed.toString();
+    if (parsed.protocol === 'http:' && isLoopbackHost(parsed.hostname)) return parsed.toString();
+    if (parsed.protocol === 'http:') {
+      parsed.protocol = 'https:';
+      return parsed.toString();
+    }
+  } catch {
+    // Nie jest pełnym URL-em. Obsłużymy domenę lub zapytanie wyszukiwania poniżej.
+  }
+
   if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(value)) return `https://${value}`;
   return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
 };
@@ -56,16 +82,37 @@ const emitState = () => {
   owner.webContents.send('browser:state', state());
 };
 
+const configureBrowserSession = () => {
+  if (browserSessionConfigured) return;
+  browserSessionConfigured = true;
+
+  const browserSession = session.fromPartition(BROWSER_PARTITION);
+  browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  browserSession.setPermissionCheckHandler(() => false);
+
+  // Wbudowana przeglądarka nie pobiera plików bez wiedzy aplikacji.
+  // Użytkownik może otworzyć stronę w domyślnej przeglądarce systemowej.
+  browserSession.on('will-download', (event) => {
+    event.preventDefault();
+  });
+};
+
 const ensureView = (window: BrowserWindow) => {
   owner = window;
   if (view && !view.webContents.isDestroyed()) return view;
 
+  configureBrowserSession();
+
   view = new WebContentsView({
     webPreferences: {
+      partition: BROWSER_PARTITION,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      safeDialogs: true
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      safeDialogs: true,
+      devTools: false
     }
   });
 
@@ -75,19 +122,24 @@ const ensureView = (window: BrowserWindow) => {
   const webContents = view.webContents;
 
   webContents.setWindowOpenHandler(({ url }) => {
-    if (isHttpUrl(url)) void webContents.loadURL(url);
+    if (isAllowedBrowserUrl(url)) void webContents.loadURL(url);
     return { action: 'deny' };
   });
 
   webContents.on('will-navigate', (event, url) => {
-    if (!isHttpUrl(url)) event.preventDefault();
+    if (!isAllowedBrowserUrl(url)) event.preventDefault();
+  });
+
+  webContents.on('will-redirect', (event, url) => {
+    if (!isAllowedBrowserUrl(url)) event.preventDefault();
   });
 
   webContents.on('did-start-loading', emitState);
   webContents.on('did-stop-loading', emitState);
-  webContents.on('did-navigate', () => emitState());
-  webContents.on('did-navigate-in-page', () => emitState());
-  webContents.on('page-title-updated', () => emitState());
+  webContents.on('did-navigate', emitState);
+  webContents.on('did-navigate-in-page', emitState);
+  webContents.on('page-title-updated', emitState);
+  webContents.on('render-process-gone', emitState);
 
   void webContents.loadURL(APP_CONFIG.browser.homeUrl);
   view.setVisible(false);
@@ -111,10 +163,10 @@ export const setBrowserVisible = (window: BrowserWindow, nextVisible: boolean) =
 
 export const setBrowserBounds = (window: BrowserWindow, bounds: BrowserBounds) => {
   const safe: BrowserBounds = {
-    x: Math.max(0, Math.round(bounds.x)),
-    y: Math.max(0, Math.round(bounds.y)),
-    width: Math.max(0, Math.round(bounds.width)),
-    height: Math.max(0, Math.round(bounds.height))
+    x: Math.max(0, Math.round(Number(bounds.x) || 0)),
+    y: Math.max(0, Math.round(Number(bounds.y) || 0)),
+    width: Math.min(10_000, Math.max(0, Math.round(Number(bounds.width) || 0))),
+    height: Math.min(10_000, Math.max(0, Math.round(Number(bounds.height) || 0)))
   };
   lastBounds = safe;
   const browserView = ensureView(window);
@@ -123,7 +175,8 @@ export const setBrowserBounds = (window: BrowserWindow, bounds: BrowserBounds) =
 
 export const navigateBrowser = async (window: BrowserWindow, input: string) => {
   const browserView = ensureView(window);
-  const url = normalizeBrowserInput(input);
+  const url = normalizeBrowserInput(String(input || '').slice(0, 4096));
+  if (!isAllowedBrowserUrl(url)) throw new Error('Ten adres nie jest dozwolony.');
   await browserView.webContents.loadURL(url);
   return state();
 };
@@ -156,7 +209,8 @@ export const browserHome = async (window: BrowserWindow) =>
 export const browserOpenExternal = async (window: BrowserWindow) => {
   const browserView = ensureView(window);
   const url = browserView.webContents.getURL();
-  if (isHttpUrl(url)) await shell.openExternal(url);
+  if (!isAllowedBrowserUrl(url)) return;
+  await shell.openExternal(url);
 };
 
 export const getBrowserState = () => state();

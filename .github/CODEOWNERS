@@ -1,0 +1,8 @@
+# Security-sensitive files require explicit owner review.
+* @LokosPL
+/.github/workflows/ @LokosPL
+/electron/ @LokosPL
+/server/ @LokosPL
+/package.json @LokosPL
+/package-lock.json @LokosPL
+/SECURITY.md @LokosPL
