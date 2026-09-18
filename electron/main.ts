@@ -375,7 +375,7 @@ const secureHandle = (channel: string, listener: SecureHandler) => {
   });
 };
 
-const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv') => {
+const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf') => {
   const text = String(value ?? '');
   if (!new RegExp(`^${prefix}_[a-f0-9]{20}$`).test(text)) throw new Error('Nieprawidłowy identyfikator.');
   return text;
@@ -521,6 +521,36 @@ const registerIpc = () => {
   secureHandle('gmail:disconnect', (pointId: string) =>
     disconnectGmailSender(String(pointId ?? '').trim().slice(0, 80))
   );
+  secureHandle('gmail:test', async (pointId: string) => {
+    const token = requireSessionToken();
+    return backendRequest('/integrations/gmail/test', {
+      method: 'POST',
+      body: JSON.stringify({ pointId: String(pointId ?? '').trim().slice(0, 80) })
+    }, token);
+  });
+
+  secureHandle('notifications:getSettings', async (pointId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/notifications/settings?pointId=${encodeURIComponent(String(pointId ?? '').trim().slice(0, 80))}`, {}, token);
+  });
+  secureHandle('notifications:updateSettings', async (payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest('/notifications/settings', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }, token);
+  });
+  secureHandle('notifications:getHistory', async (pointId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/notifications/history?pointId=${encodeURIComponent(String(pointId ?? '').trim().slice(0, 80))}`, {}, token);
+  });
+  secureHandle('notifications:retry', async (notificationId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/notifications/${encodeURIComponent(safeId(notificationId, 'ntf'))}/retry`, {
+      method: 'POST',
+      body: '{}'
+    }, token);
+  });
 
   secureHandle('assistant:getConversation', async () => {
     const token = requireSessionToken();
