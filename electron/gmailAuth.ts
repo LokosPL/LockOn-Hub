@@ -133,46 +133,69 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
         if (!address || typeof address === 'string') throw new Error('Błąd callbacku Gmail OAuth.');
         const redirectUri = 'http://127.0.0.1:' + address.port + '/gmail/callback';
 
-        const clientSecret = APP_CONFIG.auth.googleClientSecret.trim();
-        if (!clientSecret) throw new Error('Brak danych Google OAuth wymaganych przez klienta desktopowego.');
+        let status: GmailConnectionStatus;
+        try {
+          status = await backendRequest<GmailConnectionStatus>(
+            '/integrations/gmail/connect-code',
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                pointId,
+                code,
+                codeVerifier: verifier,
+                redirectUri
+              })
+            },
+            apiToken
+          );
+        } catch (serverError) {
+          const typed = serverError as Error & { code?: string; status?: number };
+          const canFallback = typed.code === 'SERVER_OAUTH_NOT_CONFIGURED' || typed.code === 'NOT_FOUND' || typed.status === 404;
+          if (!canFallback) throw serverError;
 
-        const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          redirect: 'error',
-          body: new URLSearchParams({
-            client_id: APP_CONFIG.auth.googleClientId,
-            client_secret: clientSecret,
-            code,
-            code_verifier: verifier,
-            grant_type: 'authorization_code',
-            redirect_uri: redirectUri
-          })
-        });
-        const tokenPayload = await tokenResponse.json() as { refresh_token?: string; id_token?: string; error?: string; error_description?: string };
-        if (!tokenResponse.ok) {
-          throw new Error(tokenPayload.error_description || tokenPayload.error || 'Google odrzucił połączenie Gmail.');
-        }
-        if (!tokenPayload.refresh_token) {
-          throw new Error('Google nie zwrócił refresh tokena. Odłącz dostęp ServiceOS w koncie Google i spróbuj ponownie.');
-        }
-        if (!tokenPayload.id_token) {
-          throw new Error('Google nie zwrócił tokena tożsamości dla połączonego konta.');
-        }
+          const clientSecret = APP_CONFIG.auth.googleClientSecret.trim();
+          if (!clientSecret) {
+            throw new Error('Serwerowe Google OAuth nie jest jeszcze skonfigurowane. Administrator musi dodać credential po stronie ServiceOS.');
+          }
 
-        const status = await backendRequest<GmailConnectionStatus>(
-          '/integrations/gmail/connect',
-          {
+          const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
             method: 'POST',
-            body: JSON.stringify({
-              pointId,
-              refreshToken: tokenPayload.refresh_token,
-              idToken: tokenPayload.id_token,
-              clientSecret
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            redirect: 'error',
+            body: new URLSearchParams({
+              client_id: APP_CONFIG.auth.googleClientId,
+              client_secret: clientSecret,
+              code,
+              code_verifier: verifier,
+              grant_type: 'authorization_code',
+              redirect_uri: redirectUri
             })
-          },
-          apiToken
-        );
+          });
+          const tokenPayload = await tokenResponse.json() as { refresh_token?: string; id_token?: string; error?: string; error_description?: string };
+          if (!tokenResponse.ok) {
+            throw new Error(tokenPayload.error_description || tokenPayload.error || 'Google odrzucił połączenie Gmail.');
+          }
+          if (!tokenPayload.refresh_token) {
+            throw new Error('Google nie zwrócił refresh tokena. Odłącz dostęp ServiceOS w koncie Google i spróbuj ponownie.');
+          }
+          if (!tokenPayload.id_token) {
+            throw new Error('Google nie zwrócił tokena tożsamości dla połączonego konta.');
+          }
+
+          status = await backendRequest<GmailConnectionStatus>(
+            '/integrations/gmail/connect',
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                pointId,
+                refreshToken: tokenPayload.refresh_token,
+                idToken: tokenPayload.id_token,
+                clientSecret
+              })
+            },
+            apiToken
+          );
+        }
 
         response.writeHead(200, headers);
         response.end(oauthPage(
