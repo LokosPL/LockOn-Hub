@@ -2,7 +2,7 @@
 
 LockOn ServiceOS to otwartoźródłowa aplikacja desktopowa dla Windows do codziennej pracy serwisu. Obecny zakres projektu obejmuje pulpit, logowanie Google, role i dostęp do punktów, administrację, rozliczenia, wbudowaną przeglądarkę, pomoc oraz automatyczne aktualizacje.
 
-**Autor i maintainer:** Bartłomiej Motłoch — Punkt Nowogard  
+**Autor i maintainer:** Bartłomiej Motłoch  
 **Repozytorium:** https://github.com/LokosPL/LockOn-Hub
 
 ## Pobieranie
@@ -51,7 +51,7 @@ Zasady zgłaszania podatności: [SECURITY.md](SECURITY.md).
 
 **Free code signing provided by SignPath.io, certificate by SignPath Foundation.**
 
-Integracja z darmowym programem Open Source SignPath Foundation jest przygotowana i oczekuje na akceptację projektu. Do czasu uzyskania podpisu Windows Smart App Control może blokować niepodpisane buildy.
+Wniosek do darmowego programu Open Source SignPath Foundation został wysłany i oczekuje na akceptację. Do czasu uzyskania podpisu Windows Smart App Control może blokować niepodpisane buildy.
 
 Pełna polityka, role i zasady podpisywania: [CODE_SIGNING.md](CODE_SIGNING.md).
 
@@ -96,4 +96,4 @@ Zasady współpracy: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Aktualna wersja
 
-**0.6.5**
+**0.6.6**

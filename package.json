@@ -1,9 +1,9 @@
 {
   "name": "lockon-serviceos",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "private": true,
   "description": "LockOn ServiceOS — bezpieczny desktopowy panel serwisu z Google OAuth, przeglądarką, rozliczeniami, administracją, pomocą i aktualizacjami GitHub.",
-  "author": "Bartłomiej Motłoch - Punkt Nowogard",
+  "author": "Bartłomiej Motłoch",
   "license": "MIT",
   "main": "dist-electron/main.js",
   "repository": {
@@ -15,13 +15,14 @@
     "dev:electron": "wait-on tcp:5173 tcp:8787 && npm run build:electron && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "build:electron": "tsc -p electron/tsconfig.json",
     "build:web": "vite build",
-    "build": "npm run build:web && npm run build:electron",
+    "build": "npm run build:web && npm run build:electron && npm run build:server",
     "dist": "npm run build && electron-builder --win",
     "release": "npm run build && electron-builder --win --publish always",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "dev:server": "cross-env LOCKON_ALLOW_DEV_LOGIN=1 node server/index.mjs",
-    "server": "node server/index.mjs"
+    "server": "node server/index.mjs",
+    "build:server": "esbuild server/index.mjs --bundle --platform=node --format=cjs --target=node22 --outfile=dist-server/index.cjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.5.2",
@@ -41,7 +42,8 @@
     "electron-builder": "^26.0.12",
     "typescript": "^5.8.3",
     "vite": "^6.3.5",
-    "wait-on": "^8.0.3"
+    "wait-on": "^8.0.3",
+    "esbuild": "^0.25.12"
   },
   "build": {
     "appId": "pl.lockon.serviceos",
@@ -54,6 +56,7 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "dist-server/**/*",
       "server/**/*",
       "package.json"
     ],
@@ -82,7 +85,7 @@
     ],
     "artifactName": "LockOn-ServiceOS-Setup.${ext}",
     "asarUnpack": [
-      "server/**/*"
+      "dist-server/**/*"
     ]
   }
 }
