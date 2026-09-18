@@ -100,4 +100,14 @@ Zasady współpracy: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Aktualna wersja
 
-**0.8.0**
+**0.9.0**
+
+
+## Powiadomienia serwisowe 0.9.0
+
+- Gmail jest łączony osobno dla punktu i używa zakresu `gmail.send`.
+- Automatyczne powiadomienia można włączyć/wyłączyć per punkt i wybrać statusy, które mają generować wiadomość.
+- Wiadomości mają wersję tekstową i HTML, nazwę nadawcy oraz konfigurowalną stopkę.
+- Centralna kolejka zapisuje wynik wysyłki, liczbę prób, błąd oraz identyfikator wiadomości zwrócony przez Gmail.
+- Nieudane wiadomości używają exponential backoff i są ponawiane przez automatyczny worker Neon Function.
+- OWNER/BOSS/COORDINATOR mogą wysłać test na własny adres i ręcznie ponowić nieudaną wiadomość.
