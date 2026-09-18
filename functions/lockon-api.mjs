@@ -325,6 +325,15 @@ const orderView = (row) => ({
   createdAt: row.created_at
 });
 
+const orderViewForUser = (row, user) => {
+  const view = orderView(row);
+  if (user.role_code === 'SUPPORT') {
+    view.estimatedCost = null;
+    view.finalCost = null;
+  }
+  return view;
+};
+
 const getVisibleOrderByNumber = async (user, number) => {
   const params = [Number(number)];
   let access = '';
@@ -336,7 +345,7 @@ const getVisibleOrderByNumber = async (user, number) => {
     "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
     params
   );
-  return rows[0] ? orderView(rows[0]) : null;
+  return rows[0] ? orderViewForUser(rows[0], user) : null;
 };
 
 const listVisibleOrders = async (user) => {
@@ -344,7 +353,7 @@ const listVisibleOrders = async (user) => {
     const { rows } = await q(
       "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY s.created_at DESC LIMIT 100"
     );
-    return rows.map(orderView);
+    return rows.map((row) => orderViewForUser(row, user));
   }
   const { rows } = await q(
     "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id JOIN user_point_access a ON a.point_id=s.point_id AND a.user_id=$1 ORDER BY s.created_at DESC LIMIT 100",
@@ -931,7 +940,7 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/service/technicians'){
     const session=await requireActive(request),u=session.user;
-    if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do danych serwisowych.'),{status:403});
+    if(!SERVICE_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do listy techników.'),{status:403});
     const pointId=cleanText(url.searchParams.get('pointId'),80);
     if(!pointId)return json(request,{error:'POINT_REQUIRED',message:'Wybierz punkt.'},400);
     await requirePoint(u,pointId);
@@ -1034,6 +1043,11 @@ const route = async (request) => {
     const serialNumber=cleanText(body.serialNumber,120);
     const deviceNotes=cleanText(body.deviceNotes,1000);
     if(imei&&!/^\d{14,16}$/.test(imei))return json(request,{error:'IMEI',message:'IMEI powinien zawierać 14–16 cyfr.'},400);
+
+    if(imei){
+      const conflict=(await q('SELECT id FROM devices WHERE imei=$1 AND id<>$2 LIMIT 1',[imei,found.device_id])).rows[0];
+      if(conflict)return json(request,{error:'IMEI_CONFLICT',message:'Ten IMEI jest już przypisany do innego urządzenia.'},409);
+    }
 
     const etaText=cleanText(body.estimatedCompletionAt,64);
     let estimatedCompletionAt=null;
