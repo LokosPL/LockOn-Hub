@@ -35,6 +35,7 @@ import {
   logout
 } from './googleAuth';
 import {
+  checkForUpdates,
   checkForUpdatesIfStale,
   configureUpdater,
   downloadUpdate,
