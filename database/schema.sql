@@ -381,3 +381,13 @@ CREATE INDEX IF NOT EXISTS devices_serial_idx
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-18-central-v7','Service order ETA, internal notes and device lookup indexes')
 ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v8: one physical device per non-empty IMEI.
+CREATE UNIQUE INDEX IF NOT EXISTS devices_imei_unique_idx
+  ON devices(imei)
+  WHERE imei IS NOT NULL AND btrim(imei)<>'';
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v8','Enforce unique non-empty device IMEI')
+ON CONFLICT (version) DO NOTHING;
