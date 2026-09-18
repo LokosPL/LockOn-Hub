@@ -1,0 +1,22 @@
+name: Central API smoke
+
+on:
+  push:
+    paths:
+      - ".github/workflows/central-api-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check central API health
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl --fail --silent --show-error --retry 3 --retry-delay 2 'https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech/health')"
+          echo "$body"
+          echo "$body" | grep -q '"ok":true'
