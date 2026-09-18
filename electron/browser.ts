@@ -162,11 +162,16 @@ export const setBrowserVisible = (window: BrowserWindow, nextVisible: boolean) =
 };
 
 export const setBrowserBounds = (window: BrowserWindow, bounds: BrowserBounds) => {
+  // getBoundingClientRect() returns renderer CSS pixels. When the ServiceOS renderer
+  // is zoomed on QHD/4K, WebContentsView still expects BrowserWindow content pixels.
+  // Convert the coordinates back to window pixels so the embedded browser stays
+  // perfectly aligned with its dark frame at every UI scale.
+  const zoom = Math.max(0.5, Math.min(2, window.webContents.getZoomFactor() || 1));
   const safe: BrowserBounds = {
-    x: Math.max(0, Math.round(Number(bounds.x) || 0)),
-    y: Math.max(0, Math.round(Number(bounds.y) || 0)),
-    width: Math.min(10_000, Math.max(0, Math.round(Number(bounds.width) || 0))),
-    height: Math.min(10_000, Math.max(0, Math.round(Number(bounds.height) || 0)))
+    x: Math.max(0, Math.round((Number(bounds.x) || 0) * zoom)),
+    y: Math.max(0, Math.round((Number(bounds.y) || 0) * zoom)),
+    width: Math.min(10_000, Math.max(0, Math.round((Number(bounds.width) || 0) * zoom))),
+    height: Math.min(10_000, Math.max(0, Math.round((Number(bounds.height) || 0) * zoom)))
   };
   lastBounds = safe;
   const browserView = ensureView(window);

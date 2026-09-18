@@ -52,10 +52,12 @@ export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleCh
           <h1>Dopasuj ServiceOS do siebie</h1>
           <p>Motyw i wielkość interfejsu są zapisywane lokalnie na tym komputerze. Każdy użytkownik może ustawić je po swojemu, niezależnie od roli.</p>
         </div>
-        <div className="settings-role-card">
-          <ShieldCheck size={22}/>
-          <div><span>Twoja faktyczna rola</span><strong>{ROLE_DEFINITIONS[actualRole].label}</strong></div>
-        </div>
+        {actualRole === 'OWNER' && (
+          <div className="settings-role-card">
+            <ShieldCheck size={22}/>
+            <div><span>Twoja faktyczna rola</span><strong>{ROLE_DEFINITIONS[actualRole].label}</strong></div>
+          </div>
+        )}
       </section>
 
       <section className="panel-card appearance-card">
@@ -109,64 +111,66 @@ export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleCh
         </div>
       </section>
 
-      {previewRole && actualRole === 'OWNER' && (
-        <div className="preview-info-card">
-          <Eye size={18}/>
-          <div>
-            <strong>Tryb podglądu jest aktywny</strong>
-            <span>Oglądasz aplikację jako {ROLE_DEFINITIONS[effectiveRole].label}. Uprawnienia konta nie zostały zmienione.</span>
-          </div>
-        </div>
+      {actualRole === 'OWNER' && (
+        <>
+          {previewRole && (
+            <div className="preview-info-card">
+              <Eye size={18}/>
+              <div>
+                <strong>Tryb podglądu jest aktywny</strong>
+                <span>Oglądasz aplikację jako {ROLE_DEFINITIONS[effectiveRole].label}. Uprawnienia konta nie zostały zmienione.</span>
+              </div>
+            </div>
+          )}
+
+          <section className="settings-access-heading">
+            <div>
+              <div className="eyebrow">KONTO I UPRAWNIENIA</div>
+              <h2>Role i zakresy dostępu</h2>
+              <p>Ta część jest widoczna wyłącznie dla właściciela aplikacji.</p>
+            </div>
+          </section>
+
+          <section className="role-cards-grid">
+            {ROLE_ORDER.map((role) => {
+              const d = ROLE_DEFINITIONS[role];
+              return (
+                <article
+                  key={role}
+                  className={'role-card ' + (role === actualRole ? 'current ' : '') + 'preview-clickable'}
+                  onClick={() => onPreviewRoleChange(role === actualRole ? null : role)}
+                >
+                  <div className="role-card-topline">
+                    <div className="role-card-icon"><ShieldCheck size={19}/></div>
+                    <span>{role}</span>
+                  </div>
+                  <h2>{d.label}</h2>
+                  <p>{d.description}</p>
+                  <div className="role-capabilities">
+                    <span><Check size={13}/> Zakres: {d.scope === 'GLOBAL' ? 'wszystkie punkty' : 'przypisane punkty'}</span>
+                    <span><Check size={13}/> Moduły: {d.navigation.length}</span>
+                    <span><Check size={13}/> Ustawienia wyglądu</span>
+                    {d.canManageUpdates && <span><Check size={13}/> Zarządzanie aktualizacjami</span>}
+                    {d.canUseSupportDesk && <span><Check size={13}/> Obsługa wsparcia</span>}
+                    {d.canPreviewRoles && <span><Check size={13}/> Podgląd ról</span>}
+                  </div>
+                  <button className="role-preview-action" type="button">
+                    <Eye size={13}/>{role === actualRole ? 'Mój widok' : 'Podejrzyj tę rolę'}
+                  </button>
+                </article>
+              );
+            })}
+          </section>
+
+          <section className="panel-card team-config-card">
+            <div>
+              <div className="eyebrow">ZASADA DOSTĘPU</div>
+              <h2>Google → zgłoszenie punktu → weryfikacja</h2>
+              <p>Użytkownik loguje się Google, podaje nazwę punktu i miasto, a konto pojawia się w <strong>Administracja</strong>. Dopiero właściciel nadaje rolę i dostęp.</p>
+            </div>
+          </section>
+        </>
       )}
-
-      <section className="settings-access-heading">
-        <div>
-          <div className="eyebrow">KONTO I UPRAWNIENIA</div>
-          <h2>Role i zakresy dostępu</h2>
-          <p>Ustawienia wyglądu są dostępne dla każdego. Uprawnienia nadal wynikają z roli i przypisanych punktów.</p>
-        </div>
-      </section>
-
-      <section className="role-cards-grid">
-        {ROLE_ORDER.map((role) => {
-          const d = ROLE_DEFINITIONS[role];
-          return (
-            <article
-              key={role}
-              className={'role-card ' + (role === actualRole ? 'current ' : '') + (actualRole === 'OWNER' ? 'preview-clickable' : '')}
-              onClick={() => actualRole === 'OWNER' && onPreviewRoleChange(role === actualRole ? null : role)}
-            >
-              <div className="role-card-topline">
-                <div className="role-card-icon"><ShieldCheck size={19}/></div>
-                <span>{role}</span>
-              </div>
-              <h2>{d.label}</h2>
-              <p>{d.description}</p>
-              <div className="role-capabilities">
-                <span><Check size={13}/> Zakres: {d.scope === 'GLOBAL' ? 'wszystkie punkty' : 'przypisane punkty'}</span>
-                <span><Check size={13}/> Moduły: {d.navigation.length}</span>
-                <span><Check size={13}/> Ustawienia wyglądu</span>
-                {d.canManageUpdates && <span><Check size={13}/> Zarządzanie aktualizacjami</span>}
-                {d.canUseSupportDesk && <span><Check size={13}/> Obsługa wsparcia</span>}
-                {d.canPreviewRoles && <span><Check size={13}/> Podgląd ról</span>}
-              </div>
-              {actualRole === 'OWNER' && (
-                <button className="role-preview-action" type="button">
-                  <Eye size={13}/>{role === actualRole ? 'Mój widok' : 'Podejrzyj tę rolę'}
-                </button>
-              )}
-            </article>
-          );
-        })}
-      </section>
-
-      <section className="panel-card team-config-card">
-        <div>
-          <div className="eyebrow">ZASADA DOSTĘPU</div>
-          <h2>Google → zgłoszenie punktu → weryfikacja</h2>
-          <p>Użytkownik loguje się Google, podaje nazwę punktu i miasto, a konto pojawia się w <strong>Administracja</strong>. Dopiero właściciel nadaje rolę i dostęp.</p>
-        </div>
-      </section>
     </div>
   );
 }
