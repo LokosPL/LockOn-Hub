@@ -94,12 +94,14 @@ CREATE TABLE IF NOT EXISTS service_orders (
   id text PRIMARY KEY,
   order_number bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
   point_id text NOT NULL REFERENCES points(id),
+  home_point_id text NOT NULL REFERENCES points(id),
+  current_point_id text REFERENCES points(id),
   customer_id text NOT NULL REFERENCES customers(id),
   device_id text NOT NULL REFERENCES devices(id),
   order_type text NOT NULL CHECK (order_type IN ('REPAIR','COMPLAINT','WARRANTY')),
   original_order_id text REFERENCES service_orders(id),
   issue_description text NOT NULL,
-  status text NOT NULL DEFAULT 'RECEIVED' CHECK (status IN ('RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','CANCELLED','REJECTED')),
+  status text NOT NULL DEFAULT 'RECEIVED' CHECK (status IN ('RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','CANCELLED','REJECTED')),
   assigned_technician_id text REFERENCES users(id),
   created_by_user_id text NOT NULL REFERENCES users(id),
   estimated_cost numeric(12,2),
@@ -437,6 +439,7 @@ CREATE TABLE IF NOT EXISTS service_order_transfers (
   service_order_id text NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
   from_point_id text NOT NULL REFERENCES points(id),
   to_point_id text NOT NULL REFERENCES points(id),
+  kind text NOT NULL DEFAULT 'OUTBOUND_SERVICE' CHECK (kind IN ('OUTBOUND_SERVICE','RETURN_HOME')),
   status text NOT NULL DEFAULT 'REQUESTED'
     CHECK (status IN ('REQUESTED','IN_TRANSIT','DELIVERED','ACCEPTED','REJECTED','CANCELLED')),
   note text,
@@ -462,4 +465,84 @@ CREATE UNIQUE INDEX IF NOT EXISTS service_order_transfers_one_open_idx
 
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-18-central-v10','Account blocking, service-capable points and inter-point service transfers')
+ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v11: permanent home point and mandatory return logistics.
+ALTER TABLE service_orders
+  ADD COLUMN IF NOT EXISTS home_point_id text REFERENCES points(id),
+  ADD COLUMN IF NOT EXISTS current_point_id text REFERENCES points(id);
+
+UPDATE service_orders
+SET home_point_id=point_id
+WHERE home_point_id IS NULL;
+
+ALTER TABLE service_orders
+  ALTER COLUMN home_point_id SET NOT NULL;
+
+ALTER TABLE service_order_transfers
+  ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'OUTBOUND_SERVICE';
+
+UPDATE service_order_transfers t
+SET kind=CASE
+  WHEN t.to_point_id=COALESCE(s.home_point_id,s.point_id)
+       AND t.from_point_id<>COALESCE(s.home_point_id,s.point_id)
+    THEN 'RETURN_HOME'
+  ELSE 'OUTBOUND_SERVICE'
+END
+FROM service_orders s
+WHERE s.id=t.service_order_id;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname='service_order_transfers_kind_check'
+      AND conrelid='service_order_transfers'::regclass
+  ) THEN
+    ALTER TABLE service_order_transfers
+      ADD CONSTRAINT service_order_transfers_kind_check
+      CHECK (kind IN ('OUTBOUND_SERVICE','RETURN_HOME'));
+  END IF;
+END $$;
+
+UPDATE service_orders s
+SET current_point_id=CASE
+  WHEN EXISTS (
+    SELECT 1 FROM service_order_transfers t
+    WHERE t.service_order_id=s.id
+  ) THEN (
+    SELECT CASE
+      WHEN t.status='IN_TRANSIT' THEN NULL
+      WHEN t.status IN ('REQUESTED','CANCELLED') THEN t.from_point_id
+      ELSE t.to_point_id
+    END
+    FROM service_order_transfers t
+    WHERE t.service_order_id=s.id
+    ORDER BY t.requested_at DESC
+    LIMIT 1
+  )
+  ELSE s.home_point_id
+END
+WHERE current_point_id IS NULL;
+
+ALTER TABLE service_orders
+  DROP CONSTRAINT IF EXISTS service_orders_status_check;
+
+ALTER TABLE service_orders
+  ADD CONSTRAINT service_orders_status_check
+  CHECK (status IN ('RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','CANCELLED','REJECTED'));
+
+CREATE INDEX IF NOT EXISTS service_orders_home_status_idx
+  ON service_orders(home_point_id,status,created_at DESC);
+
+CREATE INDEX IF NOT EXISTS service_orders_current_point_idx
+  ON service_orders(current_point_id,updated_at DESC)
+  WHERE current_point_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS service_order_transfers_kind_idx
+  ON service_order_transfers(service_order_id,kind,requested_at DESC);
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v11','Permanent home point, current physical location, return-home transfer kind and repair-done status')
 ON CONFLICT (version) DO NOTHING;
