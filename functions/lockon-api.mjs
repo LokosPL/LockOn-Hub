@@ -625,29 +625,113 @@ const assistantReply = async (session, message) => {
     };
   }
 
-  if (lower.includes('klient')) {
-    if (!SERVICE_READ_ROLES.has(user.role_code)) {
-      return { text: 'Twoja rola nie ma dostępu do danych klientów. Mogę nadal pomóc w obsłudze samej aplikacji.' };
-    }
-    let term = message.replace(/znajdź|znajdz|wyszukaj|klienta|klient|pokaż|pokaz|szukaj/gi, ' ').replace(/\s+/g, ' ').trim();
-    term = cleanText(term, 120);
-    if (term.length >= 2) {
-      const matches = await searchCustomers(user, term);
-      if (!matches.length) return { text: 'Nie znalazłem klienta pasującego do "' + term + '" w zakresie danych, do których masz dostęp.' };
-      const lines = matches.slice(0, 5).map((c) => '- ' + c.firstName + ' ' + c.lastName + (c.email ? ' · ' + c.email : '') + (c.phone ? ' · ' + c.phone : ''));
-      return { text: 'Znalazłem klientów w Twoim zakresie:\n' + lines.join('\n') };
-    }
-  }
-
   if (lower.includes('zlecen') || lower.includes('napraw')) {
     if (!SERVICE_READ_ROLES.has(user.role_code)) {
       return { text: 'Twoja rola nie ma dostępu do danych zleceń serwisowych.' };
     }
+
     const number = message.match(/\b\d{1,10}\b/);
     if (number) {
       const order = await getVisibleOrderByNumber(user, number[0]);
       if (!order) return { text: 'Nie znalazłem zlecenia #' + number[0] + ' w zakresie, do którego masz dostęp.' };
-      return { text: 'Zlecenie #' + order.orderNumber + ': ' + order.customerName + ', ' + order.brand + ' ' + order.model + '. Status: ' + order.statusLabel + '. Punkt: ' + order.pointName + '.' };
+
+      const lines = [
+        'Zlecenie #' + order.orderNumber + ' · ' + order.customerName,
+        order.brand + ' ' + order.model + ' · ' + order.statusLabel,
+        'Punkt: ' + order.pointName
+      ];
+
+      if (order.assignedTechnicianName) lines.push('Technik: ' + order.assignedTechnicianName);
+      if (order.estimatedCompletionAt) lines.push('Przewidywany termin: ' + new Date(order.estimatedCompletionAt).toLocaleString('pl-PL'));
+
+      if (lower.includes('imei')) {
+        lines.push(order.imei ? 'IMEI: ' + order.imei : 'IMEI nie jest zapisany.');
+      }
+      if (lower.includes('seryj') || lower.includes('serial')) {
+        lines.push(order.serialNumber ? 'Numer seryjny: ' + order.serialNumber : 'Numer seryjny nie jest zapisany.');
+      }
+      if (lower.includes('koszt') || lower.includes('cena') || lower.includes('wycen')) {
+        if (order.finalCost != null) lines.push('Koszt końcowy: ' + Number(order.finalCost).toFixed(2) + ' ' + (order.currency || 'PLN'));
+        else if (order.estimatedCost != null) lines.push('Koszt szacowany: ' + Number(order.estimatedCost).toFixed(2) + ' ' + (order.currency || 'PLN'));
+        else if (SERVICE_MANAGE_ROLES.has(user.role_code)) lines.push('Koszt nie został jeszcze zapisany.');
+        else lines.push('Twoja rola nie ma dostępu do danych kosztowych zlecenia.');
+      }
+
+      if (lower.includes('notatk')) {
+        const { rows } = await q(
+          'SELECT n.body,n.created_at,usr.name AS author_name,usr.email AS author_email FROM service_order_notes n JOIN users usr ON usr.id=n.author_user_id WHERE n.service_order_id=$1 ORDER BY n.created_at DESC LIMIT 3',
+          [order.id]
+        );
+        if (rows.length) {
+          lines.push('Ostatnie notatki wewnętrzne:');
+          for (const note of rows) {
+            lines.push('- ' + (note.author_name || note.author_email || 'Użytkownik') + ' · ' + new Date(note.created_at).toLocaleString('pl-PL') + ': ' + cleanText(note.body, 240));
+          }
+        } else {
+          lines.push('Brak notatek wewnętrznych.');
+        }
+      }
+
+      if (lower.includes('histori') || lower.includes('statusy')) {
+        const { rows } = await q(
+          'SELECT h.from_status,h.to_status,h.note,h.created_at,usr.name AS changed_by_name,usr.email AS changed_by_email FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.created_at DESC LIMIT 6',
+          [order.id]
+        );
+        if (rows.length) {
+          lines.push('Ostatnie zmiany statusu:');
+          for (const item of rows.reverse()) {
+            const from = item.from_status ? (STATUS_LABELS[item.from_status] || item.from_status) + ' → ' : '';
+            const to = STATUS_LABELS[item.to_status] || item.to_status;
+            const who = item.changed_by_name || item.changed_by_email || 'System';
+            lines.push('- ' + from + to + ' · ' + new Date(item.created_at).toLocaleString('pl-PL') + ' · ' + who + (item.note ? ' · ' + cleanText(item.note, 180) : ''));
+          }
+        }
+      }
+
+      return { text: lines.join('\n') };
+    }
+  }
+
+  if (lower.includes('klient')) {
+    if (!SERVICE_READ_ROLES.has(user.role_code)) {
+      return { text: 'Twoja rola nie ma dostępu do danych klientów. Mogę nadal pomóc w obsłudze samej aplikacji.' };
+    }
+
+    let term = message
+      .replace(/znajdź|znajdz|wyszukaj|klienta|klient|pokaż|pokaz|szukaj|historia|historię|historie|zlecenia|zleceń|naprawy|napraw|telefony|telefon|urządzenia|urzadzenia/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    term = cleanText(term, 120);
+
+    if (term.length >= 2) {
+      const matches = await searchCustomers(user, term);
+      if (!matches.length) return { text: 'Nie znalazłem klienta pasującego do "' + term + '" w zakresie danych, do których masz dostęp.' };
+
+      const wantsHistory = lower.includes('histori') || lower.includes('zlecen') || lower.includes('napraw') || lower.includes('telefon') || lower.includes('urządzen') || lower.includes('urzadzen');
+
+      if (wantsHistory && matches.length === 1) {
+        const customer = matches[0];
+        const orders = await listVisibleCustomerOrders(user, customer.id);
+        const lines = [
+          customer.firstName + ' ' + customer.lastName + (customer.email ? ' · ' + customer.email : '') + (customer.phone ? ' · ' + customer.phone : ''),
+          'Widoczne zlecenia: ' + orders.length
+        ];
+        for (const order of orders.slice(0, 6)) {
+          lines.push('- #' + order.orderNumber + ' · ' + order.brand + ' ' + order.model + ' · ' + order.statusLabel + ' · ' + order.pointName);
+        }
+        if (!orders.length) lines.push('Brak zleceń w zakresie punktów dostępnych dla Twojego konta.');
+        return { text: lines.join('\n') };
+      }
+
+      const lines = matches.slice(0, 5).map((customer) =>
+        '- ' + customer.firstName + ' ' + customer.lastName +
+        (customer.email ? ' · ' + customer.email : '') +
+        (customer.phone ? ' · ' + customer.phone : '')
+      );
+      const suffix = wantsHistory && matches.length > 1
+        ? '\nZnalazłem kilka osób. Doprecyzuj klienta, a pokażę historię zleceń w Twoim zakresie.'
+        : '';
+      return { text: 'Znalazłem klientów w Twoim zakresie:\n' + lines.join('\n') + suffix };
     }
   }
 
@@ -672,7 +756,7 @@ const assistantReply = async (session, message) => {
   }
   if (best) return { text: best.body };
 
-  return { text: 'Mogę pomóc w obsłudze ServiceOS, wyszukać klienta lub zlecenie w Twoim zakresie oraz wygenerować jednorazowy kod logowania na stronę. Napisz np. "znajdź klienta Kowalski", "zlecenie 123" albo "kod do strony".' };
+  return { text: 'Mogę pomóc w obsłudze ServiceOS, wyszukać klienta lub zlecenie w Twoim zakresie, sprawdzić historię statusów i notatki oraz wygenerować jednorazowy kod logowania na stronę. Napisz np. "historia klienta Kowalski", "zlecenie 123 statusy", "zlecenie 123 notatki" albo "kod do strony".' };
 };
 
 const route = async (request) => {
