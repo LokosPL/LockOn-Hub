@@ -581,7 +581,11 @@ const decryptSecret = (packed) => {
 
 const refreshGmailAccess = async (refreshToken, legacyClientSecret = '') => {
   const clientSecret = GOOGLE_DESKTOP_CLIENT_SECRET || legacyClientSecret;
-  if (!clientSecret) throw new Error('Brak serwerowego credentialu Google OAuth.');
+  if (!clientSecret) {
+    const error = new Error('Brak serwerowego credentialu Google OAuth.');
+    error.code = 'GMAIL_OAUTH_CONFIG';
+    throw error;
+  }
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -593,9 +597,24 @@ const refreshGmailAccess = async (refreshToken, legacyClientSecret = '') => {
     })
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.access_token) throw new Error('Google odrzucił odświeżenie dostępu Gmail.');
+  if (!response.ok || !data.access_token) {
+    const oauthError = cleanText(data?.error || '', 80).toLowerCase();
+    const description = cleanText(data?.error_description || '', 300);
+    const error = new Error(
+      oauthError === 'invalid_grant'
+        ? 'Zgoda Google dla Gmail wygasła albo została cofnięta.'
+        : (description || 'Google odrzucił odświeżenie dostępu Gmail.')
+    );
+    error.code = oauthError ? 'GOOGLE_OAUTH_' + oauthError.toUpperCase().replace(/[^A-Z0-9]+/g,'_') : 'GMAIL_REFRESH_FAILED';
+    error.oauthError = oauthError || null;
+    error.reauthRequired = oauthError === 'invalid_grant';
+    error.httpStatus = response.status;
+    throw error;
+  }
   return data.access_token;
 };
+
+const isGmailReauthError = (error) => Boolean(error && typeof error === 'object' && error.reauthRequired === true);
 
 const gmailProfile = async (accessToken) => {
   const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
@@ -795,8 +814,12 @@ const processNotification = async (notificationId) => {
       "UPDATE notification_outbox SET status='FAILED',last_error=$2,available_at=$3,updated_at=now() WHERE id=$1",
       [notificationId, message, nextAttemptAt]
     );
-    await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1", [item.point_id, message]);
-    return { sent: false, status: 'FAILED', reason: 'SEND_FAILED', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
+    if(isGmailReauthError(error)){
+      await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1", [item.point_id, message]);
+    }else{
+      await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1", [item.point_id, message]);
+    }
+    return { sent: false, status: 'FAILED', reason: isGmailReauthError(error) ? 'GMAIL_REAUTH_REQUIRED' : 'SEND_FAILED', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
   }
 };
 
@@ -1895,19 +1918,86 @@ const route = async (request) => {
   if(method==='GET'&&url.pathname==='/integrations/gmail'){
     const session=await requireActive(request),pointId=cleanText(url.searchParams.get('pointId'),80);
     await requirePoint(session.user,pointId);
-    const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
+    const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,refresh_token_ciphertext,oauth_client_secret_ciphertext,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
     const row=rows[0];
-    if(!row)return json(request,{connected:false,pointId,needsReconnect:false});
-    const complete=row.refresh_complete===true&&Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||row.legacy_secret_complete)&&row.status==='ACTIVE';
-    return json(request,{
-      connected:complete,
-      needsReconnect:!complete,
-      pointId:row.point_id,
-      email:row.sender_email,
-      status:row.status,
-      lastError:row.last_error||(!complete?'Połączenie Gmail wymaga ponownej autoryzacji.':null),
-      connectedAt:row.connected_at
-    });
+    const checkedAt=nowIso();
+    if(!row)return json(request,{connected:false,pointId,needsReconnect:false,connectionState:'NOT_CONNECTED',checkedAt});
+
+    const credentialsComplete=row.refresh_complete===true&&Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||row.legacy_secret_complete);
+    if(!credentialsComplete){
+      return json(request,{
+        connected:false,
+        needsReconnect:true,
+        connectionState:'REAUTH_REQUIRED',
+        pointId:row.point_id,
+        email:row.sender_email,
+        status:row.status,
+        lastError:'Połączenie Gmail jest niekompletne i wymaga ponownej autoryzacji.',
+        connectedAt:row.connected_at,
+        checkedAt
+      });
+    }
+    if(row.status==='REVOKED'){
+      return json(request,{
+        connected:false,
+        needsReconnect:true,
+        connectionState:'REAUTH_REQUIRED',
+        pointId:row.point_id,
+        email:row.sender_email,
+        status:row.status,
+        lastError:row.last_error||'Zgoda Google dla Gmail wygasła albo została cofnięta.',
+        connectedAt:row.connected_at,
+        checkedAt
+      });
+    }
+
+    try{
+      const refreshToken=decryptSecret(row.refresh_token_ciphertext);
+      const legacyClientSecret=row.oauth_client_secret_ciphertext?decryptSecret(row.oauth_client_secret_ciphertext):'';
+      await refreshGmailAccess(refreshToken,legacyClientSecret);
+      if(row.status!=='ACTIVE'||row.last_error){
+        await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1",[pointId]);
+      }
+      return json(request,{
+        connected:true,
+        needsReconnect:false,
+        connectionState:'CONNECTED',
+        pointId:row.point_id,
+        email:row.sender_email,
+        status:'ACTIVE',
+        lastError:null,
+        connectedAt:row.connected_at,
+        checkedAt
+      });
+    }catch(error){
+      const reauth=isGmailReauthError(error);
+      const message=cleanText(error instanceof Error?error.message:error,500);
+      if(reauth){
+        await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1",[pointId,message]);
+        return json(request,{
+          connected:false,
+          needsReconnect:true,
+          connectionState:'REAUTH_REQUIRED',
+          pointId:row.point_id,
+          email:row.sender_email,
+          status:'REVOKED',
+          lastError:message,
+          connectedAt:row.connected_at,
+          checkedAt
+        });
+      }
+      return json(request,{
+        connected:false,
+        needsReconnect:false,
+        connectionState:'TEMPORARY_ERROR',
+        pointId:row.point_id,
+        email:row.sender_email,
+        status:row.status,
+        lastError:'Nie udało się teraz potwierdzić połączenia Gmail. ServiceOS spróbuje ponownie automatycznie.',
+        connectedAt:row.connected_at,
+        checkedAt
+      });
+    }
   }
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/connect-code'){
@@ -2034,8 +2124,12 @@ const route = async (request) => {
       return json(request,{ok:true,recipient,messageId:sent.id});
     }catch(error){
       const message=cleanText(error instanceof Error?error.message:error,500);
-      await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1",[pointId,message]);
-      throw Object.assign(new Error(message),{status:502,code:'GMAIL_TEST_FAILED'});
+      if(isGmailReauthError(error)){
+        await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1",[pointId,message]);
+      }else{
+        await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1",[pointId,message]);
+      }
+      throw Object.assign(new Error(message),{status:502,code:isGmailReauthError(error)?'GMAIL_REAUTH_REQUIRED':'GMAIL_TEST_FAILED'});
     }
   }
 
