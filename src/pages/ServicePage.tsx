@@ -201,6 +201,16 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     void loadMailData(pointId);
   }, [pointId, canManageGmail]);
 
+  useEffect(() => {
+    if (!pointId || !canManageOrderMeta) {
+      setTechnicians([]);
+      return;
+    }
+    void window.lockOn.service.listTechnicians(pointId)
+      .then(setTechnicians)
+      .catch(() => setTechnicians([]));
+  }, [pointId, canManageOrderMeta]);
+
   const search = async () => {
     const clean = query.trim();
     if (clean.length < 2) { setMatches([]); return; }
@@ -238,11 +248,26 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
       setError('Numer telefonu klienta jest zbyt krótki.');
       return;
     }
+    const cleanImei = form.imei.replace(/\s/g, '');
+    if (cleanImei && !/^\d{14,16}$/.test(cleanImei)) {
+      setError('IMEI powinien zawierać 14–16 cyfr.');
+      return;
+    }
 
     setBusy(true); setError(''); setNotice(''); setResult(null);
     try {
-      const created = await window.lockOn.service.createOrder({ ...form, pointId });
+      const created = await window.lockOn.service.createOrder({
+        ...form,
+        imei: cleanImei,
+        pointId,
+        estimatedCost: canManageOrderMeta && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
+        assignedTechnicianId: canManageOrderMeta ? form.assignedTechnicianId || undefined : undefined,
+        estimatedCompletionAt: form.estimatedCompletionAt ? new Date(form.estimatedCompletionAt).toISOString() : undefined
+      });
       setResult(created);
+      if (created.reusedDevice) {
+        setNotice('Zlecenie utworzone. Rozpoznano istniejące urządzenie klienta i użyto jego karty.');
+      }
       if (created.notification?.sent) {
         setNotice('Zlecenie utworzone. Potwierdzenie przyjęcia urządzenia zostało wysłane do klienta.');
       } else if (created.notification?.queued) {
@@ -292,6 +317,68 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się zmienić statusu.');
       await loadOrders();
+    }
+  };
+
+  const saveOrderDetails = async (order: ServiceOrderSummary) => {
+    const draft = detailsDrafts[order.id];
+    if (!draft) return;
+    const cleanImei = draft.imei.replace(/\s/g, '');
+    if (cleanImei && !/^\d{14,16}$/.test(cleanImei)) {
+      setError('IMEI powinien zawierać 14–16 cyfr.');
+      return;
+    }
+    setOrderBusyId(order.id); setError(''); setNotice('');
+    try {
+      const updated = await window.lockOn.service.updateDetails(order.id, {
+        imei: cleanImei,
+        serialNumber: draft.serialNumber,
+        deviceNotes: draft.deviceNotes,
+        estimatedCompletionAt: draft.estimatedCompletionAt ? new Date(draft.estimatedCompletionAt).toISOString() : null,
+        ...(canManageOrderMeta ? {
+          assignedTechnicianId: draft.assignedTechnicianId || null,
+          estimatedCost: draft.estimatedCost === '' ? null : Number(draft.estimatedCost),
+          finalCost: draft.finalCost === '' ? null : Number(draft.finalCost)
+        } : {})
+      });
+      setOrders((current) => current.map((item) => item.id === order.id ? updated : item));
+      setDetailsDrafts((current) => ({
+        ...current,
+        [order.id]: {
+          imei: updated.imei ?? '',
+          serialNumber: updated.serialNumber ?? '',
+          deviceNotes: updated.deviceNotes ?? '',
+          assignedTechnicianId: updated.assignedTechnicianId ?? '',
+          estimatedCost: updated.estimatedCost == null ? '' : String(updated.estimatedCost),
+          finalCost: updated.finalCost == null ? '' : String(updated.finalCost),
+          estimatedCompletionAt: toLocalDateTimeInput(updated.estimatedCompletionAt)
+        }
+      }));
+      if (customerCards[order.customerId]) {
+        const card = await window.lockOn.service.getCustomer(order.customerId);
+        setCustomerCards((current) => ({ ...current, [order.customerId]: card }));
+      }
+      setNotice('Szczegóły zlecenia zostały zapisane.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się zapisać szczegółów zlecenia.');
+    } finally {
+      setOrderBusyId(null);
+    }
+  };
+
+  const addOrderNote = async (orderId: string) => {
+    const body = (noteDrafts[orderId] ?? '').trim();
+    if (!body) return;
+    setOrderBusyId(orderId); setError(''); setNotice('');
+    try {
+      const note = await window.lockOn.service.addNote(orderId, body);
+      setOrderNotes((current) => ({ ...current, [orderId]: [note, ...(current[orderId] ?? [])] }));
+      setNoteDrafts((current) => ({ ...current, [orderId]: '' }));
+      setNotice('Notatka została dodana do zlecenia.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się dodać notatki.');
+    } finally {
+      setOrderBusyId(null);
     }
   };
 
