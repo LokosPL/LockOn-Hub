@@ -26,11 +26,13 @@ const headers = {
 
 export interface GmailConnectionStatus {
   connected: boolean;
+  needsReconnect?: boolean;
   pointId: string;
   email?: string;
   status?: string;
   lastError?: string | null;
   connectedAt?: string;
+  recoveredNotifications?: number;
 }
 
 export const getGmailConnectionStatus = async (pointId: string) => {
