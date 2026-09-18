@@ -121,3 +121,12 @@ Zasady współpracy: [CONTRIBUTING.md](CONTRIBUTING.md).
 - Zlecenia serwisowe mają widoczną oś czasu statusów: poprzedni/nowy status, użytkownik, czas i notatka.
 - Klienci są deduplikowani transakcyjnie i chronieni unikalnością znormalizowanego e-maila oraz telefonu.
 - Formularz i backend walidują kontakt klienta przed utworzeniem zlecenia.
+
+
+### Karta klienta i workspace zlecenia
+
+- Zlecenie przechowuje IMEI / numer seryjny urządzenia, przewidywany termin, przypisanego technika oraz koszty.
+- IMEI jest chroniony przed duplikacją w centralnej bazie; ServiceOS potrafi rozpoznać istniejące urządzenie klienta.
+- Notatki wewnętrzne są osobne od wiadomości wysyłanych klientowi.
+- Karta klienta oraz historia zleceń zawsze respektują zakres punktów zalogowanego użytkownika.
+- Dane kosztowe nie są zwracane roli SUPPORT.
