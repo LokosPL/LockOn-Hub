@@ -24,6 +24,42 @@ const headers = {
   'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
 };
 
+const escapeHtml = (value: string) =>
+  value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[char] ?? char);
+
+const friendlyGoogleOAuthError = (code: string, description = '') => {
+  const normalized = code.trim().toLowerCase();
+  if (normalized === 'access_denied') {
+    return 'Google nie udzielił zgody na wysyłanie wiadomości. Jeśli zamknąłeś ekran zgody lub wybrałeś powrót do bezpieczeństwa, spróbuj ponownie.';
+  }
+  if (normalized === 'temporarily_unavailable') {
+    return 'Google chwilowo nie może zakończyć autoryzacji. Spróbuj ponownie za moment.';
+  }
+  const cleanDescription = description.replace(/[\r\n]+/g, ' ').trim().slice(0, 280);
+  return cleanDescription || (code ? 'Google OAuth: ' + code : 'Google odrzucił połączenie Gmail.');
+};
+
+const oauthPage = (title: string, message: string, ok: boolean) => `<!doctype html>
+<html lang="pl">
+<head><meta charset="utf-8"><title>LockOn ServiceOS</title></head>
+<body style="margin:0;background:#0d0f13;color:#eef1f4;font-family:Arial,sans-serif">
+  <main style="max-width:680px;margin:8vh auto;padding:28px">
+    <div style="border:1px solid #2b3038;border-radius:18px;background:#15181e;padding:26px">
+      <div style="font-size:12px;font-weight:800;letter-spacing:.08em;color:${ok ? '#71d99b' : '#ff8c84'}">LOCKON SERVICEOS</div>
+      <h2 style="margin:10px 0 12px">${escapeHtml(title)}</h2>
+      <p style="margin:0;color:#aab2bc;line-height:1.55">${escapeHtml(message)}</p>
+      <p style="margin:18px 0 0;color:#707985;font-size:12px">Możesz zamknąć tę kartę i wrócić do ServiceOS.</p>
+    </div>
+  </main>
+</body>
+</html>`;
+
 export interface GmailConnectionStatus {
   connected: boolean;
   needsReconnect?: boolean;
@@ -59,6 +95,9 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
   const apiToken = getStoredApiToken();
   if (!apiToken) throw new Error('Brak aktywnej sesji LockOn.');
 
+  const me = await backendRequest<{ user?: { email?: string } }>('/me', {}, apiToken).catch(() => ({}));
+  const preferredEmail = String(me.user?.email || '').trim().toLowerCase();
+
   const { verifier, challenge } = createPkce();
   const stateToken = base64Url(crypto.randomBytes(24));
 
@@ -78,9 +117,10 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
           return;
         }
         const error = callback.searchParams.get('error');
+        const errorDescription = callback.searchParams.get('error_description') || '';
         const returnedState = callback.searchParams.get('state');
         const code = callback.searchParams.get('code');
-        if (error) throw new Error('Google OAuth: ' + error);
+        if (error) throw new Error(friendlyGoogleOAuthError(error, errorDescription));
         if (returnedState !== stateToken) throw new Error('Nieprawidłowy state OAuth.');
         if (!code) throw new Error('Google nie zwrócił kodu autoryzacji.');
 
@@ -122,14 +162,19 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
         );
 
         response.writeHead(200, headers);
-        response.end('<!doctype html><html lang="pl"><meta charset="utf-8"><title>LockOn ServiceOS</title><body style="font-family:Arial;background:#111;color:#fff;padding:40px"><h2>Gmail połączony</h2><p>ServiceOS może wysyłać klientom powiadomienia z tego konta. Możesz zamknąć tę kartę.</p></body></html>');
+        response.end(oauthPage(
+          'Gmail połączony',
+          'ServiceOS może wysyłać klientom powiadomienia z konta ' + (status.email || preferredEmail || 'Google') + '.',
+          true
+        ));
         finish(() => {
           server.close();
           resolve(status);
         });
       } catch (error) {
-        response.writeHead(500, headers);
-        response.end('<h2>Nie udało się połączyć Gmail. Wróć do ServiceOS.</h2>');
+        const message = error instanceof Error ? error.message : 'Nie udało się połączyć Gmail.';
+        response.writeHead(400, headers);
+        response.end(oauthPage('Nie udało się połączyć Gmail', message, false));
         finish(() => {
           server.close();
           reject(error);
@@ -137,6 +182,8 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
       }
     });
 
+    server.maxHeadersCount = 40;
+    server.requestTimeout = 15_000;
     server.on('error', (error) => finish(() => reject(error)));
     server.listen(0, '127.0.0.1', async () => {
       const address = server.address();
@@ -146,18 +193,20 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
       }
       const redirectUri = 'http://127.0.0.1:' + address.port + '/gmail/callback';
       const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-      authUrl.search = new URLSearchParams({
+      const params = new URLSearchParams({
         client_id: APP_CONFIG.auth.googleClientId,
         redirect_uri: redirectUri,
         response_type: 'code',
-        scope: 'openid email https://www.googleapis.com/auth/gmail.send',
+        scope: 'openid email profile https://www.googleapis.com/auth/gmail.send',
         state: stateToken,
         code_challenge: challenge,
         code_challenge_method: 'S256',
         access_type: 'offline',
         prompt: 'consent',
         include_granted_scopes: 'true'
-      }).toString();
+      });
+      if (preferredEmail) params.set('login_hint', preferredEmail);
+      authUrl.search = params.toString();
       await shell.openExternal(authUrl.toString());
     });
 
