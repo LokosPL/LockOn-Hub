@@ -386,6 +386,7 @@ const LOCAL_STATUS_LABELS = {
   DIAGNOSIS: 'Diagnoza',
   WAITING_PARTS: 'Oczekiwanie na części',
   IN_REPAIR: 'W naprawie',
+  REPAIR_DONE: 'Naprawa zakończona',
   READY: 'Gotowe do odbioru',
   COMPLETED: 'Zakończone',
   CANCELLED: 'Anulowane',
@@ -1010,7 +1011,7 @@ const handle = async (req, res) => {
     if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
     const body = await readBody(req);
     const status = String(body.status || '').toUpperCase();
-    const allowed = ['RECEIVED', 'DIAGNOSIS', 'WAITING_PARTS', 'IN_REPAIR', 'READY', 'COMPLETED', 'CANCELLED', 'REJECTED'];
+    const allowed = ['RECEIVED', 'DIAGNOSIS', 'WAITING_PARTS', 'IN_REPAIR', 'REPAIR_DONE', 'READY', 'COMPLETED', 'CANCELLED', 'REJECTED'];
     if (!allowed.includes(status)) return json(res, 400, { error: 'STATUS' });
     const previous = order.status;
     order.status = status;
@@ -1060,7 +1061,7 @@ const handle = async (req, res) => {
       settings = {
         pointId,
         automaticEmailEnabled: true,
-        notifyStatuses: ['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED'],
+        notifyStatuses: ['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','REJECTED'],
         senderDisplayName: 'LockOn ServiceOS',
         footerText: '',
         updatedAt: nowIso()
@@ -1078,7 +1079,7 @@ const handle = async (req, res) => {
     const body = await readBody(req);
     const pointId = cleanText(body.pointId, 80);
     if (!canSeePoint(user, pointId)) return json(res, 403, { error: 'POINT' });
-    const allowed = new Set(['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','CANCELLED','REJECTED']);
+    const allowed = new Set(['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','CANCELLED','REJECTED']);
     const notifyStatuses = Array.isArray(body.notifyStatuses)
       ? [...new Set(body.notifyStatuses.map((value) => String(value).toUpperCase()).filter((value) => allowed.has(value)))]
       : [];
