@@ -34,6 +34,10 @@ contextBridge.exposeInMainWorld('lockOn', {
   data: {
     getDashboard: () => ipcRenderer.invoke('data:getDashboard')
   },
+  service: {
+    searchCustomers: (query: string) => ipcRenderer.invoke('service:searchCustomers', query),
+    createOrder: (payload: unknown) => ipcRenderer.invoke('service:createOrder', payload)
+  },
   browser: {
     getState: () => ipcRenderer.invoke('browser:getState'),
     setVisible: (visible: boolean) => ipcRenderer.invoke('browser:setVisible', visible),
