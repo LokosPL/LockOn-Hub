@@ -556,41 +556,73 @@ const escapeHtml = (value) => String(value ?? '')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 const renderStatusEmail = (item) => {
-  const targetStatus = String(item.payload?.to || item.status || 'RECEIVED').toUpperCase();
-  const label = STATUS_LABELS[targetStatus] || targetStatus;
   const displayName = cleanText(item.sender_display_name || 'LockOn ServiceOS', 80).replace(/[\r\n]+/g, ' ');
   const footer = cleanText(item.footer_text || 'W razie pytań skontaktuj się bezpośrednio z punktem serwisowym.', 500);
-  const subject = 'LockOn ServiceOS · status zlecenia #' + item.order_number + ' · ' + label;
-  const intro = 'status urządzenia ' + item.brand + ' ' + item.model + ' (zlecenie #' + item.order_number + ') zmienił się na:';
+
+  const transferStatus = String(item.payload?.transferStatus || '').toUpperCase();
+  const transferLabels = {
+    IN_TRANSIT: 'Urządzenie wysłane do serwisu',
+    DELIVERED: 'Urządzenie dotarło do serwisu',
+    ACCEPTED: 'Serwisant przyjął urządzenie',
+    REJECTED: 'Serwis odrzucił przekazanie',
+    CANCELLED: 'Przekazanie anulowane'
+  };
+
+  const isTransfer = Boolean(transferLabels[transferStatus]);
+  const targetStatus = String(item.payload?.to || item.status || 'RECEIVED').toUpperCase();
+  const label = isTransfer ? transferLabels[transferStatus] : (STATUS_LABELS[targetStatus] || targetStatus);
+  const fromPoint = cleanText(item.payload?.fromPointName || item.point_name || '', 100);
+  const toPoint = cleanText(item.payload?.toPointName || '', 100);
+  const transferNote = cleanText(item.payload?.note || '', 300);
+
+  const subject = 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
+  const intro = isTransfer
+    ? (
+        transferStatus === 'IN_TRANSIT'
+          ? 'Twoje urządzenie zostało przekazane z punktu ' + fromPoint + ' do serwisu ' + toPoint + '.'
+          : transferStatus === 'DELIVERED'
+            ? 'Twoje urządzenie zostało dostarczone do serwisu ' + toPoint + '.'
+            : transferStatus === 'ACCEPTED'
+              ? 'Serwisant w ' + toPoint + ' przyjął urządzenie do realizacji.'
+              : transferStatus === 'REJECTED'
+                ? 'Serwis ' + toPoint + ' odrzucił przekazanie urządzenia. Punkt prowadzący zlecenie skontaktuje się w razie potrzeby.'
+                : 'Przekazanie urządzenia do serwisu zostało anulowane.'
+      )
+    : 'status urządzenia ' + item.brand + ' ' + item.model + ' (zlecenie #' + item.order_number + ') zmienił się na:';
+
   const text = [
     'Dzień dobry ' + item.first_name + ',',
     '',
     intro,
-    label,
+    isTransfer ? '' : label,
+    transferNote ? 'Informacja: ' + transferNote : '',
     '',
-    'Punkt: ' + item.point_name,
+    'Urządzenie: ' + item.brand + ' ' + item.model,
+    'Punkt prowadzący: ' + item.point_name,
     '',
     footer,
     '',
     'To automatyczna wiadomość z ' + displayName + '.'
-  ].join('\n');
+  ].filter((line,index,array)=>line!=='' || (index>0 && array[index-1]!=='' )).join('\n');
+
   const html = '<!doctype html><html lang="pl"><body style="margin:0;background:#111318;color:#eceff3;font-family:Arial,sans-serif">' +
     '<div style="max-width:620px;margin:0 auto;padding:28px 18px">' +
       '<div style="border:1px solid #2a2f37;border-radius:16px;background:#171a20;overflow:hidden">' +
         '<div style="padding:18px 22px;border-bottom:1px solid #2a2f37;background:#13161b">' +
           '<div style="font-size:12px;color:#ff7b45;font-weight:700;letter-spacing:.08em">LOCKON SERVICEOS</div>' +
-          '<div style="font-size:20px;font-weight:800;margin-top:6px">Aktualizacja naprawy #' + escapeHtml(item.order_number) + '</div>' +
+          '<div style="font-size:20px;font-weight:800;margin-top:6px">Aktualizacja zlecenia #' + escapeHtml(item.order_number) + '</div>' +
         '</div>' +
         '<div style="padding:22px">' +
           '<p style="margin:0 0 16px">Dzień dobry <strong>' + escapeHtml(item.first_name) + '</strong>,</p>' +
-          '<p style="margin:0 0 14px;color:#aeb6c0">' + escapeHtml(intro) + '</p>' +
+          '<p style="margin:0 0 14px;color:#aeb6c0;line-height:1.55">' + escapeHtml(intro) + '</p>' +
           '<div style="padding:16px;border-radius:12px;background:#101318;border:1px solid #333944">' +
-            '<div style="font-size:11px;color:#7f8995;text-transform:uppercase">Aktualny status</div>' +
+            '<div style="font-size:11px;color:#7f8995;text-transform:uppercase">Aktualny etap</div>' +
             '<div style="font-size:21px;font-weight:800;color:#ff8754;margin-top:5px">' + escapeHtml(label) + '</div>' +
           '</div>' +
+          (transferNote ? '<p style="margin:14px 0 0;padding:12px;border-radius:10px;background:#12161c;color:#aeb6c0;font-size:12px;line-height:1.5">' + escapeHtml(transferNote) + '</p>' : '') +
           '<div style="margin-top:16px;font-size:13px;color:#aeb6c0">' +
             '<strong style="color:#e8ebef">' + escapeHtml(item.brand) + ' ' + escapeHtml(item.model) + '</strong><br>' +
-            'Punkt: ' + escapeHtml(item.point_name) +
+            'Punkt prowadzący: ' + escapeHtml(item.point_name) +
           '</div>' +
           '<p style="margin:20px 0 0;font-size:12px;color:#818b97;line-height:1.5">' + escapeHtml(footer) + '</p>' +
         '</div>' +
@@ -640,7 +672,7 @@ const sendGmail = async (sender, recipient, subject, textBody, htmlBody, display
 
 const processNotification = async (notificationId) => {
   const { rows } = await q(
-    "SELECT n.id,n.recipient,n.service_order_id,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,p.name AS point_name,c.first_name,d.brand,d.model,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.status AS sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN point_email_senders e ON e.point_id=s.point_id LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
+    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,p.name AS point_name,c.first_name,d.brand,d.model,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.status AS sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN point_email_senders e ON e.point_id=s.point_id LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
     [notificationId]
   );
   const item = rows[0];
