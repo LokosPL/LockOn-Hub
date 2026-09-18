@@ -9,7 +9,13 @@ const OWNER_EMAIL = String(process.env.LOCKON_OWNER_EMAIL || 'nowogar@gmail.com'
 const GOOGLE_DESKTOP_CLIENT_ID = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_ID || '').trim();
 const GOOGLE_DESKTOP_CLIENT_SECRET = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET || '').trim();
 const GOOGLE_WEB_CLIENT_ID = String(process.env.LOCKON_GOOGLE_WEB_CLIENT_ID || '').trim();
-const SITE_ORIGIN = String(process.env.LOCKON_SITE_ORIGIN || 'https://lokospl.github.io').replace(/\/$/, '');
+const SITE_ORIGINS = new Set(
+  [
+    String(process.env.LOCKON_SITE_ORIGIN || '').trim().replace(/\/$/, ''),
+    'https://app.serviceos.pl',
+    'https://lokospl.github.io'
+  ].filter(Boolean)
+);
 const GMAIL_TOKEN_KEY = String(process.env.LOCKON_GMAIL_TOKEN_KEY || '');
 const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
 
@@ -48,7 +54,7 @@ const b64url = (value) => Buffer.from(value).toString('base64').replace(/\+/g, '
 
 const corsHeaders = (request) => {
   const origin = request.headers.get('origin') || '';
-  const allowed = origin === SITE_ORIGIN || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin);
+  const allowed = SITE_ORIGINS.has(origin) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin);
   return allowed ? {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Headers': 'authorization, content-type',
