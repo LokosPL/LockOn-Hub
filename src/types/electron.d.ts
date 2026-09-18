@@ -34,6 +34,7 @@ export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; 
 export interface ServiceOrderSummary extends ServiceOrder { pointName:string; customerName:string; customerEmail?:string|null; customerPhone?:string|null; brand:string; model:string; statusLabel:string; assignedTechnicianId?:string|null; completedAt?:string|null; }
 export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; notification?:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; }
 export interface ServiceStatusResult { order:ServiceOrderSummary; notification:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; }
+export interface ServiceStatusHistoryItem { id:string; fromStatus?:string|null; fromLabel?:string|null; toStatus:string; toLabel:string; note?:string|null; changedAt:string; changedByUserId?:string|null; changedByName:string; }
 export interface GmailConnectionStatus { connected:boolean; needsReconnect?:boolean; pointId:string; email?:string; status?:string; lastError?:string|null; connectedAt?:string; recoveredNotifications?:number; }
 export interface NotificationSettings { pointId:string; automaticEmailEnabled:boolean; notifyStatuses:string[]; senderDisplayName:string; footerText:string; updatedAt?:string; }
 export interface NotificationHistoryItem { id:string; orderId?:string|null; orderNumber?:number|null; recipient:string; status:'PENDING'|'PROCESSING'|'SENT'|'FAILED'|'CANCELLED'; attempts:number; subject?:string|null; providerMessageId?:string|null; lastError?:string|null; availableAt:string; sentAt?:string|null; createdAt:string; updatedAt:string; customerName?:string|null; device?:string|null; }
@@ -69,6 +70,7 @@ declare global {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
         createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT'}) => Promise<ServiceCreateOrderResult>;
         listOrders: () => Promise<ServiceOrderSummary[]>;
+        getHistory: (orderId:string) => Promise<ServiceStatusHistoryItem[]>;
         updateStatus: (orderId:string,status:string,note?:string) => Promise<ServiceStatusResult>;
       };
       gmail: {
