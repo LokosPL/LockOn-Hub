@@ -21,6 +21,7 @@ const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN
 const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN']);
 const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const SERVICE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const googleVerifier = new OAuth2Client();
 
@@ -305,13 +306,23 @@ const orderView = (row) => ({
   deviceId: row.device_id,
   brand: row.brand,
   model: row.model,
+  imei: row.imei || null,
+  serialNumber: row.serial_number || null,
+  deviceNotes: row.device_notes || null,
   orderType: row.order_type,
   issueDescription: row.issue_description,
   status: row.status,
   statusLabel: STATUS_LABELS[row.status] || row.status,
   assignedTechnicianId: row.assigned_technician_id || null,
+  assignedTechnicianName: row.technician_name || null,
+  assignedTechnicianEmail: row.technician_email || null,
+  estimatedCost: row.estimated_cost == null ? null : Number(row.estimated_cost),
+  finalCost: row.final_cost == null ? null : Number(row.final_cost),
+  currency: row.currency || 'PLN',
+  estimatedCompletionAt: row.estimated_completion_at || null,
   receivedAt: row.received_at,
-  completedAt: row.completed_at || null
+  completedAt: row.completed_at || null,
+  createdAt: row.created_at
 });
 
 const getVisibleOrderByNumber = async (user, number) => {
@@ -322,7 +333,7 @@ const getVisibleOrderByNumber = async (user, number) => {
     access = ' AND EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=s.point_id)';
   }
   const { rows } = await q(
-    "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id WHERE s.order_number=$1" + access + ' LIMIT 1',
+    "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
     params
   );
   return rows[0] ? orderView(rows[0]) : null;
@@ -331,7 +342,7 @@ const getVisibleOrderByNumber = async (user, number) => {
 const listVisibleOrders = async (user) => {
   if (GLOBAL_ROLES.has(user.role_code)) {
     const { rows } = await q(
-      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id ORDER BY s.created_at DESC LIMIT 100"
+      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY s.created_at DESC LIMIT 100"
     );
     return rows.map(orderView);
   }
