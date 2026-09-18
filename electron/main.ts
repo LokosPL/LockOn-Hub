@@ -375,7 +375,7 @@ const secureHandle = (channel: string, listener: SecureHandler) => {
   });
 };
 
-const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf') => {
+const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst') => {
   const text = String(value ?? '');
   if (!new RegExp(`^${prefix}_[a-f0-9]{20}$`).test(text)) throw new Error('Nieprawidłowy identyfikator.');
   return text;
@@ -490,6 +490,15 @@ const registerIpc = () => {
     if (safeQuery.length < 2) return [];
     return backendRequest(`/service/customers/search?q=${encodeURIComponent(safeQuery)}`, {}, token);
   });
+  secureHandle('service:getCustomer', async (customerId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/customers/${encodeURIComponent(safeId(customerId, 'cst'))}`, {}, token);
+  });
+  secureHandle('service:listTechnicians', async (pointId: string) => {
+    const token = requireSessionToken();
+    const safePointId = String(pointId ?? '').trim().slice(0, 80);
+    return backendRequest(`/service/technicians?pointId=${encodeURIComponent(safePointId)}`, {}, token);
+  });
   secureHandle('service:createOrder', async (payload: unknown) => {
     const token = requireSessionToken();
     return backendRequest('/service/orders', {
@@ -504,6 +513,24 @@ const registerIpc = () => {
   secureHandle('service:getHistory', async (orderId: string) => {
     const token = requireSessionToken();
     return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/history`, {}, token);
+  });
+  secureHandle('service:getNotes', async (orderId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/notes`, {}, token);
+  });
+  secureHandle('service:addNote', async (orderId: string, body: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ body: String(body ?? '').trim().slice(0, 2000) })
+    }, token);
+  });
+  secureHandle('service:updateDetails', async (orderId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/details`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }, token);
   });
   secureHandle('service:updateStatus', async (orderId: string, status: string, note?: string) => {
     const token = requireSessionToken();
