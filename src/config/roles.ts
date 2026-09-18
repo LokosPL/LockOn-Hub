@@ -53,8 +53,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   SUPPORT: {
     label: 'Wsparcie LockOnOS',
     shortLabel: 'Wsparcie',
-    description: 'Dostęp do pulpitu, przeglądarki i obecnego modułu pomocy.',
-    navigation: ['dashboard', 'service', 'browser', 'support', 'settings'],
+    description: 'Dostęp do przypisanych punktów, przeglądarki i modułu wsparcia. Dane klientów może odczytywać wyłącznie w dozwolonym zakresie wsparcia.',
+    navigation: ['dashboard', 'browser', 'support', 'settings'],
     canManageUpdates: false,
     canManageSettings: false,
     canUseSupportDesk: true,
@@ -75,8 +75,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   USER: {
     label: 'Użytkownik',
     shortLabel: 'Użytkownik',
-    description: 'Podstawowy dostęp do punktu, serwisu i przeglądarki.',
-    navigation: ['dashboard', 'service', 'browser', 'settings'],
+    description: 'Podstawowy dostęp do przypisanego punktu i przeglądarki.',
+    navigation: ['dashboard', 'browser', 'settings'],
     canManageUpdates: false,
     canManageSettings: false,
     canUseSupportDesk: false,
