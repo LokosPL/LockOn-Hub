@@ -18,6 +18,9 @@ let currentState: UpdateState = {
   message: 'Aktualizator jest gotowy.'
 };
 
+let checkInFlight = false;
+let lastCheckStartedAt = 0;
+
 const sendState = (state: UpdateState) => {
   currentState = state;
   BrowserWindow.getAllWindows().forEach((window) => {
@@ -102,7 +105,21 @@ export const checkForUpdates = async () => {
     return state;
   }
 
-  return autoUpdater.checkForUpdates();
+  if (checkInFlight) return currentState;
+
+  checkInFlight = true;
+  lastCheckStartedAt = Date.now();
+  try {
+    return await autoUpdater.checkForUpdates();
+  } finally {
+    checkInFlight = false;
+  }
+};
+
+export const checkForUpdatesIfStale = async (minimumIntervalMs = 2 * 60 * 1000) => {
+  if (!app.isPackaged) return currentState;
+  if (Date.now() - lastCheckStartedAt < minimumIntervalMs) return currentState;
+  return checkForUpdates();
 };
 
 export const downloadUpdate = async () => {
@@ -127,19 +144,30 @@ export const installUpdate = () => {
 };
 
 let updateTimer: NodeJS.Timeout | null = null;
+let startupCheckTimer: NodeJS.Timeout | null = null;
 
 export const startAutomaticUpdateChecks = () => {
-  if (!app.isPackaged || updateTimer) return;
+  if (!app.isPackaged || updateTimer || startupCheckTimer) return;
 
-  // Pierwsze sprawdzenie robi main.ts po starcie. Później ponawiamy je co 30 minut,
-  // więc nowa wersja wpada podczas normalnej pracy bez ręcznego restartowania aplikacji.
+  // Każdy komputer sprawdza nowe wydanie chwilę po uruchomieniu, a potem
+  // regularnie podczas pracy. autoDownload pobiera update bez klikania.
+  startupCheckTimer = setTimeout(() => {
+    startupCheckTimer = null;
+    void checkForUpdates().catch(() => undefined);
+  }, 1_500);
+
   updateTimer = setInterval(() => {
     void checkForUpdates().catch(() => undefined);
-  }, 30 * 60 * 1000);
+  }, 10 * 60 * 1000);
 };
 
 export const stopAutomaticUpdateChecks = () => {
-  if (!updateTimer) return;
-  clearInterval(updateTimer);
-  updateTimer = null;
+  if (startupCheckTimer) {
+    clearTimeout(startupCheckTimer);
+    startupCheckTimer = null;
+  }
+  if (updateTimer) {
+    clearInterval(updateTimer);
+    updateTimer = null;
+  }
 };
