@@ -15,12 +15,12 @@
 - API: `https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech`
 
 Stan produkcyjny po realizacji Priorytetu 1 (2026-09-18):
-- release baseline `main`: `4841af5a337c383645f432a4f892f8c4bd725ba6` (commit handoffu jest późniejszy)
-- publiczny release: `v0.11.0`
-- PR aplikacji #22: scalony
+- release baseline `main`: `bbac27d7b588c650cc1b57f0cea8c528a07498d3` (commit handoffu jest późniejszy)
+- publiczny release: `v0.12.0`
+- PR aplikacji #22 i #23: scalone
 - repo strony `main`: `5d4503d17958aa23a656dc3fe9b5b629b1e7398f`
 - PR strony #3: scalony
-- aktywny Neon deployment: v16
+- aktywny Neon deployment: v17
 - migracja DB: `2026-09-18-central-v11` zastosowana na produkcyjnym `main`
 - produkcyjny smoke v16: `/health` OK, `/me` bez sesji = 401
 - GitHub Pages / `app.serviceos.pl`: deploy po PR #3 zakończony sukcesem
@@ -162,7 +162,7 @@ Istnieją:
 
 ---
 
-# PRIORYTETY NASTĘPNEJ SESJI — PRIORYTET 1 WYKONANY, ZACZNIJ OD 2
+# PRIORYTETY NASTĘPNEJ SESJI — PRIORYTETY 1–2 WYKONANE, ZACZNIJ OD 3
 
 ## 1. [WYKONANE] Punkt macierzysty telefonu i obowiązkowy powrót z serwisu
 
@@ -185,20 +185,28 @@ Historyczny przypadek `Nowogard → serwis → Nowogard` został poprawnie rozpo
 
 Nie implementuj tego od nowa. Przy kolejnych zmianach pilnuj regresji tych invariantów.
 
-## 2. Gmail ma być automatyczny i niewidoczny, jeśli już działa
+## 2. [WYKONANE] Gmail automatyczny i niewidoczny, jeśli już działa
 
-Użytkownik nie chce stale widzieć na górze „Połącz Gmail”.
+Zrealizowane i wdrożone produkcyjnie w v0.12.0 / Neon v17.
 
-Docelowy UX:
-- po zalogowaniu ServiceOS automatycznie sprawdza połączenie Gmail;
-- jeśli punkt ma aktywnego kompletnego nadawcę, niczego nie pokazuje — Gmail po prostu działa;
-- jeśli refresh token / zgoda już istnieją, nie wymagaj ponownego klikania;
-- jeśli zgoda rzeczywiście wygasła lub została cofnięta, dopiero wtedy pokaż jedno czytelne wezwanie do ponownej autoryzacji;
-- przy pierwszej wymaganej zgodzie prowadź użytkownika przez spójny flow Google;
-- po udanym połączeniu przycisk/banner znika;
-- nie omijaj obowiązkowej zgody Google, ale nie pokazuj technicznych elementów, gdy nie są potrzebne.
+Wdrożono:
+- lekki automatyczny check połączenia Gmail po wejściu do Serwisu i zmianie punktu;
+- działający, kompletny nadawca nie pokazuje już globalnego bannera ani przycisku „Połącz Gmail”;
+- historia i pełne ustawienia powiadomień są pobierane dopiero po wejściu do zakładki „Powiadomienia”;
+- pierwsze połączenie pokazuje jedno czytelne CTA;
+- ponowne OAuth pojawia się wyłącznie przy rzeczywistym `REAUTH_REQUIRED`;
+- backend odświeża token przy sprawdzaniu statusu i rozpoznaje Google `invalid_grant` jako wygasłą/cofniętą zgodę;
+- taki przypadek zapisuje nadawcę jako `REVOKED`;
+- chwilowe problemy Google są raportowane jako `TEMPORARY_ERROR` i nie wymuszają fałszywej ponownej zgody;
+- test/odłączenie Gmail są dostępne w zakładce „Powiadomienia”, a nie jako stały element głównego widoku;
+- błędy testu/wysyłki wymagające nowej zgody również ustawiają `REVOKED`;
+- scope pozostaje ograniczony do `gmail.send`;
+- produkcyjny smoke v17 potwierdził `/health` oraz ochronę `/me` i `/integrations/gmail` bez sesji;
+- release desktop `v0.12.0` przeszedł release workflow, CodeQL i pełny Windows package smoke.
 
-Sprawdź obecne onboarding/bannery w `ServicePage` i po logowaniu.
+Brak migracji DB dla tego priorytetu. Produkcyjny rekord nadawcy pozostawał `ACTIVE` bez błędu po wdrożeniu v17.
+
+Nie przywracaj stałego bannera Gmail przy poprawnym połączeniu. Ponowne OAuth ma być reakcją na trwałą utratę zgody, nie na chwilowy błąd sieci/provider.
 
 ## 3. Porządek i stopniowanie zleceń — „co robimy dalej”
 
@@ -282,5 +290,5 @@ Przed implementacją przeanalizuj FK i wszystkie tabele w Neon. Nie kasuj projek
 1. Otwórz ten plik z GitHub.
 2. Sprawdź aktualny `main`, latest release i workflows.
 3. Sprawdź aktywny deployment `lockonapi` w Neon i aktualny schemat.
-4. Priorytet 1 jest wykonany. Zacznij od priorytetu **2 — Gmail ma działać automatycznie i być niewidoczny, jeśli połączenie jest kompletne**.
+4. Priorytety 1 i 2 są wykonane. Zacznij od priorytetu **3 — porządek i stopniowanie zleceń / jednoznaczne „co robimy dalej”**.
 5. Wykonuj zmiany samodzielnie przez GitHub/Neon i dopiero przy koniecznej ręcznej czynności poproś użytkownika o jeden krok.
