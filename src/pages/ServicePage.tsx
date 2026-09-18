@@ -158,6 +158,25 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   };
 
   const submit = async () => {
+    const cleanEmail = form.email.trim();
+    const cleanPhone = form.phone.replace(/\D/g, '');
+    if (!form.firstName.trim() || !form.lastName.trim() || !form.brand.trim() || !form.model.trim() || !form.issueDescription.trim()) {
+      setError('Uzupełnij imię, nazwisko, markę, model i opis usterki.');
+      return;
+    }
+    if (!cleanEmail && !cleanPhone) {
+      setError('Podaj adres e-mail lub numer telefonu klienta.');
+      return;
+    }
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setError('Adres e-mail klienta jest nieprawidłowy.');
+      return;
+    }
+    if (form.phone.trim() && cleanPhone.length < 7) {
+      setError('Numer telefonu klienta jest zbyt krótki.');
+      return;
+    }
+
     setBusy(true); setError(''); setNotice(''); setResult(null);
     try {
       const created = await window.lockOn.service.createOrder({ ...form, pointId });
