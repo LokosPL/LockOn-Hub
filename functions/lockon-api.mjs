@@ -644,6 +644,17 @@ const route = async (request) => {
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
 
+  if(method==='POST'&&url.pathname==='/internal/notifications/process'){
+    const triggerId=request.headers.get('x-neon-trigger-invocation-id');
+    if(!triggerId)return json(request,{error:'TRIGGER_REQUIRED'},403);
+    const triggerBody=await readJson(request).catch(()=>({}));
+    const {rows}=await q("SELECT id FROM notification_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY available_at ASC,created_at ASC LIMIT 25");
+    const results=[];
+    for(const row of rows)results.push({id:row.id,...(await processNotification(row.id))});
+    console.log('[notification worker]',{triggerId,scheduledAt:triggerBody?.data?.scheduled_at||null,processed:results.length});
+    return json(request,{ok:true,processed:results.length,results});
+  }
+
   if (method === 'OPTIONS') return new Response(null, { status: 204, headers: secureHeaders(request) });
   if (method === 'GET' && url.pathname === '/health') return json(request, { ok: true, service: 'LockOn ServiceOS Central API', time: nowIso() });
 
