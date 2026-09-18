@@ -1501,7 +1501,7 @@ const route = async (request) => {
   if(method==='POST'&&detailsMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji zlecenia.'),{status:403});
-    const found=(await q('SELECT id,point_id,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
+    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
     const body=await readJson(request);
@@ -1542,9 +1542,9 @@ const route = async (request) => {
       if(assignedTechnicianId){
         const tech=(await q(
           "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE usr.id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND a.point_id=$2 LIMIT 1",
-          [assignedTechnicianId,found.point_id]
+          [assignedTechnicianId,found.current_point_id||found.home_point_id||found.point_id]
         )).rows[0];
-        if(!tech)return json(request,{error:'TECHNICIAN',message:'Wybrany technik nie ma dostępu do tego punktu.'},400);
+        if(!tech)return json(request,{error:'TECHNICIAN',message:'Wybrany technik nie ma dostępu do aktualnego punktu urządzenia.'},400);
       }
     }
 
@@ -1636,7 +1636,7 @@ const route = async (request) => {
         did=makeId('dev');
         await client.query("INSERT INTO devices(id,customer_id,brand,model,imei,serial_number,notes) VALUES($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''))",[did,customer.id,brand,model,imei,serialNumber,deviceNotes]);
       }
-      const oid=makeId('srv');const order=(await client.query("INSERT INTO service_orders(id,point_id,customer_id,device_id,order_type,issue_description,status,assigned_technician_id,created_by_user_id,estimated_cost,estimated_completion_at) VALUES($1,$2,$3,$4,$5,$6,'RECEIVED',$7,$8,$9,$10) RETURNING *",[oid,pointId,customer.id,did,orderType,issue,assignedTechnicianId,u.id,estimatedCost,estimatedCompletionAt])).rows[0];
+      const oid=makeId('srv');const order=(await client.query("INSERT INTO service_orders(id,point_id,home_point_id,current_point_id,customer_id,device_id,order_type,issue_description,status,assigned_technician_id,created_by_user_id,estimated_cost,estimated_completion_at) VALUES($1,$2,$2,$2,$3,$4,$5,$6,'RECEIVED',$7,$8,$9,$10) RETURNING *",[oid,pointId,customer.id,did,orderType,issue,assignedTechnicianId,u.id,estimatedCost,estimatedCompletionAt])).rows[0];
       await client.query("INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,changed_by_user_id) VALUES($1,$2,NULL,'RECEIVED',$3)",[makeId('hst'),oid,u.id]);
       await client.query('COMMIT');
 
@@ -1685,9 +1685,24 @@ const route = async (request) => {
     const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500);
     if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
 
-    const found=(await q('SELECT id,point_id,status,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
+    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,status,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
+
+    if(['READY','COMPLETED'].includes(next)){
+      const homePointId=found.home_point_id||found.point_id;
+      const openTransfer=(await q("SELECT id,kind,status FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') ORDER BY requested_at DESC LIMIT 1",[found.id])).rows[0];
+      if(openTransfer){
+        return json(request,{error:'RETURN_REQUIRED',message:'Urządzenie ma aktywny transport. Status gotowości do odbioru można ustawić dopiero po fizycznym powrocie i przyjęciu w punkcie macierzystym.'},409);
+      }
+      if(found.current_point_id!==homePointId){
+        return json(request,{error:'RETURN_REQUIRED',message:'Urządzenie znajduje się poza punktem macierzystym. Najpierw odeślij je do punktu macierzystego i potwierdź przyjęcie zwrotu.'},409);
+      }
+      await requirePoint(u,homePointId);
+      if(next==='COMPLETED'&&found.status!=='READY'){
+        return json(request,{error:'READY_REQUIRED',message:'Zlecenie można zakończyć dopiero po oznaczeniu urządzenia jako gotowego do odbioru w punkcie macierzystym.'},409);
+      }
+    }
 
     if(found.status===next){
       const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
@@ -1777,31 +1792,47 @@ const route = async (request) => {
   if(method==='POST'&&createTransferMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przekazywania zleceń.'),{status:403});
-    const order=(await q('SELECT id,point_id,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[createTransferMatch[1]])).rows[0];
+    const order=(await q('SELECT id,point_id,home_point_id,current_point_id,status,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[createTransferMatch[1]])).rows[0];
     if(!order)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,order.id);
 
-    const body=await readJson(request),toPointId=cleanText(body.toPointId,80),note=cleanText(body.note,500);
-    const acceptedTransfer=(await q("SELECT to_point_id FROM service_order_transfers WHERE service_order_id=$1 AND status='ACCEPTED' ORDER BY accepted_at DESC NULLS LAST,requested_at DESC LIMIT 1",[order.id])).rows[0];
-    const fromPointId=acceptedTransfer?.to_point_id||order.point_id;
-    await requirePoint(u,fromPointId);
-    if(!toPointId||toPointId===fromPointId)return json(request,{error:'DESTINATION',message:'Wybierz inny punkt serwisowy.'},400);
-
-    const destination=(await q("SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE id=$1 AND active=true AND service_enabled=true AND accepts_external_repairs=true LIMIT 1",[toPointId])).rows[0];
-    if(!destination)return json(request,{error:'SERVICE_UNAVAILABLE',message:'Wybrany punkt nie przyjmuje przekazań serwisowych.'},400);
+    const body=await readJson(request);
+    const kind=String(body.kind||'OUTBOUND_SERVICE').toUpperCase();
+    const note=cleanText(body.note,500);
+    if(!['OUTBOUND_SERVICE','RETURN_HOME'].includes(kind))return json(request,{error:'TRANSFER_KIND',message:'Nieprawidłowy kierunek logistyki.'},400);
 
     const open=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') LIMIT 1",[order.id])).rows[0];
     if(open)return json(request,{error:'TRANSFER_OPEN',message:'To zlecenie ma już aktywne przekazanie.'},409);
 
+    const homePointId=order.home_point_id||order.point_id;
+    const fromPointId=order.current_point_id||homePointId;
+    await requirePoint(u,fromPointId);
+
+    let toPointId=cleanText(body.toPointId,80);
+    let destination=null;
+    if(kind==='RETURN_HOME'){
+      toPointId=homePointId;
+      if(fromPointId===homePointId)return json(request,{error:'ALREADY_HOME',message:'Urządzenie znajduje się już w punkcie macierzystym.'},409);
+      destination=(await q("SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE id=$1 AND active=true LIMIT 1",[toPointId])).rows[0];
+      if(!destination)return json(request,{error:'HOME_POINT_UNAVAILABLE',message:'Punkt macierzysty jest nieaktywny.'},409);
+    }else{
+      if(!toPointId||toPointId===fromPointId)return json(request,{error:'DESTINATION',message:'Wybierz inny punkt serwisowy.'},400);
+      if(toPointId===homePointId&&fromPointId!==homePointId){
+        return json(request,{error:'USE_RETURN_HOME',message:'Powrót do punktu macierzystego musi być zapisany jako osobny zwrot logistyczny.'},400);
+      }
+      destination=(await q("SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE id=$1 AND active=true AND service_enabled=true AND accepts_external_repairs=true LIMIT 1",[toPointId])).rows[0];
+      if(!destination)return json(request,{error:'SERVICE_UNAVAILABLE',message:'Wybrany punkt nie przyjmuje przekazań serwisowych.'},400);
+    }
+
     const transferId=makeId('trf');
     const row=(await q(
-      "INSERT INTO service_order_transfers(id,service_order_id,from_point_id,to_point_id,status,note,sent_by_user_id,shipped_at) VALUES($1,$2,$3,$4,'IN_TRANSIT',NULLIF($5,''),$6,now()) RETURNING *",
-      [transferId,order.id,fromPointId,toPointId,note,u.id]
+      "INSERT INTO service_order_transfers(id,service_order_id,from_point_id,to_point_id,kind,status,note,sent_by_user_id,shipped_at) VALUES($1,$2,$3,$4,$5,'IN_TRANSIT',NULLIF($6,''),$7,now()) RETURNING *",
+      [transferId,order.id,fromPointId,toPointId,kind,note,u.id]
     )).rows[0];
-    await q('UPDATE service_orders SET assigned_technician_id=NULL,updated_at=now() WHERE id=$1',[order.id]);
+    await q('UPDATE service_orders SET current_point_id=NULL,assigned_technician_id=NULL,updated_at=now() WHERE id=$1',[order.id]);
 
     const notification=await queueTransferNotification(u,order.id,row,'IN_TRANSIT',note);
-    await audit(u.id,'SERVICE_TRANSFER_SENT','service_order',order.id,fromPointId,{transferId,toPointId,notification});
+    await audit(u.id,kind==='RETURN_HOME'?'SERVICE_RETURN_SENT':'SERVICE_TRANSFER_SENT','service_order',order.id,fromPointId,{transferId,toPointId,kind,homePointId,notification});
     const enriched=(await loadTransfersForOrders([order.id])).get(order.id)?.find((item)=>item.id===transferId);
     return json(request,{transfer:enriched||transferView({...row,from_point_name:'',to_point_name:destination.name}),notification},201);
   }
@@ -1838,17 +1869,24 @@ const route = async (request) => {
       [next,note,acceptedBy,transfer.id]
     )).rows[0];
 
-    if(next==='ACCEPTED'&&u.role_code==='TECHNICIAN'){
-      await q('UPDATE service_orders SET assigned_technician_id=$1,updated_at=now() WHERE id=$2',[u.id,transfer.service_order_id]);
+    const physicalPointId=next==='CANCELLED'
+      ? transfer.from_point_id
+      : ['DELIVERED','ACCEPTED','REJECTED'].includes(next)
+        ? transfer.to_point_id
+        : null;
+    if(next==='ACCEPTED'&&transfer.kind==='OUTBOUND_SERVICE'&&u.role_code==='TECHNICIAN'){
+      await q('UPDATE service_orders SET current_point_id=$1,assigned_technician_id=$2,updated_at=now() WHERE id=$3',[physicalPointId,u.id,transfer.service_order_id]);
     }else{
-      await q('UPDATE service_orders SET updated_at=now() WHERE id=$1',[transfer.service_order_id]);
+      await q('UPDATE service_orders SET current_point_id=$1,updated_at=now() WHERE id=$2',[physicalPointId,transfer.service_order_id]);
     }
 
-    const notification=['DELIVERED','ACCEPTED','REJECTED','CANCELLED'].includes(next)
+    const shouldEmail=['DELIVERED','ACCEPTED','REJECTED','CANCELLED'].includes(next) &&
+      !(transfer.kind==='RETURN_HOME'&&next==='ACCEPTED');
+    const notification=shouldEmail
       ? await queueTransferNotification(u,transfer.service_order_id,updated,next,note)
       : {queued:false,sent:false,reason:'EVENT_NOT_EMAILED'};
 
-    await audit(u.id,'SERVICE_TRANSFER_'+next,'service_order',transfer.service_order_id,sourceAction?transfer.from_point_id:transfer.to_point_id,{transferId:transfer.id,notification});
+    await audit(u.id,'SERVICE_TRANSFER_'+next,'service_order',transfer.service_order_id,sourceAction?transfer.from_point_id:transfer.to_point_id,{transferId:transfer.id,kind:transfer.kind,notification});
     const full=(await loadTransfersForOrders([transfer.service_order_id])).get(transfer.service_order_id)?.find((item)=>item.id===transfer.id);
     return json(request,{transfer:full||transferView(updated),notification});
   }
