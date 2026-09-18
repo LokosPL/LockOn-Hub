@@ -36,6 +36,7 @@ import {
 } from './googleAuth';
 import {
   checkForUpdates,
+  checkForUpdatesIfStale,
   configureUpdater,
   downloadUpdate,
   getUpdateState,
@@ -298,6 +299,10 @@ const createMainWindow = () => {
     console.error('[LockOn renderer startup]', error);
   });
 
+  mainWindow.on('focus', () => {
+    void checkForUpdatesIfStale().catch(() => undefined);
+  });
+
   mainWindow.on('closed', () => {
     destroyBrowser();
     mainWindow = null;
@@ -333,7 +338,6 @@ const runStartupSequence = async () => {
   }
   splashWindow?.close();
   splashWindow = null;
-  void checkForUpdates();
 };
 
 const withMainWindow = <T>(callback: (window: BrowserWindow) => T): T | undefined => {
