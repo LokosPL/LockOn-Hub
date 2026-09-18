@@ -558,60 +558,105 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
             <button className="button small secondary" disabled={ordersBusy} onClick={() => void loadOrders()}><RefreshCw className={ordersBusy ? 'spin' : ''} size={14}/> Odśwież</button>
           </div>
           <div className="service-orders-list">
-            {orders.map((order) => (
-              <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''}`}>
-                <div className="service-order-row">
-                  <div className="service-order-number">#{order.orderNumber}</div>
-                  <div className="service-order-main">
-                    <strong>{order.customerName}</strong>
-                    <span>{order.brand} {order.model} · {order.pointName}</span>
-                    <small>{order.orderType === 'COMPLAINT' ? 'Reklamacja' : 'Naprawa'} · {order.customerEmail || order.customerPhone || 'brak kontaktu'}</small>
-                  </div>
-                  <div className="service-order-actions">
-                    <div className="service-order-status">
-                      {canEditStatus ? (
-                        <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
-                          {statuses.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
-                        </select>
-                      ) : <span className="status-badge">{order.statusLabel}</span>}
-                    </div>
-                    <button className="button small secondary service-history-button" onClick={() => void toggleOrderHistory(order.id)}>
-                      <History size={13}/>
-                      Historia
-                      {expandedOrderId === order.id ? <ChevronUp size={13}/> : <ChevronDown size={13}/>}
-                    </button>
-                  </div>
-                </div>
-
-                {expandedOrderId === order.id && (
-                  <div className="service-order-history">
-                    <div className="service-history-head">
-                      <div><strong>Historia statusów</strong><span>Pełna oś czasu zlecenia #{order.orderNumber}</span></div>
-                    </div>
-                    {historyBusyId === order.id && <div className="service-history-empty">Pobieram historię…</div>}
-                    {historyBusyId !== order.id && (orderHistories[order.id] ?? []).map((item, index) => (
-                      <div className="service-history-item" key={item.id}>
-                        <div className="service-history-line">
-                          <i className={index === (orderHistories[order.id] ?? []).length - 1 ? 'current' : ''}></i>
-                        </div>
-                        <div className="service-history-content">
-                          <div className="service-history-status">
-                            {item.fromLabel && <span>{item.fromLabel}</span>}
-                            {item.fromLabel && <b>→</b>}
-                            <strong>{item.toLabel}</strong>
-                          </div>
-                          <small>{new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
-                          {item.note && <p>{item.note}</p>}
-                        </div>
+            {orders.map((order) => {
+              const draft = detailsDrafts[order.id];
+              const card = customerCards[order.customerId];
+              const notes = orderNotes[order.id] ?? [];
+              const pointTechnicians = techniciansByPoint[order.pointId] ?? [];
+              return (
+                <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''}`}>
+                  <div className="service-order-row">
+                    <div className="service-order-number">#{order.orderNumber}</div>
+                    <div className="service-order-main">
+                      <strong>{order.customerName}</strong>
+                      <span>{order.brand} {order.model} · {order.pointName}</span>
+                      <small>{order.orderType === 'COMPLAINT' ? 'Reklamacja' : 'Naprawa'} · {order.customerEmail || order.customerPhone || 'brak kontaktu'}</small>
+                      <div className="service-order-quick-meta">
+                        <span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span>
+                        <span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleString('pl-PL') : 'Brak terminu'}</span>
+                        {canManageOrderMeta && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
                       </div>
-                    ))}
-                    {historyBusyId !== order.id && (orderHistories[order.id] ?? []).length === 0 && (
-                      <div className="service-history-empty">Brak zapisanych zmian statusu.</div>
-                    )}
+                    </div>
+                    <div className="service-order-actions">
+                      <div className="service-order-status">
+                        {canEditStatus ? (
+                          <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
+                            {statuses.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+                          </select>
+                        ) : <span className="status-badge">{order.statusLabel}</span>}
+                      </div>
+                      <button className="button small secondary service-history-button" onClick={() => void toggleOrderHistory(order)}>
+                        <History size={13}/>
+                        Szczegóły
+                        {expandedOrderId === order.id ? <ChevronUp size={13}/> : <ChevronDown size={13}/>}
+                      </button>
+                    </div>
                   </div>
-                )}
-              </article>
-            ))}
+
+                  {expandedOrderId === order.id && (
+                    <div className="service-order-workspace">
+                      {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
+
+                      {draft && (
+                        <section className="service-workspace-card">
+                          <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
+                          <div className="service-details-grid">
+                            <label><span>IMEI</span><input disabled={!canEditStatus} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
+                            <label><span>Numer seryjny</span><input disabled={!canEditStatus} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
+                            <label><span>Przewidywany termin</span><input disabled={!canEditStatus} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>
+                            {canManageOrderMeta && <label><span>Technik</span><select value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+                            {canManageOrderMeta && <label><span>Koszt szacowany</span><input type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
+                            {canManageOrderMeta && <label><span>Koszt końcowy</span><input type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
+                            <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditStatus} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
+                          </div>
+                          {canEditStatus && <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
+                        </section>
+                      )}
+
+                      <section className="service-workspace-card">
+                        <div className="service-workspace-title"><IdCard size={15}/><div><strong>Karta klienta</strong><span>Historia widoczna tylko w Twoim zakresie punktów.</span></div></div>
+                        {card ? <>
+                          <div className="service-customer-card-head">
+                            <div><strong>{card.customer.firstName} {card.customer.lastName}</strong><span>{card.customer.email || 'brak e-maila'} · {card.customer.phone || 'brak telefonu'}</span></div>
+                            <b>{card.totalVisibleOrders} zleceń</b>
+                          </div>
+                          <div className="service-customer-order-mini">
+                            {card.orders.slice(0,5).map((item)=><div key={item.id}><span>#{item.orderNumber} · {item.brand} {item.model}</span><small>{item.statusLabel} · {new Date(item.receivedAt).toLocaleDateString('pl-PL')}</small></div>)}
+                          </div>
+                        </> : <div className="service-history-empty">Pobieram kartę klienta…</div>}
+                      </section>
+
+                      <section className="service-workspace-card">
+                        <div className="service-workspace-title"><StickyNote size={15}/><div><strong>Notatki wewnętrzne</strong><span>Nie są wysyłane klientowi.</span></div></div>
+                        {canEditStatus && <div className="service-note-compose">
+                          <textarea rows={3} maxLength={2000} value={noteDrafts[order.id] ?? ''} onChange={(e)=>setNoteDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="Diagnoza technika, zamówione części, ustalenia z klientem…"/>
+                          <button className="button secondary small" disabled={orderBusyId===order.id || !(noteDrafts[order.id] ?? '').trim()} onClick={()=>void addOrderNote(order.id)}>Dodaj notatkę</button>
+                        </div>}
+                        <div className="service-note-list">
+                          {notes.map((note)=><div key={note.id}><div><strong>{note.authorName}</strong><span>{new Date(note.createdAt).toLocaleString('pl-PL')}</span></div><p>{note.body}</p></div>)}
+                          {notes.length===0 && <div className="service-history-empty">Brak notatek wewnętrznych.</div>}
+                        </div>
+                      </section>
+
+                      <section className="service-workspace-card service-workspace-history">
+                        <div className="service-workspace-title"><History size={15}/><div><strong>Historia statusów</strong><span>Pełna oś czasu zlecenia #{order.orderNumber}</span></div></div>
+                        {(orderHistories[order.id] ?? []).map((item, index) => (
+                          <div className="service-history-item" key={item.id}>
+                            <div className="service-history-line"><i className={index === (orderHistories[order.id] ?? []).length - 1 ? 'current' : ''}></i></div>
+                            <div className="service-history-content">
+                              <div className="service-history-status">{item.fromLabel && <span>{item.fromLabel}</span>}{item.fromLabel && <b>→</b>}<strong>{item.toLabel}</strong></div>
+                              <small>{new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
+                              {item.note && <p>{item.note}</p>}
+                            </div>
+                          </div>
+                        ))}
+                        {(orderHistories[order.id] ?? []).length === 0 && <div className="service-history-empty">Brak zapisanych zmian statusu.</div>}
+                      </section>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
             {!ordersBusy && orders.length === 0 && <div className="service-empty">Brak zleceń w Twoim zakresie.</div>}
           </div>
         </section>
