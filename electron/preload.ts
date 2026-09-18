@@ -36,9 +36,14 @@ contextBridge.exposeInMainWorld('lockOn', {
   },
   service: {
     searchCustomers: (query: string) => ipcRenderer.invoke('service:searchCustomers', query),
+    getCustomer: (customerId: string) => ipcRenderer.invoke('service:getCustomer', customerId),
+    listTechnicians: (pointId: string) => ipcRenderer.invoke('service:listTechnicians', pointId),
     createOrder: (payload: unknown) => ipcRenderer.invoke('service:createOrder', payload),
     listOrders: () => ipcRenderer.invoke('service:listOrders'),
     getHistory: (orderId: string) => ipcRenderer.invoke('service:getHistory', orderId),
+    getNotes: (orderId: string) => ipcRenderer.invoke('service:getNotes', orderId),
+    addNote: (orderId: string, body: string) => ipcRenderer.invoke('service:addNote', orderId, body),
+    updateDetails: (orderId: string, payload: unknown) => ipcRenderer.invoke('service:updateDetails', orderId, payload),
     updateStatus: (orderId: string, status: string, note?: string) => ipcRenderer.invoke('service:updateStatus', orderId, status, note)
   },
   gmail: {
