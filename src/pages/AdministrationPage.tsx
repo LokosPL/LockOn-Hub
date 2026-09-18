@@ -127,8 +127,9 @@ export function AdministrationPage() {
   };
 
   const blockUser = async (user: AdminUser, blocked: boolean) => {
-    const reason = blocked ? (window.prompt('Powód blokady (opcjonalnie):', user.blockedReason || '') ?? '') : '';
-    if (blocked && reason === null) return;
+    const promptResult = blocked ? window.prompt('Powód blokady (opcjonalnie):', user.blockedReason || '') : '';
+    if (blocked && promptResult === null) return;
+    const reason = promptResult ?? '';
     setBusy(true); setNotice('');
     try {
       await window.lockOn.admin.blockUser(user.id, blocked, reason);
