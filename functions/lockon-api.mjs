@@ -977,6 +977,19 @@ const route = async (request) => {
   if (method === 'OPTIONS') return new Response(null, { status: 204, headers: secureHeaders(request) });
   if (method === 'GET' && url.pathname === '/health') return json(request, { ok: true, service: 'LockOn ServiceOS Central API', time: nowIso() });
 
+  if (method === 'POST' && url.pathname === '/auth/google-code') {
+    const body = await readJson(request);
+    try {
+      const tokens = await exchangeDesktopAuthorizationCode(body, '/oauth2/callback');
+      if (!tokens?.id_token) return json(request, { error:'GOOGLE_ID_TOKEN', message:'Google nie zwrócił tokena tożsamości.' }, 400);
+      const profile = await verifyGoogle(String(tokens.id_token), GOOGLE_DESKTOP_CLIENT_ID);
+      return json(request, await loginProfile(profile, 'DESKTOP', true));
+    } catch (error) {
+      if (error?.status) throw error;
+      throw Object.assign(new Error('Google nie zakończył logowania.'), { status:401, code:'GOOGLE_AUTH_FAILED' });
+    }
+  }
+
   if (method === 'POST' && url.pathname === '/auth/google') {
     const body = await readJson(request);
     if (!body.idToken) return json(request, { error: 'MISSING_TOKEN', message: 'Brak tokena Google.' }, 400);
@@ -1679,6 +1692,26 @@ const route = async (request) => {
       lastError:row.last_error||(!complete?'Połączenie Gmail wymaga ponownej autoryzacji.':null),
       connectedAt:row.connected_at
     });
+  }
+
+  if(method==='POST'&&url.pathname==='/integrations/gmail/connect-code'){
+    const session=await requireActive(request),u=session.user;
+    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do połączenia Gmail.'),{status:403});
+    const body=await readJson(request),pointId=cleanText(body.pointId,80);
+    await requirePoint(u,pointId);
+
+    const tokens=await exchangeDesktopAuthorizationCode(body,'/gmail/callback');
+    if(!tokens?.refresh_token) return json(request,{error:'REFRESH_TOKEN',message:'Google nie zwrócił refresh tokena. Odłącz wcześniejszy dostęp ServiceOS w koncie Google i spróbuj ponownie.'},400);
+    if(!tokens?.id_token) return json(request,{error:'GOOGLE_ID_TOKEN',message:'Google nie zwrócił tokena tożsamości.'},400);
+
+    const profile=await verifyGoogle(String(tokens.id_token),GOOGLE_DESKTOP_CLIENT_ID);
+    await refreshGmailAccess(String(tokens.refresh_token),'');
+    await q(
+      "INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
+      [pointId,u.id,profile.email,encryptSecret(String(tokens.refresh_token))]
+    );
+    await audit(u.id,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER'});
+    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE'});
   }
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/connect'){
