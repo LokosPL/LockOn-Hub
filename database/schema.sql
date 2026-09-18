@@ -270,9 +270,9 @@ CREATE INDEX IF NOT EXISTS notification_outbox_order_idx
   WHERE service_order_id IS NOT NULL;
 
 INSERT INTO assistant_knowledge(slug,title,keywords,body,audience) VALUES
- ('login','Logowanie Google',ARRAY['login','logowanie','google','oauth'],'Logowanie desktopowe otwiera systemową przeglądarkę i używa Authorization Code z PKCE oraz state. Hasło Google nie jest wpisywane do ServiceOS.','ALL'),
- ('service','Moduł Serwis',ARRAY['serwis','klient','telefon','naprawa','zlecenie','reklamacja'],'Moduł Serwis pozwala wyszukać istniejącego klienta, dodać klienta i urządzenie, utworzyć nowe zlecenie lub reklamację oraz śledzić status naprawy. Klient jest ponownie używany po zgodnym emailu lub numerze telefonu.','ALL'),
- ('notifications','Powiadomienia klienta',ARRAY['email','mail','powiadomienie','status'],'Po zmianie statusu zlecenia ServiceOS może wysłać klientowi wiadomość przez Gmail nadawcy połączonego z danym punktem. Token Gmail jest przechowywany wyłącznie po stronie centralnego backendu w postaci zaszyfrowanej.','ALL'),
+ ('login','Logowanie Google',ARRAY['login','logowanie','google','oauth','pkce','gmail','zgoda'],'Logowanie desktopowe otwiera systemową przeglądarkę i używa Authorization Code z PKCE oraz state. Hasło Google nie jest wpisywane do ServiceOS. Dla uprawnionego użytkownika z jednym punktem aplikacja może po zalogowaniu od razu sprawdzić konfigurację Gmail i, jeśli trzeba, przeprowadzić jednorazową zgodę na gmail.send.','ALL'),
+ ('service','Moduł Serwis',ARRAY['serwis','klient','telefon','urządzenie','urzadzenie','imei','serial','naprawa','zlecenie','reklamacja','technik','termin','notatka','karta klienta'],'Moduł Serwis pozwala wyszukać lub ponownie użyć klienta, dodać urządzenie, utworzyć naprawę albo reklamację i prowadzić zlecenie do zakończenia. Karta zlecenia obsługuje IMEI, numer seryjny, przewidywany termin, przypisanego technika, notatki wewnętrzne i historię statusów. ServiceOS rozpoznaje istniejącego klienta po e-mailu lub znormalizowanym telefonie oraz może ponownie użyć urządzenia po IMEI lub zgodnym numerze seryjnym. Wszystkie wyszukiwania klientów i zleceń są ograniczone do punktów dostępnych dla zalogowanego konta. Dane kosztowe są przeznaczone dla OWNER, BOSS i COORDINATOR.','ALL'),
+ ('notifications','Powiadomienia klienta',ARRAY['email','mail','gmail','powiadomienie','status','retry','ponów','ponow','historia','test','przyjęcie','przyjecie','received','gmail.send'],'Powiadomienia serwisowe są konfigurowane osobno dla punktu. Po jednorazowej zgodzie Google ServiceOS używa wyłącznie zakresu gmail.send do wysyłania wiadomości i nie czyta skrzynki Gmail. OWNER, BOSS lub COORDINATOR może połączyć nadawcę, wysłać test, wybrać statusy generujące wiadomość, ustawić nazwę nadawcy i stopkę oraz przeglądać historię dostawy. Nieudane wysyłki mają exponential backoff i mogą być ponawiane automatycznie przez worker Neon lub ręcznie przez uprawnionego użytkownika.','ALL'),
  ('website','Logowanie na stronie',ARRAY['strona','www','kod','autoryzacja'],'Zalogowany użytkownik może wygenerować jednorazowy kod do strony. Kod ma krótki termin ważności, może być użyty tylko raz, a baza przechowuje jego hash.','ALL'),
  ('updates','Aktualizacje',ARRAY['aktualizacja','update','wersja'],'ServiceOS sprawdza GitHub Releases po starcie, cyklicznie podczas pracy i po powrocie do aplikacji. Aktualizacja pobiera się automatycznie, a instalacja następuje po potwierdzeniu użytkownika.','ALL'),
  ('security','Bezpieczeństwo',ARRAY['bezpieczeństwo','security','token','sesja'],'ServiceOS używa sandboxa Electron, contextIsolation, nodeIntegration=false, walidacji IPC, CSP, bezpiecznego magazynu sesji oraz hashy tokenów po stronie backendu.','ALL'),
@@ -390,4 +390,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS devices_imei_unique_idx
 
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-18-central-v8','Enforce unique non-empty device IMEI')
+ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v9: refresh assistant knowledge for the richer service workflow.
+UPDATE assistant_knowledge
+SET keywords=ARRAY['serwis','klient','telefon','urządzenie','urzadzenie','imei','serial','naprawa','zlecenie','reklamacja','technik','termin','notatka','karta klienta'],
+    body='Moduł Serwis pozwala wyszukać lub ponownie użyć klienta, dodać urządzenie, utworzyć naprawę albo reklamację i prowadzić zlecenie do zakończenia. Karta zlecenia obsługuje IMEI, numer seryjny, przewidywany termin, przypisanego technika, notatki wewnętrzne i historię statusów. ServiceOS rozpoznaje istniejącego klienta po e-mailu lub znormalizowanym telefonie oraz może ponownie użyć urządzenia po IMEI lub zgodnym numerze seryjnym. Wszystkie wyszukiwania klientów i zleceń są ograniczone do punktów dostępnych dla zalogowanego konta. Dane kosztowe są przeznaczone dla OWNER, BOSS i COORDINATOR.',
+    updated_at=now()
+WHERE slug='service';
+
+UPDATE assistant_knowledge
+SET keywords=ARRAY['email','mail','gmail','powiadomienie','status','retry','ponów','ponow','historia','test','przyjęcie','przyjecie','received','gmail.send'],
+    body='Powiadomienia serwisowe są konfigurowane osobno dla punktu. Po jednorazowej zgodzie Google ServiceOS używa wyłącznie zakresu gmail.send do wysyłania wiadomości i nie czyta skrzynki Gmail. OWNER, BOSS lub COORDINATOR może połączyć nadawcę, wysłać test, wybrać statusy generujące wiadomość, ustawić nazwę nadawcy i stopkę oraz przeglądać historię dostawy. Nieudane wysyłki mają exponential backoff i mogą być ponawiane automatycznie przez worker Neon lub ręcznie przez uprawnionego użytkownika.',
+    updated_at=now()
+WHERE slug='notifications';
+
+UPDATE assistant_knowledge
+SET keywords=ARRAY['login','logowanie','google','oauth','pkce','gmail','zgoda'],
+    body='Logowanie desktopowe otwiera systemową przeglądarkę i używa Authorization Code z PKCE oraz state. Hasło Google nie jest wpisywane do ServiceOS. Dla uprawnionego użytkownika z jednym punktem aplikacja może po zalogowaniu od razu sprawdzić konfigurację Gmail i, jeśli trzeba, przeprowadzić jednorazową zgodę na gmail.send.',
+    updated_at=now()
+WHERE slug='login';
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v9','Refresh assistant knowledge for rich service workspace and Gmail onboarding')
 ON CONFLICT (version) DO NOTHING;
