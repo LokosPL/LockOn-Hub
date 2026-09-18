@@ -1,0 +1,13 @@
+LockOn ServiceOS 0.8.0
+
+- Centralny backend w Neon (Frankfurt) i centralne sesje.
+- Moduł Serwis: klienci, urządzenia, naprawy i reklamacje.
+- Deduplikacja klientów po adresie e-mail lub znormalizowanym numerze telefonu.
+- Lista zleceń i historia statusów z kontrolą dostępu do punktów.
+- Opcjonalny Gmail nadawcy punktu z zakresem gmail.send do automatycznych powiadomień o zmianie statusu.
+- Prywatna rozmowa Pomocy przypisana do konta zamiast globalnego localStorage.
+- Asystent ServiceOS z bazą wiedzy i kontrolowanym wyszukiwaniem klientów oraz zleceń zgodnie z rolą i punktami.
+- Jednorazowy kod autoryzacji WWW: 5 minut, single-use, w bazie tylko SHA-256.
+- Produkcyjna aplikacja korzysta z centralnego HTTPS API; lokalny backend pozostaje fallbackiem developerskim.
+- Desktop Google OAuth używa publicznego klienta + PKCE/state bez wstrzykiwania client secretu do buildu.
+- Code signing nadal oczekuje na akceptację SignPath Foundation; build nie jest deklarowany jako podpisany.
