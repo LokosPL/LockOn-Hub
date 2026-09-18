@@ -655,7 +655,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                       <div className="service-order-status">
                         {canEditStatus ? (
                           <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
-                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY'||value==='COMPLETED') && order.canMarkReady===false}>{label}</option>)}
+                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && order.canMarkReady===false) || (value==='COMPLETED' && (order.canMarkReady===false || order.status!=='READY'))}>{label}</option>)}
                           </select>
                         ) : <span className="status-badge">{order.statusLabel}</span>}
                       </div>
