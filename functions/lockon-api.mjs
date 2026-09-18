@@ -993,8 +993,19 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/integrations/gmail'){
     const session=await requireActive(request),pointId=cleanText(url.searchParams.get('pointId'),80);await requirePoint(session.user,pointId);
-    const {rows}=await q('SELECT point_id,sender_email,status,last_error,connected_at,updated_at FROM point_email_senders WHERE point_id=$1 LIMIT 1',[pointId]);
-    return json(request,rows[0]?{connected:true,pointId:rows[0].point_id,email:rows[0].sender_email,status:rows[0].status,lastError:rows[0].last_error||null,connectedAt:rows[0].connected_at}:{connected:false,pointId});
+    const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,(refresh_token_ciphertext IS NOT NULL AND oauth_client_secret_ciphertext IS NOT NULL) AS credential_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
+    const row=rows[0];
+    if(!row)return json(request,{connected:false,pointId,needsReconnect:false});
+    const complete=row.credential_complete===true&&row.status==='ACTIVE';
+    return json(request,{
+      connected:complete,
+      needsReconnect:!complete,
+      pointId:row.point_id,
+      email:row.sender_email,
+      status:row.status,
+      lastError:row.last_error||(!complete?'Połączenie Gmail wymaga ponownej autoryzacji.':null),
+      connectedAt:row.connected_at
+    });
   }
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/connect'){
@@ -1002,8 +1013,16 @@ const route = async (request) => {
     const body=await readJson(request),pointId=cleanText(body.pointId,80),refreshToken=cleanText(body.refreshToken,4096),clientSecret=cleanText(body.clientSecret,4096);await requirePoint(u,pointId);if(!refreshToken||!clientSecret)return json(request,{error:'TOKEN'},400);
     const accessToken=await refreshGmailAccess(refreshToken,clientSecret);const profile=await gmailProfile(accessToken);
     await q("INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,status='ACTIVE',last_error=NULL,updated_at=now()",[pointId,u.id,profile.email,encryptSecret(refreshToken),encryptSecret(clientSecret)]);
-    await audit(u.id,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email});
-    return json(request,{connected:true,pointId,email:profile.email,status:'ACTIVE'});
+
+    const recovered=await q(
+      "UPDATE notification_outbox n SET status='PENDING',available_at=now(),last_error=NULL,updated_at=now() FROM service_orders s WHERE n.service_order_id=s.id AND s.point_id=$1 AND n.status='FAILED' AND n.attempts<5 AND n.last_error LIKE 'Brak aktywnego, kompletnego nadawcy Gmail%' RETURNING n.id",
+      [pointId]
+    );
+    const recoveryResults=[];
+    for(const row of recovered.rows.slice(0,10))recoveryResults.push(await processNotification(row.id));
+
+    await audit(u.id,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,recoveredNotifications:recovered.rowCount});
+    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE',recoveredNotifications:recovered.rowCount,recoveryResults});
   }
 
   if(method==='DELETE'&&url.pathname==='/integrations/gmail'){
