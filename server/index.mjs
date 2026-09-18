@@ -39,6 +39,8 @@ const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
 const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN']);
 const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 
 const nowIso = () => new Date().toISOString();
 const id = (prefix) => `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
@@ -73,6 +75,7 @@ const initialDb = () => ({
   devices: [],
   serviceOrders: [],
   serviceOrderStatusHistory: [],
+  serviceOrderNotes: [],
   notificationSettings: [],
   notificationHistory: [],
   supportConversations: [],
@@ -101,6 +104,7 @@ const loadDb = () => {
       devices: Array.isArray(raw.devices) ? raw.devices : [],
       serviceOrders: Array.isArray(raw.serviceOrders) ? raw.serviceOrders : [],
       serviceOrderStatusHistory: Array.isArray(raw.serviceOrderStatusHistory) ? raw.serviceOrderStatusHistory : [],
+      serviceOrderNotes: Array.isArray(raw.serviceOrderNotes) ? raw.serviceOrderNotes : [],
       notificationSettings: Array.isArray(raw.notificationSettings) ? raw.notificationSettings : [],
       notificationHistory: Array.isArray(raw.notificationHistory) ? raw.notificationHistory : [],
       supportConversations: Array.isArray(raw.supportConversations) ? raw.supportConversations : [],
@@ -375,6 +379,40 @@ const loginProfile = (profile) => {
 const canSeePoint = (user, pointId) => {
   if (GLOBAL_ROLES.has(user.role)) return true;
   return (user.pointIds || []).includes(pointId);
+};
+
+const LOCAL_STATUS_LABELS = {
+  RECEIVED: 'Przyjęto urządzenie',
+  DIAGNOSIS: 'Diagnoza',
+  WAITING_PARTS: 'Oczekiwanie na części',
+  IN_REPAIR: 'W naprawie',
+  READY: 'Gotowe do odbioru',
+  COMPLETED: 'Zakończone',
+  CANCELLED: 'Anulowane',
+  REJECTED: 'Odrzucone'
+};
+
+const localOrderView = (order) => {
+  const customer = db.customers.find((item) => item.id === order.customerId);
+  const device = db.devices.find((item) => item.id === order.deviceId);
+  const point = db.points.find((item) => item.id === order.pointId);
+  const technician = order.assignedTechnicianId ? findUserById(order.assignedTechnicianId) : null;
+  return {
+    ...order,
+    pointName: point?.name || 'Punkt',
+    customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Klient',
+    customerEmail: customer?.email || null,
+    customerPhone: customer?.phone || null,
+    brand: device?.brand || '',
+    model: device?.model || '',
+    imei: device?.imei || null,
+    serialNumber: device?.serialNumber || null,
+    deviceNotes: device?.notes || null,
+    assignedTechnicianName: technician?.name || null,
+    assignedTechnicianEmail: technician?.email || null,
+    statusLabel: LOCAL_STATUS_LABELS[order.status] || order.status,
+    currency: order.currency || 'PLN'
+  };
 };
 
 const revenueVisibleTo = (user, entry) => {
