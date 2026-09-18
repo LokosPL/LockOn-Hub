@@ -846,3 +846,88 @@ input,textarea,select{line-height:1.45}
   .service-customer-card-head,.service-customer-order-mini>div{flex-direction:column;align-items:flex-start}
   .service-customer-order-mini small{text-align:left}
 }
+
+
+/* owner security and service logistics */
+.admin-stats-security{grid-template-columns:repeat(6,minmax(0,1fr))}
+.admin-tabs-wide{display:flex;flex-wrap:wrap;gap:5px}
+.user-access-row.user-blocked{opacity:.82;border-color:rgba(255,96,78,.22);background:rgba(255,76,55,.035)}
+.blocked-chip{display:inline-flex;margin-left:8px;padding:3px 6px;border-radius:6px;background:rgba(255,76,55,.10);color:#ff8a7d;font-size:8px;letter-spacing:.06em;vertical-align:middle}
+.user-admin-actions{display:flex;gap:6px;justify-content:flex-end;align-items:center;flex-wrap:wrap}
+.admin-security-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.security-session-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0}
+.security-session-stats>div{min-height:86px;padding:12px;border:1px solid var(--line);border-radius:11px;background:#0e1116;display:flex;flex-direction:column;gap:4px}
+.security-session-stats svg{color:#ff8050}
+.security-session-stats span{font-size:9px;color:#737d88}
+.security-session-stats strong{font-size:21px}
+.danger-admin-card{border-color:rgba(255,91,75,.18)}
+.blocked-users-list{display:flex;flex-direction:column;gap:7px}
+.blocked-users-list>article{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px;border:1px solid var(--line);border-radius:10px;background:#0e1116}
+.blocked-users-list>article>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.blocked-users-list strong{font-size:11px}
+.blocked-users-list span{font-size:9px;color:#87909a}
+.blocked-users-list small{font-size:8px;color:#646e79}
+.admin-points-layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(320px,.75fr);gap:12px}
+.service-point-admin-list{display:flex;flex-direction:column;gap:8px}
+.service-point-admin-list>article{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:14px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:11px;background:#0e1116}
+.service-point-admin-title{display:flex;align-items:center;gap:9px;min-width:0}
+.service-point-admin-title svg{color:#ff8050}
+.service-point-admin-title>div{display:flex;flex-direction:column;min-width:0}
+.service-point-admin-title strong{font-size:11px}
+.service-point-admin-title span{font-size:9px;color:#737d88}
+.service-point-admin-list label,.check-line{display:flex!important;flex-direction:row!important;align-items:center;gap:7px!important;font-size:9px;color:#8c96a1;cursor:pointer}
+.service-point-admin-list input[type=checkbox],.check-line input[type=checkbox]{width:auto!important;accent-color:#ff7541}
+.create-service-point-card .service-form-grid{margin-bottom:12px}
+.audit-events>div{grid-template-columns:minmax(0,1fr) minmax(180px,.45fr) auto}
+
+.service-transfer-card{border-color:rgba(255,127,69,.15)}
+.active-transfer-summary{padding:12px;border:1px solid rgba(255,127,69,.18);border-radius:10px;background:rgba(255,113,54,.045)}
+.active-transfer-summary>div{display:flex;align-items:center;gap:7px;color:#aab2bc}
+.active-transfer-summary svg{color:#ff8050}
+.active-transfer-summary span,.active-transfer-summary strong{font-size:10px}
+.active-transfer-summary b{color:#59636e}
+.active-transfer-summary small{display:block;margin-top:6px;font-size:9px;color:#6f7984}
+.transfer-compose{display:flex;flex-direction:column;gap:8px}
+.transfer-compose select,.transfer-compose textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#0c0f13;color:#e9edf1;font-size:10px}
+.transfer-compose button{align-self:flex-end}
+.transfer-mini-history{display:flex;flex-direction:column;gap:5px;margin-top:9px}
+.transfer-mini-history>div{display:flex;justify-content:space-between;gap:10px;padding:7px 8px;border-radius:8px;background:#0c0f13;border:1px solid #1b2027}
+.transfer-mini-history span{font-size:9px;color:#b8c0c9}
+.transfer-mini-history small{font-size:8px;color:#626d78;text-align:right}
+.transfer-board-list{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.transfer-board-row{display:grid;grid-template-columns:38px minmax(0,1fr) minmax(120px,.34fr) auto;gap:11px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:12px;background:#101318}
+.transfer-board-row.transfer-delivered{border-color:rgba(255,145,64,.18)}
+.transfer-board-row.transfer-accepted{border-color:rgba(85,207,139,.18)}
+.transfer-board-icon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:#0c0f13;color:#ff8050}
+.transfer-accepted .transfer-board-icon{color:#75dda0;background:rgba(78,201,132,.06)}
+.transfer-board-main{display:flex;flex-direction:column;min-width:0}
+.transfer-board-main strong{font-size:11px}
+.transfer-board-main span{font-size:9px;color:#89939e;margin-top:2px}
+.transfer-board-main small{font-size:8px;color:#626d78;margin-top:3px}
+.transfer-board-main p{margin:6px 0 0;font-size:9px;color:#939da7}
+.transfer-board-status{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.transfer-board-status strong{font-size:9px;color:#ff9365;text-transform:uppercase;letter-spacing:.04em}
+.transfer-board-status small{font-size:8px;color:#626d78}
+.transfer-board-actions{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+
+@media(max-width:1420px){
+  .admin-stats-security{grid-template-columns:repeat(3,1fr)}
+}
+@media(max-width:1080px){
+  .admin-security-grid,.admin-points-layout{grid-template-columns:1fr}
+  .service-point-admin-list>article{grid-template-columns:1fr 1fr}
+  .service-point-admin-title{grid-column:1/-1}
+  .transfer-board-row{grid-template-columns:38px minmax(0,1fr) auto}
+  .transfer-board-status{grid-column:3}
+  .transfer-board-actions{grid-column:2/-1}
+}
+@media(max-width:720px){
+  .admin-stats-security{grid-template-columns:repeat(2,1fr)}
+  .service-point-admin-list>article{grid-template-columns:1fr}
+  .service-point-admin-title{grid-column:auto}
+  .user-admin-actions{justify-content:flex-start}
+  .transfer-board-row{grid-template-columns:34px minmax(0,1fr)}
+  .transfer-board-status,.transfer-board-actions{grid-column:2;align-items:flex-start;justify-content:flex-start}
+  .transfer-mini-history>div{flex-direction:column}
+  .transfer-mini-history small{text-align:left}
+}
