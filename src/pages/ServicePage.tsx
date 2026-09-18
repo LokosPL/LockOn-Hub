@@ -534,8 +534,16 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
             <div className="service-form-grid">
               <label><span>Marka</span><input value={form.brand} onChange={(e)=>update('brand',e.target.value)} /></label>
               <label><span>Model</span><input value={form.model} onChange={(e)=>update('model',e.target.value)} /></label>
-              <label className="full"><span>Punkt</span><select value={pointId} onChange={(e)=>setPointId(e.target.value)}>{pointOptions.map((p)=><option key={p.id} value={p.id}>{p.name}{p.city ? ' — ' + p.city : ''}</option>)}</select></label>
-              <label className="full"><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Nowe zlecenie</option><option value="COMPLAINT">Zlecenie reklamacyjne</option></select></label>
+              <label><span>IMEI</span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="Opcjonalnie"/></label>
+              <label><span>Numer seryjny</span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Opcjonalnie"/></label>
+              <label className="full"><span>Punkt</span><select value={pointId} onChange={(e)=>{setPointId(e.target.value);update('assignedTechnicianId','');}}>{pointOptions.map((p)=><option key={p.id} value={p.id}>{p.name}{p.city ? ' — ' + p.city : ''}</option>)}</select></label>
+              <label><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Nowe zlecenie</option><option value="COMPLAINT">Zlecenie reklamacyjne</option></select></label>
+              <label><span>Przewidywany termin</span><input type="datetime-local" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>
+              {canManageOrderMeta && <>
+                <label><span>Technik</span><select value={form.assignedTechnicianId} onChange={(e)=>update('assignedTechnicianId',e.target.value)}><option value="">Nieprzypisany</option>{technicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>
+                <label><span>Szacowany koszt (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>
+              </>}
+              <label className="full"><span>Uwagi do urządzenia</span><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Stan obudowy, hasło serwisowe przekazane osobno, akcesoria…"/></label>
               <label className="full"><span>Opis usterki</span><textarea rows={6} value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} /></label>
             </div>
             <button className="button primary wide service-submit" disabled={busy || !pointId} onClick={()=>void submit()}>{busy ? 'Zapisywanie…' : 'Utwórz zlecenie'}</button>
