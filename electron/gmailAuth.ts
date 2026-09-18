@@ -86,12 +86,16 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
         if (!address || typeof address === 'string') throw new Error('Błąd callbacku Gmail OAuth.');
         const redirectUri = 'http://127.0.0.1:' + address.port + '/gmail/callback';
 
+        const clientSecret = APP_CONFIG.auth.googleClientSecret.trim();
+        if (!clientSecret) throw new Error('Brak danych Google OAuth wymaganych przez klienta desktopowego.');
+
         const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           redirect: 'error',
           body: new URLSearchParams({
             client_id: APP_CONFIG.auth.googleClientId,
+            client_secret: clientSecret,
             code,
             code_verifier: verifier,
             grant_type: 'authorization_code',
@@ -110,7 +114,7 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
           '/integrations/gmail/connect',
           {
             method: 'POST',
-            body: JSON.stringify({ pointId, refreshToken: tokenPayload.refresh_token })
+            body: JSON.stringify({ pointId, refreshToken: tokenPayload.refresh_token, clientSecret })
           },
           apiToken
         );
