@@ -71,13 +71,13 @@ export function UpdatePrompt() {
       <aside className="global-update-toast update-ready" aria-live="polite">
         <div className="global-update-icon"><Rocket size={18} /></div>
         <div className="global-update-copy">
-          <strong><CheckCircle2 size={14}/> ServiceOS v{update.version} jest gotowy</strong>
+          <strong><CheckCircle2 size={14}/> Aktualizacja v{update.version} pobrana automatycznie</strong>
           <span>
-            Masz teraz v{appInfo?.version ?? '—'}. Kliknij „Zaktualizuj teraz”, a ServiceOS sam zamknie się na moment,
-            zaktualizuje i uruchomi ponownie. Nie musisz ręcznie wyłączać ani włączać aplikacji.
+            Masz teraz v{appInfo?.version ?? '—'}. Chcesz zaktualizować aplikację teraz?
+            ServiceOS sam zamknie się na moment, zaktualizuje i uruchomi ponownie.
           </span>
           <div className="global-update-inline-actions">
-            <button className="button primary small" onClick={() => void window.lockOn.updater.install()}>Zaktualizuj teraz</button>
+            <button className="button primary small" onClick={() => void window.lockOn.updater.install()}>Tak, aktualizuj</button>
             <button className="button ghost small" onClick={() => setDismissedVersion(update.version)}>Później</button>
           </div>
         </div>
