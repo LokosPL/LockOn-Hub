@@ -415,3 +415,51 @@ WHERE slug='login';
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-18-central-v9','Refresh assistant knowledge for rich service workspace and Gmail onboarding')
 ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v10: account blocking and inter-point service logistics.
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS blocked_at timestamptz,
+  ADD COLUMN IF NOT EXISTS blocked_reason text,
+  ADD COLUMN IF NOT EXISTS blocked_by_user_id text REFERENCES users(id);
+
+ALTER TABLE points
+  ADD COLUMN IF NOT EXISTS service_enabled boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS accepts_external_repairs boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS service_note text;
+
+UPDATE points
+SET service_enabled=true, accepts_external_repairs=true
+WHERE id='nowogard';
+
+CREATE TABLE IF NOT EXISTS service_order_transfers (
+  id text PRIMARY KEY,
+  service_order_id text NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+  from_point_id text NOT NULL REFERENCES points(id),
+  to_point_id text NOT NULL REFERENCES points(id),
+  status text NOT NULL DEFAULT 'REQUESTED'
+    CHECK (status IN ('REQUESTED','IN_TRANSIT','DELIVERED','ACCEPTED','REJECTED','CANCELLED')),
+  note text,
+  sent_by_user_id text NOT NULL REFERENCES users(id),
+  accepted_by_user_id text REFERENCES users(id),
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  shipped_at timestamptz,
+  delivered_at timestamptz,
+  accepted_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (from_point_id <> to_point_id)
+);
+
+CREATE INDEX IF NOT EXISTS service_order_transfers_order_idx
+  ON service_order_transfers(service_order_id, requested_at DESC);
+
+CREATE INDEX IF NOT EXISTS service_order_transfers_destination_idx
+  ON service_order_transfers(to_point_id, status, requested_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS service_order_transfers_one_open_idx
+  ON service_order_transfers(service_order_id)
+  WHERE status IN ('REQUESTED','IN_TRANSIT','DELIVERED');
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v10','Account blocking, service-capable points and inter-point service transfers')
+ON CONFLICT (version) DO NOTHING;
