@@ -14,12 +14,16 @@
 - Neon Function slug: `lockonapi`
 - API: `https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech`
 
-Stan w chwili zapisania tego handoffu:
-- `main`: `5fc803138521e24e557878271b75543b46ab6db7`
-- publiczny release: `v0.10.0`
-- PR #21: zamknięty / scalony
-- aktywny Neon deployment: v15
-- GitHub Pages: `app.serviceos.pl`, DNS OK, Enforce HTTPS aktywne
+Stan produkcyjny po realizacji Priorytetu 1 (2026-09-18):
+- release baseline `main`: `4841af5a337c383645f432a4f892f8c4bd725ba6` (commit handoffu jest późniejszy)
+- publiczny release: `v0.11.0`
+- PR aplikacji #22: scalony
+- repo strony `main`: `5d4503d17958aa23a656dc3fe9b5b629b1e7398f`
+- PR strony #3: scalony
+- aktywny Neon deployment: v16
+- migracja DB: `2026-09-18-central-v11` zastosowana na produkcyjnym `main`
+- produkcyjny smoke v16: `/health` OK, `/me` bez sesji = 401
+- GitHub Pages / `app.serviceos.pl`: deploy po PR #3 zakończony sukcesem
 - Gmail test i wiadomości logistyczne działają produkcyjnie
 
 ## Zasady współpracy
@@ -51,7 +55,7 @@ Koszty zleceń są przeznaczone tylko dla OWNER / BOSS / COORDINATOR.
 - urządzenia, IMEI, serial
 - opis usterki
 - REPAIR / COMPLAINT
-- statusy naprawy
+- statusy naprawy, w tym `REPAIR_DONE` = naprawa zakończona, ale urządzenie nie musi być jeszcze gotowe do odbioru
 - technik
 - przewidywany termin
 - koszt szacowany / końcowy
@@ -71,6 +75,20 @@ Aktualne statusy:
 - REJECTED
 - CANCELLED
 
+Kierunek logistyczny jest osobnym polem `kind`:
+- `OUTBOUND_SERVICE` — wysyłka z bieżącego punktu do zewnętrznego serwisu
+- `RETURN_HOME` — obowiązkowy powrót do punktu macierzystego
+
+Zlecenie ma rozdzieloną semantykę lokalizacji:
+- `point_id` — historyczne pole kompatybilności / pierwotny punkt
+- `home_point_id` — trwały punkt macierzysty
+- `current_point_id` — aktualna fizyczna lokalizacja; `NULL` podczas transportu jest prawidłowe
+- backend używa `point_id` jako bezpiecznego fallbacku home podczas zgodności wstecznej
+- produkcyjny `home_point_id` pozostaje celowo nullable dla rolling-deploy compatibility; wszystkie istniejące rekordy są zbackfillowane, a v16 zapisuje go jawnie
+- świeży schema w `database/schema.sql` wymaga `home_point_id` przy nowych instalacjach
+- `READY` i `COMPLETED` są blokowane, dopóki urządzenie nie wróci i nie zostanie przyjęte w punkcie macierzystym
+- `COMPLETED` wymaga wcześniejszego `READY`
+
 Punkty mają:
 - `service_enabled`
 - `accepts_external_repairs`
@@ -82,7 +100,9 @@ Punkty mają:
 - kolejka i retry
 - worker Neon co 5 minut
 - test Gmail działa
-- osobne maile logistyczne: wysłano do serwisu / dostarczono / serwisant przyjął / odrzucono / anulowano
+- osobne maile logistyczne rozróżniają wysyłkę do serwisu i `RETURN_HOME`
+- klient dostaje informację o powrocie urządzenia do punktu macierzystego
+- e-mail `READY` mówi o odbiorze w punkcie macierzystym i jest możliwy dopiero po zakończeniu logistyki zwrotnej
 
 ### WWW / PWA
 - landing page na `app.serviceos.pl`
@@ -90,6 +110,8 @@ Punkty mają:
 - `panel.html` jako mobilny panel
 - PWA + service worker
 - mobilne: nowe zlecenie, zlecenia, status, notatki, transfery, administracja OWNER
+- desktop i mobile pokazują punkt macierzysty oraz aktualną fizyczną lokalizację
+- desktop i mobile mają osobną akcję „Odeślij do punktu macierzystego” po `REPAIR_DONE`
 
 ### OWNER
 - blokada / odblokowanie kont
@@ -140,39 +162,28 @@ Istnieją:
 
 ---
 
-# PRIORYTETY NASTĘPNEJ SESJI — ZACZNIJ OD TEGO
+# PRIORYTETY NASTĘPNEJ SESJI — PRIORYTET 1 WYKONANY, ZACZNIJ OD 2
 
-## 1. Punkt macierzysty telefonu i obowiązkowy powrót z serwisu
+## 1. [WYKONANE] Punkt macierzysty telefonu i obowiązkowy powrót z serwisu
 
-To jest NAJWAŻNIEJSZE.
+Zrealizowane i wdrożone produkcyjnie w v0.11.0 / Neon v16.
 
-Punkt, w którym klient pierwotnie oddał telefon, jest **punktem macierzystym zlecenia / urządzenia**.
+Wdrożono:
+- trwałe `home_point_id` i fizyczne `current_point_id`;
+- migrację `2026-09-18-central-v11` z backfillem istniejących danych;
+- `OUTBOUND_SERVICE` i `RETURN_HOME` jako rozłączne kierunki logistyczne;
+- status `REPAIR_DONE`, oddzielający zakończenie naprawy od gotowości klienta;
+- obowiązkową akcję „Odeślij do punktu macierzystego” po naprawie w obcym serwisie;
+- blokadę backendową `READY` / `COMPLETED` przed fizycznym powrotem;
+- wymóg `READY` przed `COMPLETED`;
+- czytelny punkt macierzysty i aktualną lokalizację w desktop oraz mobile/PWA;
+- osobne teksty e-mail dla outbound i return-home;
+- produkcyjny smoke `/health` + kontrolę, że `/me` bez sesji nadal zwraca 401;
+- release desktop `v0.11.0`.
 
-Założenie biznesowe:
-- klient oddaje urządzenie w punkcie macierzystym;
-- punkt może wysłać telefon do innego punktu-serwisu;
-- docelowy serwis tylko realizuje naprawę;
-- po zakończeniu naprawy serwis **musi odesłać urządzenie do punktu macierzystego**;
-- klient odbiera urządzenie w punkcie macierzystym, nie w zewnętrznym serwisie.
+Historyczny przypadek `Nowogard → serwis → Nowogard` został poprawnie rozpoznany przez backfill jako `OUTBOUND_SERVICE` + `RETURN_HOME`.
 
-Należy przebudować logistykę tak, aby:
-- zlecenie miało trwałe `home_point_id` / równoważną jednoznaczną semantykę;
-- outbound transfer do serwisu nie zmieniał punktu macierzystego;
-- po ACCEPTED w zewnętrznym serwisie pojawiała się później obowiązkowa akcja „Odeślij do punktu macierzystego”;
-- zwrot miał własny etap: wysłano z serwisu -> dostarczono do punktu macierzystego -> punkt macierzysty przyjął zwrot;
-- zewnętrzny serwis nie mógł finalnie zakończyć przepływu klienta tak, jakby urządzenie miało zostać odebrane tam;
-- READY / odbiór przez klienta powinien być możliwy dopiero po powrocie urządzenia do punktu macierzystego, jeśli zlecenie było wysyłane do zewnętrznego serwisu;
-- interfejs desktop i mobile jasno pokazywał „Punkt macierzysty” i aktualną fizyczną lokalizację urządzenia.
-
-Zmień również e-maile dla klienta:
-- „Urządzenie wysłano z punktu X do serwisu Y”
-- „Urządzenie dotarło do serwisu Y”
-- „Serwisant w Y przyjął urządzenie”
-- „Naprawa została zakończona i urządzenie wraca do punktu X”
-- „Urządzenie dotarło z powrotem do punktu X”
-- dopiero potem „Urządzenie jest gotowe do odbioru w punkcie X”
-
-Nie mieszaj statusu naprawy z fizyczną logistyką urządzenia.
+Nie implementuj tego od nowa. Przy kolejnych zmianach pilnuj regresji tych invariantów.
 
 ## 2. Gmail ma być automatyczny i niewidoczny, jeśli już działa
 
@@ -271,5 +282,5 @@ Przed implementacją przeanalizuj FK i wszystkie tabele w Neon. Nie kasuj projek
 1. Otwórz ten plik z GitHub.
 2. Sprawdź aktualny `main`, latest release i workflows.
 3. Sprawdź aktywny deployment `lockonapi` w Neon i aktualny schemat.
-4. Zacznij od priorytetu **1 — punkt macierzysty i obowiązkowy zwrot urządzenia**.
+4. Priorytet 1 jest wykonany. Zacznij od priorytetu **2 — Gmail ma działać automatycznie i być niewidoczny, jeśli połączenie jest kompletne**.
 5. Wykonuj zmiany samodzielnie przez GitHub/Neon i dopiero przy koniecznej ręcznej czynności poproś użytkownika o jeden krok.
