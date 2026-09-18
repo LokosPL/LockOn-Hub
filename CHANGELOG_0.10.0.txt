@@ -1,0 +1,13 @@
+LockOn ServiceOS 0.10.0
+
+- Spójniejszy Google OAuth + Gmail onboarding dla OWNER/BOSS/COORDINATOR z jednym punktem.
+- Jedno kliknięcie logowania może prowadzić bezpośrednio do wymaganej jednorazowej zgody gmail.send.
+- Gmail OAuth używa login_hint konta ServiceOS, aby ograniczyć przypadkowe wybranie innego konta.
+- Czytelne strony callbacku i dokładniejsze komunikaty access_denied / błędów Google.
+- Historia statusów zlecenia w module Serwis: oś czasu, użytkownik, czas i notatka.
+- Endpoint historii z kontrolą roli i punktu po stronie centralnego backendu.
+- Twarda deduplikacja klientów po lower(email) i znormalizowanym numerze telefonu.
+- Race-safe tworzenie klienta przy równoległej pracy wielu komputerów.
+- Walidacja e-mail/telefon po stronie UI i backendu.
+- Produkcyjny backend Neon zachowuje server-side kontrolę uprawnień.
+- gmail.send pozostaje jedynym zakresem Gmail; aplikacja nie czyta skrzynki.
