@@ -86,7 +86,10 @@ const pointView = (row) => ({
   id: row.id,
   name: row.name,
   city: row.city,
-  active: row.active !== false
+  active: row.active !== false,
+  serviceEnabled: row.service_enabled === true,
+  acceptsExternalRepairs: row.accepts_external_repairs === true,
+  serviceNote: row.service_note || null
 });
 
 const customerView = (row) => ({
@@ -113,7 +116,7 @@ const loadRequestedPoint = async (userId) => {
 
 const loadUser = async (userId) => {
   const { rows } = await q(
-    'SELECT id,google_sub,email,name,picture_url,role_code,status,first_login_at,last_login_at FROM users WHERE id=$1 LIMIT 1',
+    'SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 LIMIT 1',
     [userId]
   );
   return rows[0] || null;
@@ -121,7 +124,7 @@ const loadUser = async (userId) => {
 
 const loadPointsForUser = async (user) => {
   if (GLOBAL_ROLES.has(user.role_code)) {
-    const { rows } = await q('SELECT id,name,city,active FROM points WHERE active=true ORDER BY name');
+    const { rows } = await q('SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE active=true ORDER BY name');
     return rows.map(pointView);
   }
   const { rows } = await q(
@@ -138,6 +141,9 @@ const publicUser = async (user) => ({
   picture: user.picture_url || null,
   role: user.role_code || null,
   status: user.status,
+  blocked: Boolean(user.blocked_at),
+  blockedAt: user.blocked_at || null,
+  blockedReason: user.blocked_reason || null,
   pointIds: (await loadPointsForUser(user)).map((point) => point.id),
   requestedPoint: await loadRequestedPoint(user.id),
   firstLoginAt: user.first_login_at,
@@ -166,7 +172,7 @@ const currentSession = async (request) => {
   if (!token) return null;
   const hash = tokenHash(token);
   const { rows } = await q(
-    "SELECT s.id AS session_id,s.user_id,s.client_type,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.status,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() LIMIT 1",
+    "SELECT s.id AS session_id,s.user_id,s.client_type,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
     [hash]
   );
   const row = rows[0];
@@ -182,6 +188,8 @@ const currentSession = async (request) => {
       picture_url: row.picture_url,
       role_code: row.role_code,
       status: row.status,
+      blocked_at: row.blocked_at,
+      blocked_reason: row.blocked_reason,
       first_login_at: row.first_login_at,
       last_login_at: row.last_login_at
     }
@@ -281,7 +289,7 @@ const exchangeDesktopAuthorizationCode = async (body, expectedPath) => {
 
 const loginProfile = async (profile, clientType, allowCreate) => {
   let result = await q(
-    'SELECT id,google_sub,email,name,picture_url,role_code,status,first_login_at,last_login_at FROM users WHERE google_sub=$1 OR lower(email)=lower($2) ORDER BY CASE WHEN google_sub=$1 THEN 0 ELSE 1 END LIMIT 1',
+    'SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE google_sub=$1 OR lower(email)=lower($2) ORDER BY CASE WHEN google_sub=$1 THEN 0 ELSE 1 END LIMIT 1',
     [profile.sub, profile.email]
   );
   let user = result.rows[0] || null;
@@ -307,6 +315,10 @@ const loginProfile = async (profile, clientType, allowCreate) => {
       [profile.sub, profile.name, profile.picture, user.id]
     );
     user = await loadUser(user.id);
+  }
+
+  if (user.blocked_at) {
+    throw Object.assign(new Error(user.blocked_reason ? 'Konto zostało zablokowane: ' + cleanText(user.blocked_reason, 180) : 'Konto zostało zablokowane przez właściciela.'), { status: 403, code: 'ACCOUNT_BLOCKED' });
   }
 
   if (clientType === 'WEB' && user.status !== 'ACTIVE') {
@@ -889,7 +901,7 @@ const route = async (request) => {
         await client.query('ROLLBACK');
         return json(request, { error: 'CODE_EXPIRED', message: 'Kod jest nieprawidłowy, wykorzystany albo wygasł.' }, 401);
       }
-      const userResult = await client.query("SELECT id,google_sub,email,name,picture_url,role_code,status,first_login_at,last_login_at FROM users WHERE id=$1 AND status='ACTIVE'", [result.rows[0].user_id]);
+      const userResult = await client.query("SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 AND status='ACTIVE'", [result.rows[0].user_id]);
       if (!userResult.rows[0]) {
         await client.query('ROLLBACK');
         return json(request, { error: 'ACCOUNT_NOT_ACTIVE', message: 'Konto nie jest aktywne.' }, 403);
@@ -930,7 +942,7 @@ const route = async (request) => {
     const session = await requireActive(request);
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
     const [points, users, loginEvents, pendingRevenue] = await Promise.all([
-      q('SELECT id,name,city,active FROM points ORDER BY name'),
+      q('SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points ORDER BY name'),
       q("SELECT id,google_sub,email,name,picture_url,role_code,status,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
       q("SELECT a.id,a.actor_user_id AS user_id,u.email,u.name,u.role_code AS role,u.status,a.created_at FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id WHERE a.action LIKE 'LOGIN_%' ORDER BY a.created_at DESC LIMIT 100"),
       q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC")
@@ -957,7 +969,7 @@ const route = async (request) => {
     const body = await readJson(request);
     const name = cleanText(body.name, 90), city = cleanText(body.city, 90);
     if (!name || !city) return json(request, { error:'VALIDATION',message:'Wpisz nazwę punktu i miasto.' }, 400);
-    let result = await q('SELECT id,name,city,active FROM points WHERE lower(name)=lower($1) AND lower(city)=lower($2) LIMIT 1',[name,city]);
+    let result = await q('SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE lower(name)=lower($1) AND lower(city)=lower($2) LIMIT 1',[name,city]);
     if (result.rows[0]) return json(request, pointView(result.rows[0]));
     const pointId=makeId('pnt');
     result=await q('INSERT INTO points(id,name,city,active) VALUES($1,$2,$3,true) RETURNING id,name,city,active',[pointId,name,city]);
