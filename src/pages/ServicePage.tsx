@@ -86,6 +86,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const [notice, setNotice] = useState('');
   const [gmail, setGmail] = useState<GmailConnectionStatus | null>(null);
   const [gmailBusy, setGmailBusy] = useState(false);
+  const [gmailChecking, setGmailChecking] = useState(false);
   const [notificationBusy, setNotificationBusy] = useState(false);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryItem[]>([]);
@@ -108,6 +109,19 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const canEditStatus = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
   const canManageOrderMeta = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
   const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
+  const gmailState = gmail?.connectionState ?? (
+    gmail?.connected ? 'CONNECTED' :
+    gmail?.needsReconnect ? 'REAUTH_REQUIRED' :
+    gmail?.status ? 'TEMPORARY_ERROR' :
+    'NOT_CONNECTED'
+  );
+  const showGmailOnboarding = Boolean(
+    canManageGmail &&
+    !gmailChecking &&
+    gmail &&
+    !gmail.connected &&
+    (gmailState === 'NOT_CONNECTED' || gmailState === 'REAUTH_REQUIRED')
+  );
 
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -189,6 +203,27 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     }
   };
 
+  const loadGmailStatus = async (selectedPointId = pointId) => {
+    if (!selectedPointId || !canManageGmail) {
+      setGmail(null);
+      return;
+    }
+    setGmailChecking(true);
+    try {
+      setGmail(await window.lockOn.gmail.getStatus(selectedPointId));
+    } catch (e) {
+      setGmail({
+        connected:false,
+        needsReconnect:false,
+        connectionState:'TEMPORARY_ERROR',
+        pointId:selectedPointId,
+        lastError:e instanceof Error ? e.message : 'Nie udało się teraz sprawdzić połączenia Gmail.'
+      });
+    } finally {
+      setGmailChecking(false);
+    }
+  };
+
   const loadMailData = async (selectedPointId = pointId) => {
     if (!selectedPointId || !canManageGmail) {
       setGmail(null);
@@ -198,12 +233,12 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     }
     setNotificationBusy(true);
     try {
-      const [gmailState, settings, history] = await Promise.all([
+      const [gmailConnection, settings, history] = await Promise.all([
         window.lockOn.gmail.getStatus(selectedPointId),
         window.lockOn.notifications.getSettings(selectedPointId),
         window.lockOn.notifications.getHistory(selectedPointId)
       ]);
-      setGmail(gmailState);
+      setGmail(gmailConnection);
       setNotificationSettings(settings);
       setNotificationHistory(history);
     } catch (e) {
@@ -219,7 +254,9 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   }, []);
 
   useEffect(() => {
-    void loadMailData(pointId);
+    setNotificationSettings(null);
+    setNotificationHistory([]);
+    void loadGmailStatus(pointId);
   }, [pointId, canManageGmail]);
 
   useEffect(() => {
@@ -544,29 +581,26 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
           <button className={tab === 'NEW' ? 'active' : ''} onClick={() => setTab('NEW')}><ClipboardPlus size={15}/> Nowe zlecenie</button>
           <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia</button>
           <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
-          {canManageGmail && <button className={tab === 'EMAILS' ? 'active' : ''} onClick={() => setTab('EMAILS')}><BellRing size={15}/> Powiadomienia</button>}
+          {canManageGmail && <button className={tab === 'EMAILS' ? 'active' : ''} onClick={() => { setTab('EMAILS'); void loadMailData(pointId); }}><BellRing size={15}/> Powiadomienia</button>}
         </div>
       </section>
 
-      {canManageGmail && (
+      {showGmailOnboarding && (
         <section className="panel-card service-mail-card">
           <div className="service-mail-copy">
-            <div className="service-mail-icon">{gmail?.connected ? <MailCheck size={20}/> : <Mail size={20}/>}</div>
+            <div className="service-mail-icon"><Mail size={20}/></div>
             <div>
-              <span>Gmail punktu · {pointOptions.find((p) => p.id === pointId)?.name ?? 'punkt'}</span>
-              <strong>{gmail?.connected ? gmail.email : gmail?.needsReconnect ? (gmail.email || 'Gmail wymaga ponownego połączenia') : 'Gmail niepołączony'}</strong>
-              <small>{gmail?.connected
-                ? (gmail.lastError ? 'Ostatni błąd: ' + gmail.lastError : 'Połączenie aktywne. ServiceOS ma wyłącznie zakres gmail.send.')
-                : gmail?.needsReconnect
-                  ? 'To połączenie pochodzi ze starszej wersji. Połącz Gmail ponownie, aby uzupełnić bezpieczne dane OAuth i odblokować kolejkę.'
-                  : 'Połącz konto nadawcy, aby automatycznie informować klientów o statusie naprawy.'}</small>
+              <span>Automatyczne wiadomości · {pointOptions.find((p) => p.id === pointId)?.name ?? 'punkt'}</span>
+              <strong>{gmailState === 'REAUTH_REQUIRED' ? 'Google wymaga ponownej zgody' : 'Włącz automatyczne e-maile'}</strong>
+              <small>{gmailState === 'REAUTH_REQUIRED'
+                ? 'Poprzednia zgoda Gmail wygasła albo została cofnięta. Połącz konto ponownie, aby wznowić automatyczną wysyłkę.'
+                : 'Jednorazowo połącz konto Google nadawcy. Po poprawnym połączeniu ten komunikat zniknie i Gmail będzie działał automatycznie w tle.'}</small>
             </div>
           </div>
           <div className="service-mail-actions">
-            {gmail?.connected && <button className="button secondary" disabled={gmailBusy} onClick={() => void testGmail()}><Send size={14}/> Wyślij test</button>}
-            {gmail?.connected
-              ? <button className="button secondary" disabled={gmailBusy} onClick={() => void disconnectGmail()}>Odłącz Gmail</button>
-              : <button className="button primary" disabled={gmailBusy || !pointId} onClick={() => void connectGmail()}>{gmailBusy ? 'Łączenie…' : gmail?.needsReconnect ? 'Połącz Gmail ponownie' : 'Połącz Gmail'}</button>}
+            <button className="button primary" disabled={gmailBusy || !pointId} onClick={() => void connectGmail()}>
+              {gmailBusy ? 'Łączenie…' : gmailState === 'REAUTH_REQUIRED' ? 'Autoryzuj Gmail ponownie' : 'Połącz Gmail'}
+            </button>
           </div>
         </section>
       )}
@@ -811,7 +845,42 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
       )}
 
       {tab === 'EMAILS' && canManageGmail && (
-        <div className="notification-layout">
+        <>
+          <section className="panel-card service-mail-card">
+            <div className="service-mail-copy">
+              <div className="service-mail-icon">{gmail?.connected ? <MailCheck size={20}/> : <Mail size={20}/>}</div>
+              <div>
+                <span>Nadawca Gmail · {pointOptions.find((p) => p.id === pointId)?.name ?? 'punkt'}</span>
+                <strong>{gmailChecking
+                  ? 'Sprawdzanie połączenia…'
+                  : gmail?.connected
+                    ? (gmail.email || 'Gmail połączony')
+                    : gmailState === 'REAUTH_REQUIRED'
+                      ? (gmail?.email || 'Wymagana ponowna autoryzacja')
+                      : gmailState === 'TEMPORARY_ERROR'
+                        ? (gmail?.email || 'Nie udało się potwierdzić połączenia')
+                        : 'Brak połączonego Gmail'}</strong>
+                <small>{gmailChecking
+                  ? 'ServiceOS automatycznie sprawdza, czy zapisany dostęp Gmail nadal działa.'
+                  : gmail?.connected
+                    ? 'Połączenie działa automatycznie w tle. ServiceOS używa wyłącznie zakresu gmail.send.'
+                    : gmailState === 'REAUTH_REQUIRED'
+                      ? (gmail?.lastError || 'Zgoda Google wygasła albo została cofnięta.')
+                      : gmailState === 'TEMPORARY_ERROR'
+                        ? (gmail?.lastError || 'To może być chwilowa awaria Google. Ponowna zgoda nie jest teraz wymagana.')
+                        : 'Połącz konto tylko wtedy, gdy ten punkt ma wysyłać automatyczne wiadomości.'}</small>
+              </div>
+            </div>
+            <div className="service-mail-actions">
+              {gmail?.connected && <button className="button secondary" disabled={gmailBusy} onClick={() => void testGmail()}><Send size={14}/> Wyślij test</button>}
+              {gmail?.connected && <button className="button secondary" disabled={gmailBusy} onClick={() => void disconnectGmail()}>Odłącz Gmail</button>}
+              {!gmail?.connected && gmailState === 'REAUTH_REQUIRED' && <button className="button primary" disabled={gmailBusy} onClick={() => void connectGmail()}>{gmailBusy ? 'Łączenie…' : 'Autoryzuj ponownie'}</button>}
+              {!gmail?.connected && gmailState === 'NOT_CONNECTED' && <button className="button primary" disabled={gmailBusy} onClick={() => void connectGmail()}>{gmailBusy ? 'Łączenie…' : 'Połącz Gmail'}</button>}
+              {gmailState === 'TEMPORARY_ERROR' && <button className="button secondary" disabled={gmailChecking} onClick={() => void loadGmailStatus(pointId)}><RefreshCw className={gmailChecking ? 'spin' : ''} size={14}/> Sprawdź ponownie</button>}
+            </div>
+          </section>
+
+          <div className="notification-layout">
           <section className="panel-card notification-settings-card">
             <div className="panel-heading">
               <div><span className="eyebrow"><Settings2 size={13}/> AUTOMATYKA</span><h2>Ustawienia wiadomości</h2><p>Konfiguracja jest zapisana centralnie dla wybranego punktu.</p></div>
@@ -879,7 +948,8 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               {!notificationBusy && notificationHistory.length === 0 && <div className="service-empty">Brak wysłanych powiadomień dla tego punktu.</div>}
             </div>
           </section>
-        </div>
+          </div>
+        </>
       )}
     </div>
   );
