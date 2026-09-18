@@ -2,6 +2,16 @@
 -- Mirrors the schema already provisioned in Neon project "LockOn ServiceOS".
 -- Keep this file additive/backwards-compatible; destructive migrations require review.
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version text PRIMARY KEY,
+  description text NOT NULL,
+  applied_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v1','Initial LockOn ServiceOS central schema')
+ON CONFLICT (version) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS roles (
   code text PRIMARY KEY,
   label text NOT NULL,
