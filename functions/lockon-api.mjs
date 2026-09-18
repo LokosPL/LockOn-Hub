@@ -1911,7 +1911,7 @@ export default {
       "INSERT INTO service_order_transfers(id,service_order_id,from_point_id,to_point_id,status,note,sent_by_user_id,shipped_at) VALUES($1,$2,$3,$4,'IN_TRANSIT',NULLIF($5,''),$6,now()) RETURNING *",
       [transferId,order.id,fromPointId,toPointId,note,u.id]
     )).rows[0];
-    await q('UPDATE service_orders SET updated_at=now() WHERE id=$1',[order.id]);
+    await q('UPDATE service_orders SET assigned_technician_id=NULL,updated_at=now() WHERE id=$1',[order.id]);
 
     const notification=await queueTransferNotification(u,order.id,row,'IN_TRANSIT',note);
     await audit(u.id,'SERVICE_TRANSFER_SENT','service_order',order.id,fromPointId,{transferId,toPointId,notification});
