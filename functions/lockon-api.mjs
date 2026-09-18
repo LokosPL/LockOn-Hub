@@ -919,27 +919,36 @@ const route = async (request) => {
       await client.query('COMMIT');
 
       let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
-      const settingsResult=await q(
-        "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
-        [pointId]
-      );
-      const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
-      if(!customer.email){
-        notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
-      }else if(settings.automatic_email_enabled!==true){
-        notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
-      }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes('RECEIVED')){
-        notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
-      }else{
-        const nid=makeId('ntf');
-        await q(
-          "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",
-          [nid,u.id,customer.id,oid,customer.email,JSON.stringify({from:null,to:'RECEIVED',note:null})]
+      try{
+        const settingsResult=await q(
+          "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
+          [pointId]
         );
-        notification={queued:true,...(await processNotification(nid))};
+        const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
+        if(!customer.email){
+          notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
+        }else if(settings.automatic_email_enabled!==true){
+          notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
+        }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes('RECEIVED')){
+          notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
+        }else{
+          const nid=makeId('ntf');
+          await q(
+            "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",
+            [nid,u.id,customer.id,oid,customer.email,JSON.stringify({from:null,to:'RECEIVED',note:null})]
+          );
+          notification={queued:true,...(await processNotification(nid))};
+        }
+      }catch(notificationError){
+        console.error('[intake notification]',notificationError);
+        notification={queued:false,sent:false,reason:'NOTIFICATION_ERROR'};
       }
 
-      await audit(u.id,'SERVICE_ORDER_CREATED','service_order',oid,pointId,{orderType,notification});
+      try{
+        await audit(u.id,'SERVICE_ORDER_CREATED','service_order',oid,pointId,{orderType,notification});
+      }catch(auditError){
+        console.error('[service order audit]',auditError);
+      }
       return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,issueDescription:issue,status:'RECEIVED',receivedAt:order.received_at},reusedCustomer:reused,notification},201);
     }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
   }
@@ -963,30 +972,39 @@ const route = async (request) => {
     await q("UPDATE service_orders SET status=$1,updated_at=now(),completed_at=CASE WHEN $1='COMPLETED' THEN now() ELSE completed_at END WHERE id=$2",[next,found.id]);
     await q('INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,note,changed_by_user_id) VALUES($1,$2,$3,$4,$5,$6)',[makeId('hst'),found.id,found.status,next,note||null,u.id]);
 
-    const customer=(await q('SELECT email FROM customers WHERE id=$1',[found.customer_id])).rows[0];
-    const settingsResult=await q(
-      "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
-      [found.point_id]
-    );
-    const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
     let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
-
-    if(!customer?.email){
-      notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
-    }else if(settings.automatic_email_enabled!==true){
-      notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
-    }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes(next)){
-      notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
-    }else{
-      const nid=makeId('ntf');
-      await q(
-        "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",
-        [nid,u.id,found.customer_id,found.id,customer.email,JSON.stringify({from:found.status,to:next,note:note||null})]
+    try{
+      const customer=(await q('SELECT email FROM customers WHERE id=$1',[found.customer_id])).rows[0];
+      const settingsResult=await q(
+        "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
+        [found.point_id]
       );
-      notification={queued:true,...(await processNotification(nid))};
+      const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
+
+      if(!customer?.email){
+        notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
+      }else if(settings.automatic_email_enabled!==true){
+        notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
+      }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes(next)){
+        notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
+      }else{
+        const nid=makeId('ntf');
+        await q(
+          "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",
+          [nid,u.id,found.customer_id,found.id,customer.email,JSON.stringify({from:found.status,to:next,note:note||null})]
+        );
+        notification={queued:true,...(await processNotification(nid))};
+      }
+    }catch(notificationError){
+      console.error('[status notification]',notificationError);
+      notification={queued:false,sent:false,reason:'NOTIFICATION_ERROR'};
     }
 
-    await audit(u.id,'SERVICE_STATUS_CHANGED','service_order',found.id,found.point_id,{from:found.status,to:next,notification});
+    try{
+      await audit(u.id,'SERVICE_STATUS_CHANGED','service_order',found.id,found.point_id,{from:found.status,to:next,notification});
+    }catch(auditError){
+      console.error('[service status audit]',auditError);
+    }
     const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
     return json(request,{order:view,notification});
   }
