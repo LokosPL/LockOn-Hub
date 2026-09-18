@@ -245,6 +245,7 @@ CREATE TABLE IF NOT EXISTS point_email_senders (
   sender_email text NOT NULL,
   google_sub text,
   refresh_token_ciphertext text NOT NULL,
+  oauth_client_secret_ciphertext text,
   status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','REVOKED','ERROR')),
   last_error text,
   connected_at timestamptz NOT NULL DEFAULT now(),
@@ -286,4 +287,13 @@ ON CONFLICT (slug) DO UPDATE SET
 
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-18-central-v2','Gmail sender, account-scoped help and assistant knowledge')
+ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v3: Google token endpoint compatibility for Gmail refresh.
+ALTER TABLE point_email_senders
+  ADD COLUMN IF NOT EXISTS oauth_client_secret_ciphertext text;
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v3','Store encrypted OAuth client credential for Gmail refresh flow')
 ON CONFLICT (version) DO NOTHING;
