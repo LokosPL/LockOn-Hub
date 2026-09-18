@@ -1192,7 +1192,7 @@ const route = async (request) => {
     if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do historii zlecenia.'),{status:403});
     const order=(await q('SELECT id,point_id FROM service_orders WHERE id=$1 LIMIT 1',[historyMatch[1]])).rows[0];
     if(!order)return json(request,{error:'NOT_FOUND'},404);
-    await requirePoint(u,order.point_id);
+    await requireOrder(u,order.id);
     const {rows}=await q(
       "SELECT h.id,h.from_status,h.to_status,h.note,h.created_at,h.changed_by_user_id,usr.name AS changed_by_name,usr.email AS changed_by_email FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.created_at ASC,h.id ASC",
       [order.id]
@@ -1216,7 +1216,7 @@ const route = async (request) => {
     if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do notatek zlecenia.'),{status:403});
     const order=(await q('SELECT id,point_id FROM service_orders WHERE id=$1 LIMIT 1',[notesMatch[1]])).rows[0];
     if(!order)return json(request,{error:'NOT_FOUND'},404);
-    await requirePoint(u,order.point_id);
+    await requireOrder(u,order.id);
 
     if(method==='GET'){
       const {rows}=await q(
@@ -1247,7 +1247,7 @@ const route = async (request) => {
     if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji zlecenia.'),{status:403});
     const found=(await q('SELECT id,point_id,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
-    await requirePoint(u,found.point_id);
+    await requireOrder(u,found.id);
     const body=await readJson(request);
     const imei=cleanText(body.imei,32).replace(/\s+/g,'');
     const serialNumber=cleanText(body.serialNumber,120);
@@ -1431,7 +1431,7 @@ const route = async (request) => {
 
     const found=(await q('SELECT id,point_id,status,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
-    await requirePoint(u,found.point_id);
+    await requireOrder(u,found.id);
 
     if(found.status===next){
       const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
