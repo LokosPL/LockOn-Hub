@@ -452,7 +452,7 @@ const attachTransfers = async (orders) => {
     const latestTransfer = transfers[0] || null;
     const openTransfer = transfers.find((item) => ['REQUESTED','IN_TRANSIT','DELIVERED'].includes(item.status)) || null;
     const homePointId = order.homePointId || order.pointId;
-    const currentPointId = order.currentPointId || null;
+    const currentPointId = order.currentPointId || (!openTransfer ? homePointId : null);
     const latestOutboundAccepted = transfers.find((item) =>
       item.kind === 'OUTBOUND_SERVICE' &&
       item.status === 'ACCEPTED' &&
@@ -1695,7 +1695,8 @@ const route = async (request) => {
       if(openTransfer){
         return json(request,{error:'RETURN_REQUIRED',message:'Urządzenie ma aktywny transport. Status gotowości do odbioru można ustawić dopiero po fizycznym powrocie i przyjęciu w punkcie macierzystym.'},409);
       }
-      if(found.current_point_id!==homePointId){
+      const effectiveCurrentPointId=found.current_point_id||(!openTransfer?homePointId:null);
+      if(effectiveCurrentPointId!==homePointId){
         return json(request,{error:'RETURN_REQUIRED',message:'Urządzenie znajduje się poza punktem macierzystym. Najpierw odeślij je do punktu macierzystego i potwierdź przyjęcie zwrotu.'},409);
       }
       await requirePoint(u,homePointId);
