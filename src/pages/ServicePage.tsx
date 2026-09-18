@@ -20,7 +20,7 @@ export function ServicePage({ auth }: ServicePageProps) {
   const pointOptions = useMemo(() => auth.points, [auth.points]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
 
-  const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm((current) => ({ ...current, [key]: value }));
 
   const search = async () => {
     const clean = query.trim();
@@ -96,7 +96,7 @@ export function ServicePage({ auth }: ServicePageProps) {
             <label><span>Marka</span><input value={form.brand} onChange={(e)=>update('brand',e.target.value)} /></label>
             <label><span>Model</span><input value={form.model} onChange={(e)=>update('model',e.target.value)} /></label>
             <label className="full"><span>Punkt</span><select value={pointId} onChange={(e)=>setPointId(e.target.value)}>{pointOptions.map((p)=><option key={p.id} value={p.id}>{p.name}{p.city ? ` — ${p.city}` : ''}</option>)}</select></label>
-            <label className="full"><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType',e.target.value)}><option value="REPAIR">Nowe zlecenie</option><option value="COMPLAINT">Reklamacja</option></select></label>
+            <label className="full"><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Nowe zlecenie</option><option value="COMPLAINT">Reklamacja</option></select></label>
             <label className="full"><span>Opis usterki</span><textarea rows={6} value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} /></label>
           </div>
           <button className="button primary wide service-submit" disabled={busy || !pointId} onClick={()=>void submit()}>{busy ? 'Zapisywanie…' : 'Utwórz zlecenie'}</button>
