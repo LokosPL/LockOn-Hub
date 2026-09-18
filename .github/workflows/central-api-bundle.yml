@@ -1,0 +1,55 @@
+name: Build central API bundle
+
+on:
+  push:
+    paths:
+      - "functions/lockon-api.mjs"
+      - ".github/workflows/central-api-bundle.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lockon-central-api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Install function build dependencies
+        run: npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 esbuild@0.25.12
+
+      - name: Check source syntax
+        run: node --check functions/lockon-api.mjs
+
+      - name: Bundle for Neon Functions
+        shell: bash
+        run: |
+          mkdir -p central-api-dist
+          npx esbuild functions/lockon-api.mjs \
+            --bundle \
+            --platform=node \
+            --target=node24 \
+            --format=esm \
+            --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" \
+            --outfile=central-api-dist/index.mjs
+          (cd central-api-dist && zip -9 function.zip index.mjs)
+
+      - name: Upload Neon function bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: lockon-central-api
+          path: central-api-dist/function.zip
+          if-no-files-found: error
+          retention-days: 3
