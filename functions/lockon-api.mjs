@@ -18,6 +18,8 @@ const WEBSITE_CODE_TTL_MS = 1000 * 60 * 5;
 const BODY_LIMIT = 64 * 1024;
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
 const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
+const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN']);
+const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const SERVICE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const googleVerifier = new OAuth2Client();
@@ -510,6 +512,9 @@ const assistantReply = async (session, message) => {
   }
 
   if (lower.includes('klient')) {
+    if (!SERVICE_READ_ROLES.has(user.role_code)) {
+      return { text: 'Twoja rola nie ma dostępu do danych klientów. Mogę nadal pomóc w obsłudze samej aplikacji.' };
+    }
     let term = message.replace(/znajdź|znajdz|wyszukaj|klienta|klient|pokaż|pokaz|szukaj/gi, ' ').replace(/\s+/g, ' ').trim();
     term = cleanText(term, 120);
     if (term.length >= 2) {
@@ -521,6 +526,9 @@ const assistantReply = async (session, message) => {
   }
 
   if (lower.includes('zlecen') || lower.includes('napraw')) {
+    if (!SERVICE_READ_ROLES.has(user.role_code)) {
+      return { text: 'Twoja rola nie ma dostępu do danych zleceń serwisowych.' };
+    }
     const number = message.match(/\b\d{1,10}\b/);
     if (number) {
       const order = await getVisibleOrderByNumber(user, number[0]);
@@ -794,15 +802,19 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/service/customers/search'){
     const session=await requireActive(request);
+    if(!SERVICE_READ_ROLES.has(session.user.role_code)) throw Object.assign(new Error('Brak uprawnień do danych klientów.'),{status:403});
     return json(request,await searchCustomers(session.user,url.searchParams.get('q')||''));
   }
 
   if(method==='GET'&&url.pathname==='/service/orders'){
-    const session=await requireActive(request);return json(request,await listVisibleOrders(session.user));
+    const session=await requireActive(request);
+    if(!SERVICE_READ_ROLES.has(session.user.role_code)) throw Object.assign(new Error('Brak uprawnień do zleceń.'),{status:403});
+    return json(request,await listVisibleOrders(session.user));
   }
 
   if(method==='POST'&&url.pathname==='/service/orders'){
     const session=await requireActive(request),u=session.user,body=await readJson(request);
+    if(!SERVICE_CREATE_ROLES.has(u.role_code)) throw Object.assign(new Error('Brak uprawnień do tworzenia zleceń.'),{status:403});
     const pointId=cleanText(body.pointId,80);await requirePoint(u,pointId);
     const firstName=cleanText(body.firstName,80),lastName=cleanText(body.lastName,100),email=normalizeEmail(cleanText(body.email,180)),phone=cleanText(body.phone,50),phoneNorm=normalizePhone(phone),brand=cleanText(body.brand,80),model=cleanText(body.model,120),issue=cleanText(body.issueDescription,2000),orderType=String(body.orderType||'REPAIR').toUpperCase();
     if(!firstName||!lastName||!brand||!model||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij dane klienta, urządzenia i usterki.'},400);
