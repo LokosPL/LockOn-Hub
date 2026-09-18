@@ -353,6 +353,21 @@ const listVisibleOrders = async (user) => {
   return rows.map(orderView);
 };
 
+const listVisibleCustomerOrders = async (user, customerId) => {
+  if (GLOBAL_ROLES.has(user.role_code)) {
+    const { rows } = await q(
+      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 ORDER BY s.created_at DESC LIMIT 100",
+      [customerId]
+    );
+    return rows.map(orderView);
+  }
+  const { rows } = await q(
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id JOIN user_point_access a ON a.point_id=s.point_id AND a.user_id=$2 WHERE s.customer_id=$1 ORDER BY s.created_at DESC LIMIT 100",
+    [customerId, user.id]
+  );
+  return rows.map(orderView);
+};
+
 const gmailKey = () => {
   const key = Buffer.from(GMAIL_TOKEN_KEY, 'base64');
   if (key.length !== 32) throw new Error('LOCKON_GMAIL_TOKEN_KEY is not configured.');
@@ -913,6 +928,45 @@ const route = async (request) => {
     return json(request,await listVisibleOrders(session.user));
   }
 
+
+  if(method==='GET'&&url.pathname==='/service/technicians'){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do danych serwisowych.'),{status:403});
+    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    if(!pointId)return json(request,{error:'POINT_REQUIRED',message:'Wybierz punkt.'},400);
+    await requirePoint(u,pointId);
+    const {rows}=await q(
+      "SELECT DISTINCT usr.id,usr.name,usr.email FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND a.point_id=$1 ORDER BY usr.name,usr.email",
+      [pointId]
+    );
+    return json(request,rows.map((row)=>({id:row.id,name:row.name,email:row.email})));
+  }
+
+  const customerDetailMatch=url.pathname.match(/^\/service\/customers\/([^/]+)$/);
+  if(method==='GET'&&customerDetailMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do danych klientów.'),{status:403});
+    const customerId=customerDetailMatch[1];
+    const customer=(await q('SELECT id,first_name,last_name,email,phone,created_at,updated_at FROM customers WHERE id=$1 LIMIT 1',[customerId])).rows[0];
+    if(!customer)return json(request,{error:'NOT_FOUND'},404);
+    const orders=await listVisibleCustomerOrders(u,customerId);
+    if(!GLOBAL_ROLES.has(u.role_code)&&orders.length===0)return json(request,{error:'NOT_FOUND'},404);
+    const devices=[...new Map(orders.map((order)=>[order.deviceId,{
+      id:order.deviceId,
+      brand:order.brand,
+      model:order.model,
+      imei:order.imei||null,
+      serialNumber:order.serialNumber||null,
+      notes:order.deviceNotes||null
+    }])).values()];
+    return json(request,{
+      customer:{...customerView(customer),createdAt:customer.created_at,updatedAt:customer.updated_at},
+      devices,
+      orders,
+      totalVisibleOrders:orders.length
+    });
+  }
+
   const historyMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/history$/);
   if(method==='GET'&&historyMatch){
     const session=await requireActive(request),u=session.user;
@@ -935,6 +989,106 @@ const route = async (request) => {
       changedByUserId:row.changed_by_user_id||null,
       changedByName:row.changed_by_name||row.changed_by_email||'System'
     })));
+  }
+
+  const notesMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/notes$/);
+  if(notesMatch&&(method==='GET'||method==='POST')){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do notatek zlecenia.'),{status:403});
+    const order=(await q('SELECT id,point_id FROM service_orders WHERE id=$1 LIMIT 1',[notesMatch[1]])).rows[0];
+    if(!order)return json(request,{error:'NOT_FOUND'},404);
+    await requirePoint(u,order.point_id);
+
+    if(method==='GET'){
+      const {rows}=await q(
+        'SELECT n.id,n.body,n.created_at,n.author_user_id,usr.name AS author_name,usr.email AS author_email FROM service_order_notes n JOIN users usr ON usr.id=n.author_user_id WHERE n.service_order_id=$1 ORDER BY n.created_at DESC,n.id DESC',
+        [order.id]
+      );
+      return json(request,rows.map((row)=>({
+        id:row.id,
+        body:row.body,
+        createdAt:row.created_at,
+        authorUserId:row.author_user_id,
+        authorName:row.author_name||row.author_email
+      })));
+    }
+
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do dodawania notatek.'),{status:403});
+    const body=await readJson(request),note=cleanText(body.body,2000);
+    if(!note)return json(request,{error:'NOTE_REQUIRED',message:'Notatka nie może być pusta.'},400);
+    const id=makeId('not');
+    await q('INSERT INTO service_order_notes(id,service_order_id,author_user_id,body) VALUES($1,$2,$3,$4)',[id,order.id,u.id,note]);
+    await audit(u.id,'SERVICE_NOTE_ADDED','service_order',order.id,order.point_id,{length:note.length});
+    return json(request,{id,body:note,createdAt:nowIso(),authorUserId:u.id,authorName:u.name||u.email},201);
+  }
+
+  const detailsMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
+  if(method==='POST'&&detailsMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji zlecenia.'),{status:403});
+    const found=(await q('SELECT id,point_id,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
+    if(!found)return json(request,{error:'NOT_FOUND'},404);
+    await requirePoint(u,found.point_id);
+    const body=await readJson(request);
+    const imei=cleanText(body.imei,32).replace(/\s+/g,'');
+    const serialNumber=cleanText(body.serialNumber,120);
+    const deviceNotes=cleanText(body.deviceNotes,1000);
+    if(imei&&!/^\d{14,16}$/.test(imei))return json(request,{error:'IMEI',message:'IMEI powinien zawierać 14–16 cyfr.'},400);
+
+    const etaText=cleanText(body.estimatedCompletionAt,64);
+    let estimatedCompletionAt=null;
+    if(etaText){
+      const date=new Date(etaText);
+      if(Number.isNaN(date.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
+      estimatedCompletionAt=date;
+    }
+
+    const canManage=SERVICE_MANAGE_ROLES.has(u.role_code);
+    if(!canManage&&('assignedTechnicianId' in body||'estimatedCost' in body||'finalCost' in body)){
+      throw Object.assign(new Error('Tylko kierownictwo punktu może zmieniać technika i koszty.'),{status:403});
+    }
+
+    let assignedTechnicianId=found.assigned_technician_id||null;
+    let estimatedCost=found.estimated_cost==null?null:Number(found.estimated_cost);
+    let finalCost=found.final_cost==null?null:Number(found.final_cost);
+    if(canManage){
+      assignedTechnicianId=cleanText(body.assignedTechnicianId,80)||null;
+      const estimatedRaw=body.estimatedCost;
+      const finalRaw=body.finalCost;
+      estimatedCost=estimatedRaw==null||estimatedRaw===''?null:Number(estimatedRaw);
+      finalCost=finalRaw==null||finalRaw===''?null:Number(finalRaw);
+      if(estimatedCost!=null&&(!Number.isFinite(estimatedCost)||estimatedCost<0))return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
+      if(finalCost!=null&&(!Number.isFinite(finalCost)||finalCost<0))return json(request,{error:'FINAL_COST',message:'Nieprawidłowy koszt końcowy.'},400);
+      if(assignedTechnicianId){
+        const tech=(await q(
+          "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE usr.id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND a.point_id=$2 LIMIT 1",
+          [assignedTechnicianId,found.point_id]
+        )).rows[0];
+        if(!tech)return json(request,{error:'TECHNICIAN',message:'Wybrany technik nie ma dostępu do tego punktu.'},400);
+      }
+    }
+
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      await client.query('UPDATE devices SET imei=NULLIF($1,\'\'),serial_number=NULLIF($2,\'\'),notes=NULLIF($3,\'\'),updated_at=now() WHERE id=$4',[imei,serialNumber,deviceNotes,found.device_id]);
+      await client.query('UPDATE service_orders SET assigned_technician_id=$1,estimated_cost=$2,final_cost=$3,estimated_completion_at=$4,updated_at=now() WHERE id=$5',[assignedTechnicianId,estimatedCost,finalCost,estimatedCompletionAt,found.id]);
+      await client.query('COMMIT');
+    }catch(error){
+      await client.query('ROLLBACK').catch(()=>undefined);
+      throw error;
+    }finally{client.release();}
+
+    await audit(u.id,'SERVICE_ORDER_DETAILS_UPDATED','service_order',found.id,found.point_id,{
+      assignedTechnicianId,
+      estimatedCost,
+      finalCost,
+      estimatedCompletionAt:estimatedCompletionAt?estimatedCompletionAt.toISOString():null,
+      hasImei:Boolean(imei),
+      hasSerialNumber:Boolean(serialNumber)
+    });
+    const view=(await listVisibleOrders(u)).find((order)=>order.id===found.id);
+    return json(request,view);
   }
 
   if(method==='POST'&&url.pathname==='/service/orders'){
