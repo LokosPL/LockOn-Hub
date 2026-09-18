@@ -33,8 +33,12 @@ export interface ServiceCustomer { id:string; firstName:string; lastName:string;
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; issueDescription:string; status:string; receivedAt:string; }
 export interface ServiceOrderSummary extends ServiceOrder { pointName:string; customerName:string; customerEmail?:string|null; customerPhone?:string|null; brand:string; model:string; statusLabel:string; assignedTechnicianId?:string|null; completedAt?:string|null; }
 export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; }
-export interface ServiceStatusResult { order:ServiceOrderSummary; notification:{queued:boolean;sent:boolean;reason?:string}; }
+export interface ServiceStatusResult { order:ServiceOrderSummary; notification:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; }
 export interface GmailConnectionStatus { connected:boolean; pointId:string; email?:string; status?:string; lastError?:string|null; connectedAt?:string; }
+export interface NotificationSettings { pointId:string; automaticEmailEnabled:boolean; notifyStatuses:string[]; senderDisplayName:string; footerText:string; updatedAt?:string; }
+export interface NotificationHistoryItem { id:string; orderId?:string|null; orderNumber?:number|null; recipient:string; status:'PENDING'|'PROCESSING'|'SENT'|'FAILED'|'CANCELLED'; attempts:number; subject?:string|null; providerMessageId?:string|null; lastError?:string|null; availableAt:string; sentAt?:string|null; createdAt:string; updatedAt:string; customerName?:string|null; device?:string|null; }
+export interface GmailTestResult { ok:true; recipient:string; messageId:string; }
+export interface NotificationRetryResult { id:string; sent:boolean; status?:string; reason?:string; attempts?:number; nextAttemptAt?:string; messageId?:string; }
 export interface HelpMessage { id:string; author:'user'|'support'|'system'|'assistant'; text:string; createdAt:string; }
 export interface HelpConversation { id:string; status:string; messages:HelpMessage[]; }
 export interface AssistantReply { userMessage:HelpMessage; assistantMessage:HelpMessage; action?:{type:string;code?:string;expiresAt?:string}|null; }
@@ -71,6 +75,13 @@ declare global {
         getStatus: (pointId:string) => Promise<GmailConnectionStatus>;
         connect: (pointId:string) => Promise<GmailConnectionStatus>;
         disconnect: (pointId:string) => Promise<{ok:true}>;
+        test: (pointId:string) => Promise<GmailTestResult>;
+      };
+      notifications: {
+        getSettings: (pointId:string) => Promise<NotificationSettings>;
+        updateSettings: (payload:{pointId:string;automaticEmailEnabled:boolean;notifyStatuses:string[];senderDisplayName:string;footerText:string}) => Promise<NotificationSettings & {ok:true}>;
+        getHistory: (pointId:string) => Promise<NotificationHistoryItem[]>;
+        retry: (notificationId:string) => Promise<NotificationRetryResult>;
       };
       assistant: {
         getConversation: () => Promise<HelpConversation>;
