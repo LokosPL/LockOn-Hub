@@ -91,6 +91,13 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }:
       description: 'Otwórz kompaktowy panel pomocy z prawej strony.',
       icon: Headphones,
       action: onOpenHelp
+    },
+    {
+      key: 'settings',
+      title: 'Ustawienia',
+      description: 'Motyw, skala interfejsu i informacje o Twoim dostępie.',
+      icon: Settings2,
+      action: () => onNavigate('settings')
     }
   ];
 
@@ -102,7 +109,7 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }:
         <div className="hero-content">
           <div className="eyebrow light"><span className="live-dot" /> {pointName}</div>
           <h1>{greeting()}, {firstName}.<br /><span>Wszystko jest gotowe.</span></h1>
-          <p>Najważniejsze rzeczy masz pod ręką. Bez pustych modułów i bez przełączania się między przypadkowymi ekranami.</p>
+          <p>Najważniejsze rzeczy masz pod ręką. Pulpit wykorzystuje całe dostępne miejsce i dopasowuje się do Full HD, QHD oraz 4K.</p>
           <div className="hero-actions">
             <button className="button primary" onClick={() => onNavigate('browser')}>
               <Globe2 size={17} /> Otwórz przeglądarkę <ArrowRight size={16} />
