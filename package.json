@@ -1,8 +1,8 @@
 {
   "name": "lockon-serviceos",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "private": true,
-  "description": "LockOn ServiceOS — centralny desktopowy panel serwisu z klientami, zleceniami, Google OAuth, powiadomieniami, rozliczeniami, pomocą i aktualizacjami GitHub.",
+  "description": "LockOn ServiceOS — centralny system serwisowy z klientami, naprawami, bezpiecznymi powiadomieniami Gmail, rozliczeniami i pomocą per konto.",
   "author": "Bartłomiej Motłoch",
   "license": "MIT",
   "main": "dist-electron/main.js",
