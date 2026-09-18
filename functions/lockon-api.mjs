@@ -910,7 +910,7 @@ const route = async (request) => {
     if(!order)return json(request,{error:'NOT_FOUND'},404);
     await requirePoint(u,order.point_id);
     const {rows}=await q(
-      "SELECT h.id,h.from_status,h.to_status,h.note,h.changed_at,h.changed_by_user_id,usr.name AS changed_by_name,usr.email AS changed_by_email FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.changed_at ASC,h.id ASC",
+      "SELECT h.id,h.from_status,h.to_status,h.note,h.created_at,h.changed_by_user_id,usr.name AS changed_by_name,usr.email AS changed_by_email FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.created_at ASC,h.id ASC",
       [order.id]
     );
     return json(request,rows.map((row)=>({
@@ -920,7 +920,7 @@ const route = async (request) => {
       toStatus:row.to_status,
       toLabel:STATUS_LABELS[row.to_status]||row.to_status,
       note:row.note||null,
-      changedAt:row.changed_at,
+      changedAt:row.created_at,
       changedByUserId:row.changed_by_user_id||null,
       changedByName:row.changed_by_name||row.changed_by_email||'System'
     })));
