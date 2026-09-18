@@ -638,8 +638,27 @@ const handle = async (req, res) => {
     const phoneNormalized = normalizePhone(phone);
     const brand = cleanText(body.brand, 80);
     const model = cleanText(body.model, 120);
+    const imei = cleanText(body.imei, 32).replace(/\s+/g, '');
+    const serialNumber = cleanText(body.serialNumber, 120);
+    const deviceNotes = cleanText(body.deviceNotes, 1000);
     const issueDescription = cleanText(body.issueDescription, 2000);
     const orderType = String(body.orderType || 'REPAIR').toUpperCase();
+    const etaText = cleanText(body.estimatedCompletionAt, 64);
+    let estimatedCompletionAt = null;
+    if (etaText) {
+      const eta = new Date(etaText);
+      if (Number.isNaN(eta.getTime())) return json(res, 400, { error: 'ETA', message: 'Nieprawidłowy przewidywany termin.' });
+      estimatedCompletionAt = eta.toISOString();
+    }
+    const canManage = SERVICE_MANAGE_ROLES.has(user.role);
+    let assignedTechnicianId = user.role === 'TECHNICIAN'
+      ? user.id
+      : (canManage ? (cleanText(body.assignedTechnicianId, 80) || null) : null);
+    let estimatedCost = null;
+    if (canManage && body.estimatedCost !== undefined && body.estimatedCost !== '') {
+      estimatedCost = Number(body.estimatedCost);
+      if (!Number.isFinite(estimatedCost) || estimatedCost < 0) return json(res, 400, { error: 'ESTIMATED_COST', message: 'Nieprawidłowy koszt szacowany.' });
+    }
 
     if (!firstName || !lastName || !brand || !model || !issueDescription) {
       return json(res, 400, { error: 'VALIDATION', message: 'Uzupełnij klienta, markę, model i opis usterki.' });
@@ -652,6 +671,18 @@ const handle = async (req, res) => {
     }
     if (phone && phoneNormalized.length < 7) {
       return json(res, 400, { error: 'PHONE', message: 'Numer telefonu klienta jest zbyt krótki.' });
+    }
+    if (imei && !/^\d{14,16}$/.test(imei)) {
+      return json(res, 400, { error: 'IMEI', message: 'IMEI powinien zawierać 14–16 cyfr.' });
+    }
+    if (assignedTechnicianId && user.role !== 'TECHNICIAN') {
+      const technician = db.users.find((candidate) =>
+        candidate.id === assignedTechnicianId &&
+        candidate.role === 'TECHNICIAN' &&
+        candidate.status === 'ACTIVE' &&
+        (candidate.pointIds || []).includes(pointId)
+      );
+      if (!technician) return json(res, 400, { error: 'TECHNICIAN', message: 'Wybrany technik nie ma dostępu do tego punktu.' });
     }
     if (!['REPAIR', 'COMPLAINT'].includes(orderType)) {
       return json(res, 400, { error: 'ORDER_TYPE', message: 'Nieprawidłowy typ zlecenia.' });
@@ -685,15 +716,44 @@ const handle = async (req, res) => {
       customer.updatedAt = nowIso();
     }
 
-    const device = {
-      id: id('dev'),
-      customerId: customer.id,
-      brand,
-      model,
-      createdAt: nowIso(),
-      updatedAt: nowIso()
-    };
-    db.devices.push(device);
+    let device = null;
+    if (imei) {
+      const byImei = db.devices.find((candidate) => candidate.imei === imei);
+      if (byImei && byImei.customerId !== customer.id) {
+        return json(res, 409, { error: 'IMEI_CONFLICT', message: 'Urządzenie z tym IMEI jest przypisane do innego klienta.' });
+      }
+      device = byImei || null;
+    }
+    if (!device && serialNumber) {
+      device = db.devices.find((candidate) =>
+        candidate.customerId === customer.id &&
+        String(candidate.brand || '').toLowerCase() === brand.toLowerCase() &&
+        String(candidate.model || '').toLowerCase() === model.toLowerCase() &&
+        String(candidate.serialNumber || '').toLowerCase() === serialNumber.toLowerCase()
+      ) || null;
+    }
+    const reusedDevice = Boolean(device);
+    if (!device) {
+      device = {
+        id: id('dev'),
+        customerId: customer.id,
+        brand,
+        model,
+        imei: imei || null,
+        serialNumber: serialNumber || null,
+        notes: deviceNotes || null,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      db.devices.push(device);
+    } else {
+      device.brand = brand;
+      device.model = model;
+      if (imei) device.imei = imei;
+      if (serialNumber) device.serialNumber = serialNumber;
+      if (deviceNotes) device.notes = deviceNotes;
+      device.updatedAt = nowIso();
+    }
 
     const order = {
       id: id('srv'),
@@ -704,7 +764,12 @@ const handle = async (req, res) => {
       orderType,
       issueDescription,
       status: 'RECEIVED',
+      assignedTechnicianId,
       createdByUserId: user.id,
+      estimatedCost,
+      finalCost: null,
+      currency: 'PLN',
+      estimatedCompletionAt,
       receivedAt: nowIso(),
       createdAt: nowIso(),
       updatedAt: nowIso()
@@ -723,7 +788,8 @@ const handle = async (req, res) => {
     return json(res, 201, {
       customer: customerView(customer),
       order,
-      reusedCustomer
+      reusedCustomer,
+      reusedDevice
     });
   }
 
@@ -734,30 +800,7 @@ const handle = async (req, res) => {
     if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do zleceń.' });
     const orders = db.serviceOrders
       .filter((order) => canSeePoint(user, order.pointId))
-      .map((order) => {
-        const customer = db.customers.find((item) => item.id === order.customerId);
-        const device = db.devices.find((item) => item.id === order.deviceId);
-        const point = db.points.find((item) => item.id === order.pointId);
-        return {
-          ...order,
-          pointName: point?.name || 'Punkt',
-          customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Klient',
-          customerEmail: customer?.email || null,
-          customerPhone: customer?.phone || null,
-          brand: device?.brand || '',
-          model: device?.model || '',
-          statusLabel: ({
-            RECEIVED: 'Przyjęto urządzenie',
-            DIAGNOSIS: 'Diagnoza',
-            WAITING_PARTS: 'Oczekiwanie na części',
-            IN_REPAIR: 'W naprawie',
-            READY: 'Gotowe do odbioru',
-            COMPLETED: 'Zakończone',
-            CANCELLED: 'Anulowane',
-            REJECTED: 'Odrzucone'
-          })[order.status] || order.status
-        };
-      });
+      .map(localOrderView);
     return json(res, 200, orders);
   }
 
