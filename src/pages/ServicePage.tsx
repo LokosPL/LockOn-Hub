@@ -56,13 +56,14 @@ const statuses = [
   ['DIAGNOSIS', 'Diagnoza'],
   ['WAITING_PARTS', 'Oczekiwanie na części'],
   ['IN_REPAIR', 'W naprawie'],
+  ['REPAIR_DONE', 'Naprawa zakończona'],
   ['READY', 'Gotowe do odbioru'],
   ['COMPLETED', 'Zakończone'],
   ['CANCELLED', 'Anulowane'],
   ['REJECTED', 'Odrzucone']
 ] as const;
 
-const mailStatusOptions = statuses;
+const mailStatusOptions = statuses.filter(([value]) => value !== 'REPAIR_DONE');
 
 const deliveryLabel = (status: NotificationHistoryItem['status']) => ({
   PENDING: 'Oczekuje',
@@ -174,9 +175,10 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
           setCustomerCards((current) => ({ ...current, [order.customerId]: card }))
         ));
       }
-      if (canManageOrderMeta && !techniciansByPoint[order.pointId]) {
-        requests.push(window.lockOn.service.listTechnicians(order.pointId).then((items) =>
-          setTechniciansByPoint((current) => ({ ...current, [order.pointId]: items }))
+      const workPointId = order.currentPointId || order.homePointId || order.pointId;
+      if (canManageOrderMeta && !techniciansByPoint[workPointId]) {
+        requests.push(window.lockOn.service.listTechnicians(workPointId).then((items) =>
+          setTechniciansByPoint((current) => ({ ...current, [workPointId]: items }))
         ));
       }
       await Promise.all(requests);
@@ -406,7 +408,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     if (!draft.toPointId) { setError('Wybierz docelowy punkt serwisowy.'); return; }
     setOrderBusyId(order.id); setError(''); setNotice('');
     try {
-      const result = await window.lockOn.service.transferOrder(order.id, draft);
+      const result = await window.lockOn.service.transferOrder(order.id, {...draft,kind:'OUTBOUND_SERVICE'});
       setNotice(result.notification?.sent
         ? 'Zlecenie wysłano do serwisu i klient otrzymał wiadomość.'
         : 'Zlecenie wysłano do serwisu.');
@@ -414,6 +416,25 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
       await Promise.all([loadOrders(),loadTransfers()]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się wysłać zlecenia.');
+    } finally { setOrderBusyId(null); }
+  };
+
+  const sendReturnHome = async (order: ServiceOrderSummary) => {
+    const draft = transferDrafts[order.id] ?? {toPointId:'',note:''};
+    setOrderBusyId(order.id); setError(''); setNotice('');
+    try {
+      const result = await window.lockOn.service.transferOrder(order.id, {
+        kind:'RETURN_HOME',
+        toPointId:order.homePointId || order.pointId,
+        note:draft.note
+      });
+      setNotice(result.notification?.sent
+        ? 'Urządzenie odesłano do punktu macierzystego. Klient otrzymał wiadomość e-mail.'
+        : 'Urządzenie odesłano do punktu macierzystego.');
+      setTransferDrafts((current)=>({...current,[order.id]:{toPointId:'',note:''}}));
+      await Promise.all([loadOrders(),loadTransfers()]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się rozpocząć zwrotu do punktu macierzystego.');
     } finally { setOrderBusyId(null); }
   };
 
@@ -611,8 +632,9 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               const draft = detailsDrafts[order.id];
               const card = customerCards[order.customerId];
               const notes = orderNotes[order.id] ?? [];
-              const pointTechnicians = techniciansByPoint[order.pointId] ?? [];
-              const currentServicePointId = (order.transfers ?? []).find((item)=>item.status==='ACCEPTED')?.toPointId ?? order.pointId;
+              const currentServicePointId = order.currentPointId || order.homePointId || order.pointId;
+              const pointTechnicians = techniciansByPoint[currentServicePointId] ?? [];
+              const canOperateCurrentPoint = ['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId);
               return (
                 <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''}`}>
                   <div className="service-order-row">
@@ -624,15 +646,16 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                       <div className="service-order-quick-meta">
                         <span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span>
                         <span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleString('pl-PL') : 'Brak terminu'}</span>
+                        <span><MapPin size={11}/>Macierzysty: {order.homePointName || order.pointName}</span>
+                        <span><Truck size={11}/>Lokalizacja: {order.currentLocationLabel || order.currentPointName || order.pointName}</span>
                         {canManageOrderMeta && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
-                        {order.latestTransfer && <span><Truck size={11}/>{order.latestTransfer.status === 'IN_TRANSIT' ? 'W drodze do ' : order.latestTransfer.status === 'DELIVERED' ? 'Dostarczono do ' : order.latestTransfer.status === 'ACCEPTED' ? 'Przyjęte przez ' : 'Przekazanie: '}{order.latestTransfer.toPointName}</span>}
                       </div>
                     </div>
                     <div className="service-order-actions">
                       <div className="service-order-status">
                         {canEditStatus ? (
                           <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
-                            {statuses.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY'||value==='COMPLETED') && order.canMarkReady===false}>{label}</option>)}
                           </select>
                         ) : <span className="status-badge">{order.statusLabel}</span>}
                       </div>
@@ -665,24 +688,41 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                       )}
 
                       <section className="service-workspace-card service-transfer-card">
-                        <div className="service-workspace-title"><Truck size={15}/><div><strong>Przekazanie do innego serwisu</strong><span>Logistyka jest niezależna od statusu samej naprawy.</span></div></div>
-                        {order.latestTransfer && ['IN_TRANSIT','DELIVERED','REQUESTED'].includes(order.latestTransfer.status) ? (
+                        <div className="service-workspace-title"><Truck size={15}/><div><strong>Logistyka urządzenia</strong><span>Punkt macierzysty jest stały, a transport jest prowadzony niezależnie od statusu naprawy.</span></div></div>
+                        <div className="active-transfer-summary">
+                          <div><MapPin size={15}/><span>Macierzysty: {order.homePointName || order.pointName}</span><b>·</b><strong>Teraz: {order.currentLocationLabel || order.currentPointName || 'W transporcie'}</strong></div>
+                          <small>{order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
+                        </div>
+                        {order.openTransfer ? (
                           <div className="active-transfer-summary">
-                            <div><MapPin size={15}/><span>{order.latestTransfer.fromPointName}</span><b>→</b><strong>{order.latestTransfer.toPointName}</strong></div>
-                            <small>{order.latestTransfer.status === 'IN_TRANSIT' ? 'Urządzenie jest w drodze.' : order.latestTransfer.status === 'DELIVERED' ? 'Urządzenie zostało dostarczone i czeka na przyjęcie.' : 'Przekazanie oczekuje.'}</small>
+                            <div><Truck size={15}/><span>{order.openTransfer.fromPointName}</span><b>→</b><strong>{order.openTransfer.toPointName}</strong></div>
+                            <small>{order.openTransfer.kind==='RETURN_HOME' ? 'Obowiązkowy zwrot do punktu macierzystego' : 'Wysłanie do zewnętrznego serwisu'} · {order.openTransfer.status==='IN_TRANSIT'?'w drodze':order.openTransfer.status==='DELIVERED'?'dostarczono, czeka na przyjęcie':'oczekuje'}</small>
                           </div>
+                        ) : order.returnRequired ? (
+                          canEditStatus && canOperateCurrentPoint && order.status==='REPAIR_DONE' ? (
+                            <div className="transfer-compose">
+                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów"/>
+                              <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> Odeślij do punktu macierzystego</button>
+                            </div>
+                          ) : (
+                            <div className="service-history-empty">
+                              {order.status==='REPAIR_DONE'
+                                ? 'Zwrot do punktu macierzystego musi rozpocząć użytkownik obsługujący aktualny punkt urządzenia.'
+                                : 'Urządzenie jest poza punktem macierzystym. Po zakończeniu naprawy ustaw status „Naprawa zakończona”, a następnie rozpocznij obowiązkowy zwrot.'}
+                            </div>
+                          )
                         ) : canEditStatus ? (
                           <div className="transfer-compose">
                             <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
                               <option value="">Wybierz serwis docelowy…</option>
-                              {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
+                              {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                             </select>
                             <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
                             <button className="button secondary small" disabled={orderBusyId===order.id || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
                           </div>
-                        ) : <div className="service-history-empty">Brak aktywnego przekazania.</div>}
+                        ) : <div className="service-history-empty">Brak aktywnego transportu.</div>}
                         {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
-                          {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
+                          {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót: ':'Do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
                         </div>}
                       </section>
 
@@ -750,7 +790,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                 <div className="transfer-board-main">
                   <strong>#{transfer.orderNumber} · {transfer.customerName}</strong>
                   <span>{transfer.device}</span>
-                  <small>{transfer.fromPointName} → {transfer.toPointName}</small>
+                  <small>{transfer.kind==='RETURN_HOME'?'Powrót do punktu macierzystego · ':'Do serwisu · '}{transfer.fromPointName} → {transfer.toPointName}</small>
                   {transfer.note && <p>{transfer.note}</p>}
                 </div>
                 <div className="transfer-board-status">
