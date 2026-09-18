@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  BellRing, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus, Clock3, History, Mail, MailCheck,
-  RefreshCw, RotateCcw, Search, Send, Settings2, Smartphone, UserRound, XCircle
+  BadgeDollarSign, BellRing, CalendarClock, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus,
+  Clock3, History, IdCard, Mail, MailCheck, RefreshCw, RotateCcw, Save, Search, Send, Settings2,
+  Smartphone, StickyNote, UserCog, UserRound, XCircle
 } from 'lucide-react';
 import type {
   AuthState,
@@ -10,8 +11,11 @@ import type {
   NotificationSettings,
   ServiceCreateOrderResult,
   ServiceCustomer,
+  ServiceCustomerDetail,
+  ServiceOrderNote,
   ServiceOrderSummary,
-  ServiceStatusHistoryItem
+  ServiceStatusHistoryItem,
+  ServiceTechnician
 } from '../types/electron';
 import type { UserRole } from '../config/roles';
 
@@ -22,7 +26,27 @@ interface ServicePageProps {
 
 const emptyForm = {
   firstName: '', lastName: '', email: '', phone: '',
-  brand: '', model: '', issueDescription: '', orderType: 'REPAIR' as 'REPAIR' | 'COMPLAINT'
+  brand: '', model: '', imei: '', serialNumber: '', deviceNotes: '',
+  issueDescription: '', orderType: 'REPAIR' as 'REPAIR' | 'COMPLAINT',
+  assignedTechnicianId: '', estimatedCost: '', estimatedCompletionAt: ''
+};
+
+const toLocalDateTimeInput = (value?: string | null) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return shifted.toISOString().slice(0, 16);
+};
+
+type OrderDetailsDraft = {
+  imei: string;
+  serialNumber: string;
+  deviceNotes: string;
+  assignedTechnicianId: string;
+  estimatedCost: string;
+  finalCost: string;
+  estimatedCompletionAt: string;
 };
 
 const statuses = [
@@ -64,11 +88,19 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryItem[]>([]);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [orderHistories, setOrderHistories] = useState<Record<string, ServiceStatusHistoryItem[]>>({});
+  const [orderNotes, setOrderNotes] = useState<Record<string, ServiceOrderNote[]>>({});
+  const [customerCards, setCustomerCards] = useState<Record<string, ServiceCustomerDetail>>({});
+  const [techniciansByPoint, setTechniciansByPoint] = useState<Record<string, ServiceTechnician[]>>({});
+  const [detailsDrafts, setDetailsDrafts] = useState<Record<string, OrderDetailsDraft>>({});
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
+  const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
+  const [technicians, setTechnicians] = useState<ServiceTechnician[]>([]);
 
   const pointOptions = useMemo(() => auth.points, [auth.points]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
   const canEditStatus = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
+  const canManageOrderMeta = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
   const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
 
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -85,23 +117,53 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     }
   };
 
-  const toggleOrderHistory = async (orderId: string) => {
-    if (expandedOrderId === orderId) {
+  const toggleOrderHistory = async (order: ServiceOrderSummary) => {
+    if (expandedOrderId === order.id) {
       setExpandedOrderId(null);
       return;
     }
 
-    setExpandedOrderId(orderId);
-    if (orderHistories[orderId]) return;
+    setExpandedOrderId(order.id);
+    setDetailsDrafts((current) => ({
+      ...current,
+      [order.id]: current[order.id] ?? {
+        imei: order.imei ?? '',
+        serialNumber: order.serialNumber ?? '',
+        deviceNotes: order.deviceNotes ?? '',
+        assignedTechnicianId: order.assignedTechnicianId ?? '',
+        estimatedCost: order.estimatedCost == null ? '' : String(order.estimatedCost),
+        finalCost: order.finalCost == null ? '' : String(order.finalCost),
+        estimatedCompletionAt: toLocalDateTimeInput(order.estimatedCompletionAt)
+      }
+    }));
 
-    setHistoryBusyId(orderId);
+    setHistoryBusyId(order.id);
     setError('');
     try {
-      const history = await window.lockOn.service.getHistory(orderId);
-      setOrderHistories((current) => ({ ...current, [orderId]: history }));
+      const requests: Promise<unknown>[] = [];
+      if (!orderHistories[order.id]) {
+        requests.push(window.lockOn.service.getHistory(order.id).then((history) =>
+          setOrderHistories((current) => ({ ...current, [order.id]: history }))
+        ));
+      }
+      if (!orderNotes[order.id]) {
+        requests.push(window.lockOn.service.getNotes(order.id).then((notes) =>
+          setOrderNotes((current) => ({ ...current, [order.id]: notes }))
+        ));
+      }
+      if (!customerCards[order.customerId]) {
+        requests.push(window.lockOn.service.getCustomer(order.customerId).then((card) =>
+          setCustomerCards((current) => ({ ...current, [order.customerId]: card }))
+        ));
+      }
+      if (canManageOrderMeta && !techniciansByPoint[order.pointId]) {
+        requests.push(window.lockOn.service.listTechnicians(order.pointId).then((items) =>
+          setTechniciansByPoint((current) => ({ ...current, [order.pointId]: items }))
+        ));
+      }
+      await Promise.all(requests);
     } catch (e) {
-      setExpandedOrderId(null);
-      setError(e instanceof Error ? e.message : 'Nie udało się pobrać historii zlecenia.');
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać szczegółów zlecenia.');
     } finally {
       setHistoryBusyId(null);
     }
