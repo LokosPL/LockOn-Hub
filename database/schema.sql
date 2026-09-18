@@ -477,9 +477,6 @@ UPDATE service_orders
 SET home_point_id=point_id
 WHERE home_point_id IS NULL;
 
-ALTER TABLE service_orders
-  ALTER COLUMN home_point_id SET NOT NULL;
-
 ALTER TABLE service_order_transfers
   ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'OUTBOUND_SERVICE';
 
