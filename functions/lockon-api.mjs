@@ -902,6 +902,30 @@ const route = async (request) => {
     return json(request,await listVisibleOrders(session.user));
   }
 
+  const historyMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/history$/);
+  if(method==='GET'&&historyMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do historii zlecenia.'),{status:403});
+    const order=(await q('SELECT id,point_id FROM service_orders WHERE id=$1 LIMIT 1',[historyMatch[1]])).rows[0];
+    if(!order)return json(request,{error:'NOT_FOUND'},404);
+    await requirePoint(u,order.point_id);
+    const {rows}=await q(
+      "SELECT h.id,h.from_status,h.to_status,h.note,h.changed_at,h.changed_by_user_id,usr.name AS changed_by_name,usr.email AS changed_by_email FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.changed_at ASC,h.id ASC",
+      [order.id]
+    );
+    return json(request,rows.map((row)=>({
+      id:row.id,
+      fromStatus:row.from_status||null,
+      fromLabel:row.from_status?(STATUS_LABELS[row.from_status]||row.from_status):null,
+      toStatus:row.to_status,
+      toLabel:STATUS_LABELS[row.to_status]||row.to_status,
+      note:row.note||null,
+      changedAt:row.changed_at,
+      changedByUserId:row.changed_by_user_id||null,
+      changedByName:row.changed_by_name||row.changed_by_email||'System'
+    })));
+  }
+
   if(method==='POST'&&url.pathname==='/service/orders'){
     const session=await requireActive(request),u=session.user,body=await readJson(request);
     if(!SERVICE_CREATE_ROLES.has(u.role_code)) throw Object.assign(new Error('Brak uprawnień do tworzenia zleceń.'),{status:403});
