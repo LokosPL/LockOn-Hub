@@ -719,6 +719,48 @@ const processNotification = async (notificationId) => {
   }
 };
 
+const queueTransferNotification = async (actor, orderId, transfer, transferStatus, note = '') => {
+  try {
+    const orderData = (await q(
+      "SELECT s.id,s.point_id,s.customer_id,c.email,fp.name AS from_point_name,tp.name AS to_point_name FROM service_orders s JOIN customers c ON c.id=s.customer_id JOIN points fp ON fp.id=$2 JOIN points tp ON tp.id=$3 WHERE s.id=$1 LIMIT 1",
+      [orderId, transfer.from_point_id, transfer.to_point_id]
+    )).rows[0];
+    if (!orderData?.email) return { queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL' };
+
+    const settings = (await q(
+      "SELECT automatic_email_enabled FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
+      [orderData.point_id]
+    )).rows[0] || { automatic_email_enabled:true };
+    if (settings.automatic_email_enabled !== true) return { queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED' };
+
+    const sender = (await q(
+      "SELECT refresh_token_ciphertext,oauth_client_secret_ciphertext FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1",
+      [orderData.point_id]
+    )).rows[0];
+    if (!sender || (!GOOGLE_DESKTOP_CLIENT_SECRET && !sender.oauth_client_secret_ciphertext)) {
+      return { queued:false,sent:false,reason:'NO_SENDER' };
+    }
+
+    const notificationId = makeId('ntf');
+    await q(
+      "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_TRANSFER_EVENT',$5,$6::jsonb,'PENDING')",
+      [notificationId, actor.id, orderData.customer_id, orderId, orderData.email, JSON.stringify({
+        transferId: transfer.id,
+        transferStatus,
+        fromPointId: transfer.from_point_id,
+        fromPointName: orderData.from_point_name,
+        toPointId: transfer.to_point_id,
+        toPointName: orderData.to_point_name,
+        note: cleanText(note,300) || null
+      })]
+    );
+    return { queued:true,...(await processNotification(notificationId)) };
+  } catch (error) {
+    console.error('[transfer notification]', error);
+    return { queued:false,sent:false,reason:'NOTIFICATION_ERROR' };
+  }
+};
+
 const generateWebsiteCode = async (session) => {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
