@@ -37,6 +37,7 @@ const STATUS_LABELS = {
   DIAGNOSIS: 'Diagnoza',
   WAITING_PARTS: 'Oczekiwanie na części',
   IN_REPAIR: 'W naprawie',
+  REPAIR_DONE: 'Naprawa zakończona',
   READY: 'Gotowe do odbioru',
   COMPLETED: 'Zakończone',
   CANCELLED: 'Anulowane',
@@ -367,6 +368,9 @@ const orderView = (row) => ({
   orderNumber: Number(row.order_number),
   pointId: row.point_id,
   pointName: row.point_name,
+  homePointId: row.home_point_id || row.point_id,
+  homePointName: row.point_name,
+  currentPointId: row.current_point_id || null,
   customerId: row.customer_id,
   customerName: row.first_name + ' ' + row.last_name,
   customerEmail: row.email || null,
@@ -411,6 +415,7 @@ const transferView = (row) => ({
   toPointId: row.to_point_id,
   toPointName: row.to_point_name,
   toPointCity: row.to_point_city,
+  kind: row.kind || 'OUTBOUND_SERVICE',
   status: row.status,
   note: row.note || null,
   sentByUserId: row.sent_by_user_id,
@@ -444,7 +449,53 @@ const attachTransfers = async (orders) => {
   const map = await loadTransfersForOrders(orders.map((order) => order.id));
   return orders.map((order) => {
     const transfers = map.get(order.id) || [];
-    return { ...order, latestTransfer: transfers[0] || null, transfers };
+    const latestTransfer = transfers[0] || null;
+    const openTransfer = transfers.find((item) => ['REQUESTED','IN_TRANSIT','DELIVERED'].includes(item.status)) || null;
+    const homePointId = order.homePointId || order.pointId;
+    const currentPointId = order.currentPointId || null;
+    const latestOutboundAccepted = transfers.find((item) =>
+      item.kind === 'OUTBOUND_SERVICE' &&
+      item.status === 'ACCEPTED' &&
+      item.toPointId !== homePointId
+    ) || null;
+    const latestReturnAccepted = transfers.find((item) =>
+      item.kind === 'RETURN_HOME' &&
+      item.status === 'ACCEPTED'
+    ) || null;
+    const outboundAfterReturn = Boolean(
+      latestOutboundAccepted &&
+      (!latestReturnAccepted || new Date(latestOutboundAccepted.requestedAt).getTime() > new Date(latestReturnAccepted.requestedAt).getTime())
+    );
+    const currentPointName = currentPointId === homePointId
+      ? order.homePointName
+      : (
+          transfers.find((item) => item.toPointId === currentPointId)?.toPointName ||
+          transfers.find((item) => item.fromPointId === currentPointId)?.fromPointName ||
+          null
+        );
+    const returnRequired = Boolean(
+      (currentPointId && currentPointId !== homePointId) ||
+      (openTransfer && openTransfer.kind === 'RETURN_HOME') ||
+      outboundAfterReturn
+    );
+    const canMarkReady = !openTransfer && currentPointId === homePointId && !returnRequired;
+    const currentLocationLabel = openTransfer?.status === 'IN_TRANSIT'
+      ? 'W drodze: ' + (openTransfer.fromPointName || openTransfer.fromPointId) + ' → ' + (openTransfer.toPointName || openTransfer.toPointId)
+      : (currentPointName || (currentPointId ? currentPointId : 'W drodze'));
+
+    return {
+      ...order,
+      homePointId,
+      homePointName: order.homePointName || order.pointName,
+      currentPointId,
+      currentPointName,
+      currentLocationLabel,
+      returnRequired,
+      canMarkReady,
+      openTransfer,
+      latestTransfer,
+      transfers
+    };
   });
 };
 
@@ -566,7 +617,15 @@ const renderStatusEmail = (item) => {
   const footer = cleanText(item.footer_text || 'W razie pytań skontaktuj się bezpośrednio z punktem serwisowym.', 500);
 
   const transferStatus = String(item.payload?.transferStatus || '').toUpperCase();
-  const transferLabels = {
+  const transferKind = String(item.payload?.transferKind || 'OUTBOUND_SERVICE').toUpperCase();
+  const returnHome = transferKind === 'RETURN_HOME';
+  const transferLabels = returnHome ? {
+    IN_TRANSIT: 'Urządzenie wraca do punktu macierzystego',
+    DELIVERED: 'Urządzenie wróciło do punktu macierzystego',
+    ACCEPTED: 'Punkt macierzysty przyjął urządzenie',
+    REJECTED: 'Punkt macierzysty odrzucił przekazanie',
+    CANCELLED: 'Powrót do punktu macierzystego anulowany'
+  } : {
     IN_TRANSIT: 'Urządzenie wysłane do serwisu',
     DELIVERED: 'Urządzenie dotarło do serwisu',
     ACCEPTED: 'Serwisant przyjął urządzenie',
@@ -584,17 +643,33 @@ const renderStatusEmail = (item) => {
   const subject = 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
   const intro = isTransfer
     ? (
-        transferStatus === 'IN_TRANSIT'
-          ? 'Twoje urządzenie zostało przekazane z punktu ' + fromPoint + ' do serwisu ' + toPoint + '.'
-          : transferStatus === 'DELIVERED'
-            ? 'Twoje urządzenie zostało dostarczone do serwisu ' + toPoint + '.'
-            : transferStatus === 'ACCEPTED'
-              ? 'Serwisant w ' + toPoint + ' przyjął urządzenie do realizacji.'
-              : transferStatus === 'REJECTED'
-                ? 'Serwis ' + toPoint + ' odrzucił przekazanie urządzenia. Punkt prowadzący zlecenie skontaktuje się w razie potrzeby.'
-                : 'Przekazanie urządzenia do serwisu zostało anulowane.'
+        returnHome
+          ? (
+              transferStatus === 'IN_TRANSIT'
+                ? 'Naprawa została zakończona i Twoje urządzenie wraca z ' + fromPoint + ' do punktu macierzystego ' + toPoint + '.'
+                : transferStatus === 'DELIVERED'
+                  ? 'Twoje urządzenie dotarło z powrotem do punktu macierzystego ' + toPoint + '.'
+                  : transferStatus === 'ACCEPTED'
+                    ? 'Punkt macierzysty ' + toPoint + ' potwierdził fizyczny powrót urządzenia.'
+                    : transferStatus === 'REJECTED'
+                      ? 'Punkt macierzysty ' + toPoint + ' odrzucił przekazanie zwrotne urządzenia.'
+                      : 'Powrót urządzenia do punktu macierzystego został anulowany.'
+            )
+          : (
+              transferStatus === 'IN_TRANSIT'
+                ? 'Twoje urządzenie zostało przekazane z punktu ' + fromPoint + ' do serwisu ' + toPoint + '.'
+                : transferStatus === 'DELIVERED'
+                  ? 'Twoje urządzenie zostało dostarczone do serwisu ' + toPoint + '.'
+                  : transferStatus === 'ACCEPTED'
+                    ? 'Serwisant w ' + toPoint + ' przyjął urządzenie do realizacji.'
+                    : transferStatus === 'REJECTED'
+                      ? 'Serwis ' + toPoint + ' odrzucił przekazanie urządzenia. Punkt prowadzący zlecenie skontaktuje się w razie potrzeby.'
+                      : 'Przekazanie urządzenia do serwisu zostało anulowane.'
+            )
       )
-    : 'status urządzenia ' + item.brand + ' ' + item.model + ' (zlecenie #' + item.order_number + ') zmienił się na:';
+    : targetStatus === 'READY'
+      ? 'Twoje urządzenie ' + item.brand + ' ' + item.model + ' jest gotowe do odbioru w punkcie ' + item.point_name + '.'
+      : 'status urządzenia ' + item.brand + ' ' + item.model + ' (zlecenie #' + item.order_number + ') zmienił się na:';
 
   const text = [
     'Dzień dobry ' + item.first_name + ',',
@@ -753,6 +828,7 @@ const queueTransferNotification = async (actor, orderId, transfer, transferStatu
       [notificationId, actor.id, orderData.customer_id, orderId, orderData.email, JSON.stringify({
         transferId: transfer.id,
         transferStatus,
+        transferKind: transfer.kind || 'OUTBOUND_SERVICE',
         fromPointId: transfer.from_point_id,
         fromPointName: orderData.from_point_name,
         toPointId: transfer.to_point_id,
