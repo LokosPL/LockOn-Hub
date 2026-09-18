@@ -15,7 +15,6 @@ import { pathToFileURL } from 'node:url';
 import { APP_CONFIG } from './appConfig';
 import { backendRequest, getBackendApiBaseUrl, setBackendApiBaseUrl } from './backendApi';
 import {
-  attachBrowser,
   browserBack,
   browserForward,
   browserHome,
@@ -273,9 +272,32 @@ const createMainWindow = () => {
 
   protectLocalWindow(mainWindow);
   mainWindow.webContents.setZoomFactor(resolveUiZoom('auto'));
-  attachBrowser(mainWindow);
-  mainReady = new Promise((resolve) => mainWindow?.once('ready-to-show', () => resolve()));
-  void mainWindow.loadURL(rendererUrl());
+
+  // Nie twórz WebContentsView przeglądarki podczas startu aplikacji.
+  // Po aktualizacji Windows potrafi uruchomić ServiceOS zanim cały profil
+  // przeglądarki zdąży się ustabilizować. Przeglądarka powstanie dopiero,
+  // gdy użytkownik faktycznie otworzy zakładkę "Przeglądarka".
+  const windowRef = mainWindow;
+  const url = rendererUrl();
+
+  mainReady = (async () => {
+    let lastError: unknown = null;
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        await windowRef.loadURL(url);
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 3) await delay(350 * attempt);
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error('Nie udało się załadować głównego interfejsu.');
+  })().catch((error) => {
+    console.error('[LockOn renderer startup]', error);
+  });
+
   mainWindow.on('closed', () => {
     destroyBrowser();
     mainWindow = null;
@@ -293,13 +315,16 @@ const runStartupSequence = async () => {
     { percent: 30, label: 'Ładowanie interfejsu…', delay: 230 },
     { percent: 50, label: 'Łączenie z LockOn API…', delay: 260 },
     { percent: 68, label: 'Przygotowanie punktów i uprawnień…', delay: 260 },
-    { percent: 86, label: 'Ładowanie przeglądarki i aktualizacji…', delay: 260 }
+    { percent: 86, label: 'Finalizowanie interfejsu…', delay: 260 }
   ];
   for (const stage of stages) {
     pushSplashProgress(stage.percent, stage.label);
     await delay(stage.delay);
   }
-  await mainReady;
+  // Nie pozwalamy, aby splash został na 86% w nieskończoność.
+  // Po aktualizacji "ready-to-show" potrafi nie nadejść mimo załadowanego renderera,
+  // dlatego opieramy start na loadURL i dodajemy twardy bezpiecznik czasowy.
+  await Promise.race([mainReady, delay(8_000)]);
   pushSplashProgress(100, 'Gotowe.');
   await delay(200);
   if (mainWindow && !mainWindow.isDestroyed()) {
