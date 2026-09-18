@@ -32,9 +32,11 @@ export interface AdminOverview { points: AdminPoint[]; users: AdminUser[]; pendi
 export interface FinancePayload { entries: RevenueEntry[]; summary: { approvedRevenue:number; technicianShare:number; bossShare:number; pendingRevenue:number; }; }
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
-export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; issueDescription:string; status:string; receivedAt:string; }
+export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; issueDescription:string; status:string; receivedAt:string; }
 export interface ServiceOrderSummary extends ServiceOrder {
-  pointName:string; customerName:string; customerEmail?:string|null; customerPhone?:string|null;
+  pointName:string; homePointName?:string; currentPointName?:string|null; currentLocationLabel?:string|null;
+  returnRequired?:boolean; canMarkReady?:boolean; openTransfer?:ServiceTransfer|null;
+  customerName:string; customerEmail?:string|null; customerPhone?:string|null;
   brand:string; model:string; imei?:string|null; serialNumber?:string|null; deviceNotes?:string|null;
   statusLabel:string; assignedTechnicianId?:string|null; assignedTechnicianName?:string|null; assignedTechnicianEmail?:string|null;
   estimatedCost?:number|null; finalCost?:number|null; currency?:string; estimatedCompletionAt?:string|null;
@@ -51,6 +53,7 @@ export interface ServiceTransfer {
   id:string; orderId:string; orderNumber?:number; customerName?:string; device?:string;
   fromPointId:string; fromPointName?:string; fromPointCity?:string;
   toPointId:string; toPointName?:string; toPointCity?:string;
+  kind:'OUTBOUND_SERVICE'|'RETURN_HOME';
   status:'REQUESTED'|'IN_TRANSIT'|'DELIVERED'|'ACCEPTED'|'REJECTED'|'CANCELLED';
   note?:string|null; sentByUserId:string; sentByName?:string; acceptedByUserId?:string|null; acceptedByName?:string|null;
   requestedAt:string; shippedAt?:string|null; deliveredAt?:string|null; acceptedAt?:string|null; updatedAt:string;
@@ -97,7 +100,7 @@ declare global {
         listTechnicians: (pointId:string) => Promise<ServiceTechnician[]>;
         listServicePoints: () => Promise<AdminPoint[]>;
         listTransfers: (incoming?:boolean,status?:string) => Promise<ServiceTransfer[]>;
-        transferOrder: (orderId:string,payload:{toPointId:string;note?:string}) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
+        transferOrder: (orderId:string,payload:{toPointId?:string;note?:string;kind?:ServiceTransfer['kind']}) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
         updateTransferStatus: (transferId:string,status:ServiceTransfer['status'],note?:string) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
         createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string}) => Promise<ServiceCreateOrderResult>;
         listOrders: () => Promise<ServiceOrderSummary[]>;
