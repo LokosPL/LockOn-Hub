@@ -493,18 +493,12 @@ END
 FROM service_orders s
 WHERE s.id=t.service_order_id;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname='service_order_transfers_kind_check'
-      AND conrelid='service_order_transfers'::regclass
-  ) THEN
-    ALTER TABLE service_order_transfers
-      ADD CONSTRAINT service_order_transfers_kind_check
-      CHECK (kind IN ('OUTBOUND_SERVICE','RETURN_HOME'));
-  END IF;
-END $$;
+ALTER TABLE service_order_transfers
+  DROP CONSTRAINT IF EXISTS service_order_transfers_kind_check;
+
+ALTER TABLE service_order_transfers
+  ADD CONSTRAINT service_order_transfers_kind_check
+  CHECK (kind IN ('OUTBOUND_SERVICE','RETURN_HOME'));
 
 UPDATE service_orders s
 SET current_point_id=CASE
