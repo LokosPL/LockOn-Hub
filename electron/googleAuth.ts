@@ -220,10 +220,14 @@ const findCredentialFile = (directory: string) => {
 
 const resolveGoogleClientSecret = () => {
   if (APP_CONFIG.auth.googleClientSecret.trim()) return APP_CONFIG.auth.googleClientSecret.trim();
+
+  // Installed-app OAuth clients are public clients. Do not ship a reusable
+  // client_secret inside the desktop binary. A local secret is accepted only
+  // for development compatibility with the current Google client setup.
+  if (app.isPackaged) return '';
+
   const envSecret = process.env.LOCKON_GOOGLE_CLIENT_SECRET?.trim();
   if (envSecret) return envSecret;
-
-  if (app.isPackaged) return '';
 
   const candidates = [
     path.join(process.cwd(), 'google-oauth.local.json'),
