@@ -327,7 +327,7 @@ const orderView = (row) => ({
 
 const orderViewForUser = (row, user) => {
   const view = orderView(row);
-  if (user.role_code === 'SUPPORT') {
+  if (!SERVICE_MANAGE_ROLES.has(user.role_code)) {
     view.estimatedCost = null;
     view.finalCost = null;
   }
