@@ -35,7 +35,7 @@ const statuses = [
   ['REJECTED', 'Odrzucone']
 ] as const;
 
-const mailStatusOptions = statuses.filter(([value]) => value !== 'RECEIVED');
+const mailStatusOptions = statuses;
 
 const deliveryLabel = (status: NotificationHistoryItem['status']) => ({
   PENDING: 'Oczekuje',
