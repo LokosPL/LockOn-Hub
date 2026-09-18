@@ -788,7 +788,7 @@ const handle = async (req, res) => {
       settings = {
         pointId,
         automaticEmailEnabled: true,
-        notifyStatuses: ['DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED'],
+        notifyStatuses: ['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED'],
         senderDisplayName: 'LockOn ServiceOS',
         footerText: '',
         updatedAt: nowIso()
