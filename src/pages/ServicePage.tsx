@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   BadgeDollarSign, BellRing, CalendarClock, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus,
-  Clock3, History, IdCard, Mail, MailCheck, RefreshCw, RotateCcw, Save, Search, Send, Settings2,
-  Smartphone, StickyNote, UserCog, UserRound, XCircle
+  Clock3, History, IdCard, Mail, MailCheck, MapPin, PackageCheck, RefreshCw, RotateCcw, Save, Search, Send,
+  Settings2, Smartphone, StickyNote, Truck, UserCog, UserRound, XCircle
 } from 'lucide-react';
 import type {
+  AdminPoint,
   AuthState,
   GmailConnectionStatus,
   NotificationHistoryItem,
@@ -15,7 +16,8 @@ import type {
   ServiceOrderNote,
   ServiceOrderSummary,
   ServiceStatusHistoryItem,
-  ServiceTechnician
+  ServiceTechnician,
+  ServiceTransfer
 } from '../types/electron';
 import type { UserRole } from '../config/roles';
 
@@ -71,7 +73,7 @@ const deliveryLabel = (status: NotificationHistoryItem['status']) => ({
 }[status]);
 
 export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
-  const [tab, setTab] = useState<'NEW' | 'ORDERS' | 'EMAILS'>('NEW');
+  const [tab, setTab] = useState<'NEW' | 'ORDERS' | 'TRANSFERS' | 'EMAILS'>('NEW');
   const [form, setForm] = useState(emptyForm);
   const [query, setQuery] = useState('');
   const [matches, setMatches] = useState<ServiceCustomer[]>([]);
@@ -96,6 +98,9 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
   const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
   const [technicians, setTechnicians] = useState<ServiceTechnician[]>([]);
+  const [servicePoints, setServicePoints] = useState<AdminPoint[]>([]);
+  const [transfers, setTransfers] = useState<ServiceTransfer[]>([]);
+  const [transferDrafts, setTransferDrafts] = useState<Record<string,{toPointId:string;note:string}>>({});
 
   const pointOptions = useMemo(() => auth.points, [auth.points]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
@@ -114,6 +119,19 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
       setError(e instanceof Error ? e.message : 'Nie udało się pobrać zleceń.');
     } finally {
       setOrdersBusy(false);
+    }
+  };
+
+  const loadTransfers = async () => {
+    try {
+      const [points, items] = await Promise.all([
+        window.lockOn.service.listServicePoints(),
+        window.lockOn.service.listTransfers(false)
+      ]);
+      setServicePoints(points);
+      setTransfers(items);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać przekazań serwisowych.');
     }
   };
 
@@ -195,6 +213,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
 
   useEffect(() => {
     void loadOrders();
+    void loadTransfers();
   }, []);
 
   useEffect(() => {
@@ -380,6 +399,35 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     } finally {
       setOrderBusyId(null);
     }
+  };
+
+  const sendTransfer = async (order: ServiceOrderSummary) => {
+    const draft = transferDrafts[order.id] ?? {toPointId:'',note:''};
+    if (!draft.toPointId) { setError('Wybierz docelowy punkt serwisowy.'); return; }
+    setOrderBusyId(order.id); setError(''); setNotice('');
+    try {
+      const result = await window.lockOn.service.transferOrder(order.id, draft);
+      setNotice(result.notification?.sent
+        ? 'Zlecenie wysłano do serwisu i klient otrzymał wiadomość.'
+        : 'Zlecenie wysłano do serwisu.');
+      setTransferDrafts((current)=>({...current,[order.id]:{toPointId:'',note:''}}));
+      await Promise.all([loadOrders(),loadTransfers()]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się wysłać zlecenia.');
+    } finally { setOrderBusyId(null); }
+  };
+
+  const changeTransferStatus = async (transfer: ServiceTransfer, status: ServiceTransfer['status']) => {
+    setOrderBusyId(transfer.id); setError(''); setNotice('');
+    try {
+      const result = await window.lockOn.service.updateTransferStatus(transfer.id,status);
+      setNotice(result.notification?.sent
+        ? 'Etap przekazania zapisany. Klient otrzymał wiadomość e-mail.'
+        : 'Etap przekazania został zapisany.');
+      await Promise.all([loadOrders(),loadTransfers()]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się zmienić etapu przekazania.');
+    } finally { setOrderBusyId(null); }
   };
 
   const connectGmail = async () => {
