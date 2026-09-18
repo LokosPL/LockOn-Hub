@@ -694,3 +694,37 @@ input,textarea,select{line-height:1.45}
 .service-success strong{color:#78e3a7}.service-success span{color:#9ba4ad;font-size:12px}
 .service-error{border-color:rgba(255,100,94,.18);background:rgba(255,100,94,.06);color:#ff918b}
 @media(max-width:980px){.service-grid{grid-template-columns:1fr}.service-page{padding:18px}}
+
+
+/* central service workspace */
+.service-tabs{display:flex;gap:7px;padding:5px;border:1px solid var(--line);border-radius:12px;background:#0f1216}
+.service-tabs button{min-height:34px;padding:0 11px;border-radius:8px;display:flex;align-items:center;gap:7px;background:transparent;color:#78818c;cursor:pointer;font-weight:700;font-size:12px}
+.service-tabs button:hover{color:#d9dde2;background:#171b21}
+.service-tabs button.active{color:#fff;background:linear-gradient(135deg,rgba(255,138,0,.16),rgba(255,59,34,.10));box-shadow:inset 0 0 0 1px rgba(255,113,47,.14)}
+.service-mail-card{margin-bottom:12px;padding:15px 17px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+.service-mail-copy{min-width:0;display:grid;grid-template-columns:40px minmax(0,1fr);gap:11px;align-items:center}
+.service-mail-icon{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:rgba(255,112,37,.09);color:#ff7d49}
+.service-mail-copy>div:last-child{min-width:0;display:flex;flex-direction:column}
+.service-mail-copy span{font-size:10px;color:#737d88;text-transform:uppercase;letter-spacing:.07em;font-weight:800}
+.service-mail-copy strong{font-size:14px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.service-mail-copy small{font-size:10px;color:#68717c;margin-top:3px;line-height:1.45}
+.service-orders-card{padding:20px}
+.service-orders-list{display:flex;flex-direction:column;gap:7px;margin-top:16px}
+.service-order-row{display:grid;grid-template-columns:72px minmax(0,1fr) 210px;gap:12px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:13px;background:#101318}
+.service-order-row:hover{border-color:var(--line2);background:#12161c}
+.service-order-number{font-weight:850;font-size:14px;color:#ff8150}
+.service-order-main{min-width:0;display:flex;flex-direction:column}
+.service-order-main strong{font-size:13px}
+.service-order-main span{font-size:11px;color:#89929d;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.service-order-main small{font-size:10px;color:#5e6772;margin-top:3px}
+.service-order-status select{width:100%;height:36px;padding:0 9px;background:#0d1014}
+.service-empty{padding:30px;text-align:center;color:#606974;font-size:12px}
+.chat-code-button{grid-column:1/-1;justify-self:start;margin-top:7px}
+@media(max-width:1050px){
+  .service-heading{flex-direction:column}
+  .service-tabs{width:100%}
+  .service-tabs button{flex:1;justify-content:center}
+  .service-mail-card{align-items:flex-start;flex-direction:column}
+  .service-order-row{grid-template-columns:58px minmax(0,1fr)}
+  .service-order-status{grid-column:1/-1}
+}
