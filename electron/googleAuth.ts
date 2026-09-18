@@ -322,7 +322,18 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         });
 
         if (!tokenResponse.ok) {
-          throw new Error(`Google odrzucił logowanie (HTTP ${tokenResponse.status}).`);
+          let googleError = '';
+          try {
+            const errorPayload = await tokenResponse.json() as { error?: unknown; error_description?: unknown };
+            const code = typeof errorPayload.error === 'string' ? errorPayload.error : '';
+            const description = typeof errorPayload.error_description === 'string' ? errorPayload.error_description : '';
+            googleError = [code, description].filter(Boolean).join(': ');
+          } catch {
+            // Nie pokazujemy surowej odpowiedzi, aby przypadkiem nie ujawnić danych wrażliwych.
+          }
+          throw new Error(
+            `Google odrzucił logowanie (HTTP ${tokenResponse.status})${googleError ? `: ${googleError}` : '.'}`
+          );
         }
 
         const tokens = (await tokenResponse.json()) as { id_token?: string };
