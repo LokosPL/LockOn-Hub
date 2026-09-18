@@ -39,6 +39,8 @@ const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
 const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN']);
 const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 
 const nowIso = () => new Date().toISOString();
 const id = (prefix) => `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
@@ -73,6 +75,7 @@ const initialDb = () => ({
   devices: [],
   serviceOrders: [],
   serviceOrderStatusHistory: [],
+  serviceOrderNotes: [],
   notificationSettings: [],
   notificationHistory: [],
   supportConversations: [],
@@ -101,6 +104,7 @@ const loadDb = () => {
       devices: Array.isArray(raw.devices) ? raw.devices : [],
       serviceOrders: Array.isArray(raw.serviceOrders) ? raw.serviceOrders : [],
       serviceOrderStatusHistory: Array.isArray(raw.serviceOrderStatusHistory) ? raw.serviceOrderStatusHistory : [],
+      serviceOrderNotes: Array.isArray(raw.serviceOrderNotes) ? raw.serviceOrderNotes : [],
       notificationSettings: Array.isArray(raw.notificationSettings) ? raw.notificationSettings : [],
       notificationHistory: Array.isArray(raw.notificationHistory) ? raw.notificationHistory : [],
       supportConversations: Array.isArray(raw.supportConversations) ? raw.supportConversations : [],
@@ -377,6 +381,49 @@ const canSeePoint = (user, pointId) => {
   return (user.pointIds || []).includes(pointId);
 };
 
+const LOCAL_STATUS_LABELS = {
+  RECEIVED: 'Przyjęto urządzenie',
+  DIAGNOSIS: 'Diagnoza',
+  WAITING_PARTS: 'Oczekiwanie na części',
+  IN_REPAIR: 'W naprawie',
+  READY: 'Gotowe do odbioru',
+  COMPLETED: 'Zakończone',
+  CANCELLED: 'Anulowane',
+  REJECTED: 'Odrzucone'
+};
+
+const localOrderView = (order) => {
+  const customer = db.customers.find((item) => item.id === order.customerId);
+  const device = db.devices.find((item) => item.id === order.deviceId);
+  const point = db.points.find((item) => item.id === order.pointId);
+  const technician = order.assignedTechnicianId ? findUserById(order.assignedTechnicianId) : null;
+  return {
+    ...order,
+    pointName: point?.name || 'Punkt',
+    customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Klient',
+    customerEmail: customer?.email || null,
+    customerPhone: customer?.phone || null,
+    brand: device?.brand || '',
+    model: device?.model || '',
+    imei: device?.imei || null,
+    serialNumber: device?.serialNumber || null,
+    deviceNotes: device?.notes || null,
+    assignedTechnicianName: technician?.name || null,
+    assignedTechnicianEmail: technician?.email || null,
+    statusLabel: LOCAL_STATUS_LABELS[order.status] || order.status,
+    currency: order.currency || 'PLN'
+  };
+};
+
+const localOrderViewForUser = (order, user) => {
+  const view = localOrderView(order);
+  if (!SERVICE_MANAGE_ROLES.has(user.role)) {
+    view.estimatedCost = null;
+    view.finalCost = null;
+  }
+  return view;
+};
+
 const revenueVisibleTo = (user, entry) => {
   if (GLOBAL_ROLES.has(user.role)) return true;
   if (user.role === 'TECHNICIAN') return entry.userId === user.id;
@@ -582,6 +629,52 @@ const handle = async (req, res) => {
     return json(res, 200, matches);
   }
 
+  if (method === 'GET' && url.pathname === '/service/technicians') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!SERVICE_MANAGE_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const pointId = cleanText(url.searchParams.get('pointId'), 80);
+    if (!pointId || !canSeePoint(user, pointId)) return json(res, 403, { error: 'POINT' });
+    const technicians = db.users
+      .filter((candidate) =>
+        candidate.role === 'TECHNICIAN' &&
+        candidate.status === 'ACTIVE' &&
+        (candidate.pointIds || []).includes(pointId)
+      )
+      .map((candidate) => ({ id: candidate.id, name: candidate.name, email: candidate.email }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'pl'));
+    return json(res, 200, technicians);
+  }
+
+  const localCustomerDetail = url.pathname.match(/^\/service\/customers\/([^/]+)$/);
+  if (method === 'GET' && localCustomerDetail) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const customer = db.customers.find((item) => item.id === localCustomerDetail[1]);
+    if (!customer) return json(res, 404, { error: 'NOT_FOUND' });
+    const orders = db.serviceOrders
+      .filter((order) => order.customerId === customer.id && canSeePoint(user, order.pointId))
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .slice(0, 100)
+      .map((order) => localOrderViewForUser(order, user));
+    if (!GLOBAL_ROLES.has(user.role) && orders.length === 0) return json(res, 404, { error: 'NOT_FOUND' });
+    const devices = [...new Map(orders.map((order) => [order.deviceId, {
+      id: order.deviceId,
+      brand: order.brand,
+      model: order.model,
+      imei: order.imei || null,
+      serialNumber: order.serialNumber || null,
+      notes: order.deviceNotes || null
+    }])).values()];
+    return json(res, 200, {
+      customer: { ...customerView(customer), createdAt: customer.createdAt, updatedAt: customer.updatedAt },
+      devices,
+      orders,
+      totalVisibleOrders: orders.length
+    });
+  }
+
   if (method === 'POST' && url.pathname === '/service/orders') {
     const user = requireActive(req, res);
     if (!user) return;
@@ -600,11 +693,51 @@ const handle = async (req, res) => {
     const phoneNormalized = normalizePhone(phone);
     const brand = cleanText(body.brand, 80);
     const model = cleanText(body.model, 120);
+    const imei = cleanText(body.imei, 32).replace(/\s+/g, '');
+    const serialNumber = cleanText(body.serialNumber, 120);
+    const deviceNotes = cleanText(body.deviceNotes, 1000);
     const issueDescription = cleanText(body.issueDescription, 2000);
     const orderType = String(body.orderType || 'REPAIR').toUpperCase();
+    const etaText = cleanText(body.estimatedCompletionAt, 64);
+    let estimatedCompletionAt = null;
+    if (etaText) {
+      const eta = new Date(etaText);
+      if (Number.isNaN(eta.getTime())) return json(res, 400, { error: 'ETA', message: 'Nieprawidłowy przewidywany termin.' });
+      estimatedCompletionAt = eta.toISOString();
+    }
+    const canManage = SERVICE_MANAGE_ROLES.has(user.role);
+    let assignedTechnicianId = user.role === 'TECHNICIAN'
+      ? user.id
+      : (canManage ? (cleanText(body.assignedTechnicianId, 80) || null) : null);
+    let estimatedCost = null;
+    if (canManage && body.estimatedCost !== undefined && body.estimatedCost !== '') {
+      estimatedCost = Number(body.estimatedCost);
+      if (!Number.isFinite(estimatedCost) || estimatedCost < 0) return json(res, 400, { error: 'ESTIMATED_COST', message: 'Nieprawidłowy koszt szacowany.' });
+    }
 
     if (!firstName || !lastName || !brand || !model || !issueDescription) {
       return json(res, 400, { error: 'VALIDATION', message: 'Uzupełnij klienta, markę, model i opis usterki.' });
+    }
+    if (!email && !phoneNormalized) {
+      return json(res, 400, { error: 'CONTACT_REQUIRED', message: 'Podaj adres e-mail lub numer telefonu klienta.' });
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return json(res, 400, { error: 'EMAIL', message: 'Adres e-mail klienta jest nieprawidłowy.' });
+    }
+    if (phone && phoneNormalized.length < 7) {
+      return json(res, 400, { error: 'PHONE', message: 'Numer telefonu klienta jest zbyt krótki.' });
+    }
+    if (imei && !/^\d{14,16}$/.test(imei)) {
+      return json(res, 400, { error: 'IMEI', message: 'IMEI powinien zawierać 14–16 cyfr.' });
+    }
+    if (assignedTechnicianId && user.role !== 'TECHNICIAN') {
+      const technician = db.users.find((candidate) =>
+        candidate.id === assignedTechnicianId &&
+        candidate.role === 'TECHNICIAN' &&
+        candidate.status === 'ACTIVE' &&
+        (candidate.pointIds || []).includes(pointId)
+      );
+      if (!technician) return json(res, 400, { error: 'TECHNICIAN', message: 'Wybrany technik nie ma dostępu do tego punktu.' });
     }
     if (!['REPAIR', 'COMPLAINT'].includes(orderType)) {
       return json(res, 400, { error: 'ORDER_TYPE', message: 'Nieprawidłowy typ zlecenia.' });
@@ -638,15 +771,44 @@ const handle = async (req, res) => {
       customer.updatedAt = nowIso();
     }
 
-    const device = {
-      id: id('dev'),
-      customerId: customer.id,
-      brand,
-      model,
-      createdAt: nowIso(),
-      updatedAt: nowIso()
-    };
-    db.devices.push(device);
+    let device = null;
+    if (imei) {
+      const byImei = db.devices.find((candidate) => candidate.imei === imei);
+      if (byImei && byImei.customerId !== customer.id) {
+        return json(res, 409, { error: 'IMEI_CONFLICT', message: 'Urządzenie z tym IMEI jest przypisane do innego klienta.' });
+      }
+      device = byImei || null;
+    }
+    if (!device && serialNumber) {
+      device = db.devices.find((candidate) =>
+        candidate.customerId === customer.id &&
+        String(candidate.brand || '').toLowerCase() === brand.toLowerCase() &&
+        String(candidate.model || '').toLowerCase() === model.toLowerCase() &&
+        String(candidate.serialNumber || '').toLowerCase() === serialNumber.toLowerCase()
+      ) || null;
+    }
+    const reusedDevice = Boolean(device);
+    if (!device) {
+      device = {
+        id: id('dev'),
+        customerId: customer.id,
+        brand,
+        model,
+        imei: imei || null,
+        serialNumber: serialNumber || null,
+        notes: deviceNotes || null,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      db.devices.push(device);
+    } else {
+      device.brand = brand;
+      device.model = model;
+      if (imei) device.imei = imei;
+      if (serialNumber) device.serialNumber = serialNumber;
+      if (deviceNotes) device.notes = deviceNotes;
+      device.updatedAt = nowIso();
+    }
 
     const order = {
       id: id('srv'),
@@ -657,7 +819,12 @@ const handle = async (req, res) => {
       orderType,
       issueDescription,
       status: 'RECEIVED',
+      assignedTechnicianId,
       createdByUserId: user.id,
+      estimatedCost,
+      finalCost: null,
+      currency: 'PLN',
+      estimatedCompletionAt,
       receivedAt: nowIso(),
       createdAt: nowIso(),
       updatedAt: nowIso()
@@ -676,7 +843,8 @@ const handle = async (req, res) => {
     return json(res, 201, {
       customer: customerView(customer),
       order,
-      reusedCustomer
+      reusedCustomer,
+      reusedDevice
     });
   }
 
@@ -687,38 +855,154 @@ const handle = async (req, res) => {
     if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do zleceń.' });
     const orders = db.serviceOrders
       .filter((order) => canSeePoint(user, order.pointId))
-      .map((order) => {
-        const customer = db.customers.find((item) => item.id === order.customerId);
-        const device = db.devices.find((item) => item.id === order.deviceId);
-        const point = db.points.find((item) => item.id === order.pointId);
+      .map((order) => localOrderViewForUser(order, user));
+    return json(res, 200, orders);
+  }
+
+  const serviceHistoryMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/history$/);
+  if (method === 'GET' && serviceHistoryMatch) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!SERVICE_READ_ROLES.has(user.role)) {
+      return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do historii zlecenia.' });
+    }
+    const order = db.serviceOrders.find((item) => item.id === serviceHistoryMatch[1]);
+    if (!order) return json(res, 404, { error: 'NOT_FOUND' });
+    if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
+
+    const labels = {
+      RECEIVED: 'Przyjęto urządzenie',
+      DIAGNOSIS: 'Diagnoza',
+      WAITING_PARTS: 'Oczekiwanie na części',
+      IN_REPAIR: 'W naprawie',
+      READY: 'Gotowe do odbioru',
+      COMPLETED: 'Zakończone',
+      CANCELLED: 'Anulowane',
+      REJECTED: 'Odrzucone'
+    };
+    const history = db.serviceOrderStatusHistory
+      .filter((item) => item.serviceOrderId === order.id)
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+      .map((item) => {
+        const changedBy = db.users.find((candidate) => candidate.id === item.changedByUserId);
         return {
-          ...order,
-          pointName: point?.name || 'Punkt',
-          customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Klient',
-          customerEmail: customer?.email || null,
-          customerPhone: customer?.phone || null,
-          brand: device?.brand || '',
-          model: device?.model || '',
-          statusLabel: ({
-            RECEIVED: 'Przyjęto urządzenie',
-            DIAGNOSIS: 'Diagnoza',
-            WAITING_PARTS: 'Oczekiwanie na części',
-            IN_REPAIR: 'W naprawie',
-            READY: 'Gotowe do odbioru',
-            COMPLETED: 'Zakończone',
-            CANCELLED: 'Anulowane',
-            REJECTED: 'Odrzucone'
-          })[order.status] || order.status
+          id: item.id,
+          fromStatus: item.fromStatus || null,
+          fromLabel: item.fromStatus ? (labels[item.fromStatus] || item.fromStatus) : null,
+          toStatus: item.toStatus,
+          toLabel: labels[item.toStatus] || item.toStatus,
+          note: item.note || null,
+          changedAt: item.createdAt,
+          changedByUserId: item.changedByUserId || null,
+          changedByName: changedBy?.name || changedBy?.email || 'System'
         };
       });
-    return json(res, 200, orders);
+    return json(res, 200, history);
+  }
+
+  const localNotesMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/notes$/);
+  if (localNotesMatch && (method === 'GET' || method === 'POST')) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const order = db.serviceOrders.find((item) => item.id === localNotesMatch[1]);
+    if (!order) return json(res, 404, { error: 'NOT_FOUND' });
+    if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
+
+    if (method === 'GET') {
+      const notes = db.serviceOrderNotes
+        .filter((item) => item.serviceOrderId === order.id)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .map((item) => {
+          const author = findUserById(item.authorUserId);
+          return {
+            id: item.id,
+            body: item.body,
+            createdAt: item.createdAt,
+            authorUserId: item.authorUserId,
+            authorName: author?.name || author?.email || 'Użytkownik'
+          };
+        });
+      return json(res, 200, notes);
+    }
+
+    if (!SERVICE_EDIT_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const body = await readBody(req);
+    const note = cleanText(body.body, 2000);
+    if (!note) return json(res, 400, { error: 'NOTE_REQUIRED', message: 'Notatka nie może być pusta.' });
+    const created = { id: id('not'), serviceOrderId: order.id, authorUserId: user.id, body: note, createdAt: nowIso() };
+    db.serviceOrderNotes.push(created);
+    saveDb();
+    return json(res, 201, { ...created, authorName: user.name || user.email });
+  }
+
+  const localDetailsMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
+  if (method === 'POST' && localDetailsMatch) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!SERVICE_EDIT_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const order = db.serviceOrders.find((item) => item.id === localDetailsMatch[1]);
+    if (!order) return json(res, 404, { error: 'NOT_FOUND' });
+    if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
+    const device = db.devices.find((item) => item.id === order.deviceId);
+    if (!device) return json(res, 404, { error: 'DEVICE_NOT_FOUND' });
+
+    const body = await readBody(req);
+    const imei = cleanText(body.imei, 32).replace(/\s+/g, '');
+    const serialNumber = cleanText(body.serialNumber, 120);
+    const deviceNotes = cleanText(body.deviceNotes, 1000);
+    if (imei && !/^\d{14,16}$/.test(imei)) return json(res, 400, { error: 'IMEI', message: 'IMEI powinien zawierać 14–16 cyfr.' });
+    const otherDevice = imei ? db.devices.find((item) => item.imei === imei && item.id !== device.id) : null;
+    if (otherDevice) return json(res, 409, { error: 'IMEI_CONFLICT', message: 'Ten IMEI jest już przypisany do innego urządzenia.' });
+
+    const etaText = cleanText(body.estimatedCompletionAt, 64);
+    let estimatedCompletionAt = null;
+    if (etaText) {
+      const eta = new Date(etaText);
+      if (Number.isNaN(eta.getTime())) return json(res, 400, { error: 'ETA', message: 'Nieprawidłowy przewidywany termin.' });
+      estimatedCompletionAt = eta.toISOString();
+    }
+
+    const canManage = SERVICE_MANAGE_ROLES.has(user.role);
+    if (!canManage && ('assignedTechnicianId' in body || 'estimatedCost' in body || 'finalCost' in body)) {
+      return json(res, 403, { error: 'FORBIDDEN', message: 'Tylko kierownictwo punktu może zmieniać technika i koszty.' });
+    }
+
+    if (canManage) {
+      const assignedTechnicianId = cleanText(body.assignedTechnicianId, 80) || null;
+      if (assignedTechnicianId) {
+        const technician = db.users.find((candidate) =>
+          candidate.id === assignedTechnicianId &&
+          candidate.role === 'TECHNICIAN' &&
+          candidate.status === 'ACTIVE' &&
+          (candidate.pointIds || []).includes(order.pointId)
+        );
+        if (!technician) return json(res, 400, { error: 'TECHNICIAN', message: 'Wybrany technik nie ma dostępu do tego punktu.' });
+      }
+      const estimatedCost = body.estimatedCost == null || body.estimatedCost === '' ? null : Number(body.estimatedCost);
+      const finalCost = body.finalCost == null || body.finalCost === '' ? null : Number(body.finalCost);
+      if (estimatedCost != null && (!Number.isFinite(estimatedCost) || estimatedCost < 0)) return json(res, 400, { error: 'ESTIMATED_COST' });
+      if (finalCost != null && (!Number.isFinite(finalCost) || finalCost < 0)) return json(res, 400, { error: 'FINAL_COST' });
+      order.assignedTechnicianId = assignedTechnicianId;
+      order.estimatedCost = estimatedCost;
+      order.finalCost = finalCost;
+    }
+
+    device.imei = imei || null;
+    device.serialNumber = serialNumber || null;
+    device.notes = deviceNotes || null;
+    device.updatedAt = nowIso();
+    order.estimatedCompletionAt = estimatedCompletionAt;
+    order.updatedAt = nowIso();
+    saveDb();
+    return json(res, 200, localOrderView(order));
   }
 
   const serviceStatusMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/status$/);
   if (method === 'POST' && serviceStatusMatch) {
     const user = requireActive(req, res);
     if (!user) return;
-    if (!SERVICE_CREATE_ROLES.has(user.role)) {
+    if (!SERVICE_EDIT_ROLES.has(user.role)) {
       return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do zmiany statusu.' });
     }
     const order = db.serviceOrders.find((item) => item.id === serviceStatusMatch[1]);
@@ -742,20 +1026,8 @@ const handle = async (req, res) => {
       createdAt: nowIso()
     });
     saveDb();
-    const customer = db.customers.find((item) => item.id === order.customerId);
-    const device = db.devices.find((item) => item.id === order.deviceId);
-    const point = db.points.find((item) => item.id === order.pointId);
     return json(res, 200, {
-      order: {
-        ...order,
-        pointName: point?.name || 'Punkt',
-        customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Klient',
-        customerEmail: customer?.email || null,
-        customerPhone: customer?.phone || null,
-        brand: device?.brand || '',
-        model: device?.model || '',
-        statusLabel: status
-      },
+      order: localOrderView(order),
       notification: { queued: false, sent: false, reason: 'CENTRAL_API_REQUIRED' }
     });
   }

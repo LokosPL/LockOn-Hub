@@ -22,9 +22,13 @@ contextBridge.exposeInMainWorld('lockOn', {
   admin: {
     getOverview: () => ipcRenderer.invoke('admin:getOverview'),
     createPoint: (payload: unknown) => ipcRenderer.invoke('admin:createPoint', payload),
+    updatePointService: (pointId: string, payload: unknown) => ipcRenderer.invoke('admin:updatePointService', pointId, payload),
     approveUser: (userId: string, payload: unknown) => ipcRenderer.invoke('admin:approveUser', userId, payload),
     rejectUser: (userId: string) => ipcRenderer.invoke('admin:rejectUser', userId),
-    updateUserAccess: (userId: string, payload: unknown) => ipcRenderer.invoke('admin:updateUserAccess', userId, payload)
+    updateUserAccess: (userId: string, payload: unknown) => ipcRenderer.invoke('admin:updateUserAccess', userId, payload),
+    blockUser: (userId: string, blocked: boolean, reason?: string) => ipcRenderer.invoke('admin:blockUser', userId, blocked, reason),
+    logoutUserSessions: (userId: string) => ipcRenderer.invoke('admin:logoutUserSessions', userId),
+    logoutAllSessions: (exceptCurrent = true) => ipcRenderer.invoke('admin:logoutAllSessions', exceptCurrent)
   },
   finance: {
     list: () => ipcRenderer.invoke('finance:list'),
@@ -36,8 +40,18 @@ contextBridge.exposeInMainWorld('lockOn', {
   },
   service: {
     searchCustomers: (query: string) => ipcRenderer.invoke('service:searchCustomers', query),
+    getCustomer: (customerId: string) => ipcRenderer.invoke('service:getCustomer', customerId),
+    listTechnicians: (pointId: string) => ipcRenderer.invoke('service:listTechnicians', pointId),
+    listServicePoints: () => ipcRenderer.invoke('service:listServicePoints'),
+    listTransfers: (incoming?: boolean, status?: string) => ipcRenderer.invoke('service:listTransfers', incoming, status),
+    transferOrder: (orderId: string, payload: unknown) => ipcRenderer.invoke('service:transferOrder', orderId, payload),
+    updateTransferStatus: (transferId: string, status: string, note?: string) => ipcRenderer.invoke('service:updateTransferStatus', transferId, status, note),
     createOrder: (payload: unknown) => ipcRenderer.invoke('service:createOrder', payload),
     listOrders: () => ipcRenderer.invoke('service:listOrders'),
+    getHistory: (orderId: string) => ipcRenderer.invoke('service:getHistory', orderId),
+    getNotes: (orderId: string) => ipcRenderer.invoke('service:getNotes', orderId),
+    addNote: (orderId: string, body: string) => ipcRenderer.invoke('service:addNote', orderId, body),
+    updateDetails: (orderId: string, payload: unknown) => ipcRenderer.invoke('service:updateDetails', orderId, payload),
     updateStatus: (orderId: string, status: string, note?: string) => ipcRenderer.invoke('service:updateStatus', orderId, status, note)
   },
   gmail: {

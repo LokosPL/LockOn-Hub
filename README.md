@@ -100,7 +100,7 @@ Zasady współpracy: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Aktualna wersja
 
-**0.9.0**
+**0.10.0**
 
 
 ## Powiadomienia serwisowe 0.9.0
@@ -111,3 +111,22 @@ Zasady współpracy: [CONTRIBUTING.md](CONTRIBUTING.md).
 - Centralna kolejka zapisuje wynik wysyłki, liczbę prób, błąd oraz identyfikator wiadomości zwrócony przez Gmail.
 - Nieudane wiadomości używają exponential backoff i są ponawiane przez automatyczny worker Neon Function.
 - OWNER/BOSS/COORDINATOR mogą wysłać test na własny adres i ręcznie ponowić nieudaną wiadomość.
+
+
+## ServiceOS 0.10.0
+
+- Logowanie Google prowadzi uprawnione konto z jednym punktem bezpośrednio do jednorazowej zgody Gmail `gmail.send`, jeśli nadawca nie jest jeszcze skonfigurowany.
+- Gmail OAuth preferuje konto użyte do logowania ServiceOS przez `login_hint`, a callback pokazuje czytelny powód odmowy zamiast ogólnego błędu.
+- ServiceOS nadal nie odczytuje skrzynki Gmail; zakres pozostaje ograniczony do wysyłania.
+- Zlecenia serwisowe mają widoczną oś czasu statusów: poprzedni/nowy status, użytkownik, czas i notatka.
+- Klienci są deduplikowani transakcyjnie i chronieni unikalnością znormalizowanego e-maila oraz telefonu.
+- Formularz i backend walidują kontakt klienta przed utworzeniem zlecenia.
+
+
+### Karta klienta i workspace zlecenia
+
+- Zlecenie przechowuje IMEI / numer seryjny urządzenia, przewidywany termin, przypisanego technika oraz koszty.
+- IMEI jest chroniony przed duplikacją w centralnej bazie; ServiceOS potrafi rozpoznać istniejące urządzenie klienta.
+- Notatki wewnętrzne są osobne od wiadomości wysyłanych klientowi.
+- Karta klienta oraz historia zleceń zawsze respektują zakres punktów zalogowanego użytkownika.
+- Dane kosztowe nie są zwracane roli SUPPORT.

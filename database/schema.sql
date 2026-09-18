@@ -270,9 +270,9 @@ CREATE INDEX IF NOT EXISTS notification_outbox_order_idx
   WHERE service_order_id IS NOT NULL;
 
 INSERT INTO assistant_knowledge(slug,title,keywords,body,audience) VALUES
- ('login','Logowanie Google',ARRAY['login','logowanie','google','oauth'],'Logowanie desktopowe otwiera systemową przeglądarkę i używa Authorization Code z PKCE oraz state. Hasło Google nie jest wpisywane do ServiceOS.','ALL'),
- ('service','Moduł Serwis',ARRAY['serwis','klient','telefon','naprawa','zlecenie','reklamacja'],'Moduł Serwis pozwala wyszukać istniejącego klienta, dodać klienta i urządzenie, utworzyć nowe zlecenie lub reklamację oraz śledzić status naprawy. Klient jest ponownie używany po zgodnym emailu lub numerze telefonu.','ALL'),
- ('notifications','Powiadomienia klienta',ARRAY['email','mail','powiadomienie','status'],'Po zmianie statusu zlecenia ServiceOS może wysłać klientowi wiadomość przez Gmail nadawcy połączonego z danym punktem. Token Gmail jest przechowywany wyłącznie po stronie centralnego backendu w postaci zaszyfrowanej.','ALL'),
+ ('login','Logowanie Google',ARRAY['login','logowanie','google','oauth','pkce','gmail','zgoda'],'Logowanie desktopowe otwiera systemową przeglądarkę i używa Authorization Code z PKCE oraz state. Hasło Google nie jest wpisywane do ServiceOS. Dla uprawnionego użytkownika z jednym punktem aplikacja może po zalogowaniu od razu sprawdzić konfigurację Gmail i, jeśli trzeba, przeprowadzić jednorazową zgodę na gmail.send.','ALL'),
+ ('service','Moduł Serwis',ARRAY['serwis','klient','telefon','urządzenie','urzadzenie','imei','serial','naprawa','zlecenie','reklamacja','technik','termin','notatka','karta klienta'],'Moduł Serwis pozwala wyszukać lub ponownie użyć klienta, dodać urządzenie, utworzyć naprawę albo reklamację i prowadzić zlecenie do zakończenia. Karta zlecenia obsługuje IMEI, numer seryjny, przewidywany termin, przypisanego technika, notatki wewnętrzne i historię statusów. ServiceOS rozpoznaje istniejącego klienta po e-mailu lub znormalizowanym telefonie oraz może ponownie użyć urządzenia po IMEI lub zgodnym numerze seryjnym. Wszystkie wyszukiwania klientów i zleceń są ograniczone do punktów dostępnych dla zalogowanego konta. Dane kosztowe są przeznaczone dla OWNER, BOSS i COORDINATOR.','ALL'),
+ ('notifications','Powiadomienia klienta',ARRAY['email','mail','gmail','powiadomienie','status','retry','ponów','ponow','historia','test','przyjęcie','przyjecie','received','gmail.send'],'Powiadomienia serwisowe są konfigurowane osobno dla punktu. Po jednorazowej zgodzie Google ServiceOS używa wyłącznie zakresu gmail.send do wysyłania wiadomości i nie czyta skrzynki Gmail. OWNER, BOSS lub COORDINATOR może połączyć nadawcę, wysłać test, wybrać statusy generujące wiadomość, ustawić nazwę nadawcy i stopkę oraz przeglądać historię dostawy. Nieudane wysyłki mają exponential backoff i mogą być ponawiane automatycznie przez worker Neon lub ręcznie przez uprawnionego użytkownika.','ALL'),
  ('website','Logowanie na stronie',ARRAY['strona','www','kod','autoryzacja'],'Zalogowany użytkownik może wygenerować jednorazowy kod do strony. Kod ma krótki termin ważności, może być użyty tylko raz, a baza przechowuje jego hash.','ALL'),
  ('updates','Aktualizacje',ARRAY['aktualizacja','update','wersja'],'ServiceOS sprawdza GitHub Releases po starcie, cyklicznie podczas pracy i po powrocie do aplikacji. Aktualizacja pobiera się automatycznie, a instalacja następuje po potwierdzeniu użytkownika.','ALL'),
  ('security','Bezpieczeństwo',ARRAY['bezpieczeństwo','security','token','sesja'],'ServiceOS używa sandboxa Electron, contextIsolation, nodeIntegration=false, walidacji IPC, CSP, bezpiecznego magazynu sesji oraz hashy tokenów po stronie backendu.','ALL'),
@@ -340,4 +340,126 @@ WHERE NOT ('RECEIVED'=ANY(notify_statuses));
 
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-18-central-v5','Send configurable intake confirmation at RECEIVED status')
+ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v6: race-safe customer deduplication.
+CREATE UNIQUE INDEX IF NOT EXISTS customers_email_unique_idx
+  ON customers ((lower(email)))
+  WHERE email IS NOT NULL AND btrim(email)<>'';
+
+CREATE UNIQUE INDEX IF NOT EXISTS customers_phone_unique_idx
+  ON customers (phone_normalized)
+  WHERE phone_normalized IS NOT NULL AND phone_normalized<>'';
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v6','Prevent duplicate customers by normalized email or phone')
+ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v7: richer service order workspace.
+ALTER TABLE service_orders
+  ADD COLUMN IF NOT EXISTS estimated_completion_at timestamptz;
+
+CREATE TABLE IF NOT EXISTS service_order_notes (
+  id text PRIMARY KEY,
+  service_order_id text NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+  author_user_id text NOT NULL REFERENCES users(id),
+  body text NOT NULL CHECK (char_length(btrim(body)) BETWEEN 1 AND 2000),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS service_order_notes_order_idx
+  ON service_order_notes(service_order_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS devices_imei_idx
+  ON devices(imei) WHERE imei IS NOT NULL AND btrim(imei)<>'';
+
+CREATE INDEX IF NOT EXISTS devices_serial_idx
+  ON devices(serial_number) WHERE serial_number IS NOT NULL AND btrim(serial_number)<>'';
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v7','Service order ETA, internal notes and device lookup indexes')
+ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v8: one physical device per non-empty IMEI.
+CREATE UNIQUE INDEX IF NOT EXISTS devices_imei_unique_idx
+  ON devices(imei)
+  WHERE imei IS NOT NULL AND btrim(imei)<>'';
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v8','Enforce unique non-empty device IMEI')
+ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v9: refresh assistant knowledge for the richer service workflow.
+UPDATE assistant_knowledge
+SET keywords=ARRAY['serwis','klient','telefon','urządzenie','urzadzenie','imei','serial','naprawa','zlecenie','reklamacja','technik','termin','notatka','karta klienta'],
+    body='Moduł Serwis pozwala wyszukać lub ponownie użyć klienta, dodać urządzenie, utworzyć naprawę albo reklamację i prowadzić zlecenie do zakończenia. Karta zlecenia obsługuje IMEI, numer seryjny, przewidywany termin, przypisanego technika, notatki wewnętrzne i historię statusów. ServiceOS rozpoznaje istniejącego klienta po e-mailu lub znormalizowanym telefonie oraz może ponownie użyć urządzenia po IMEI lub zgodnym numerze seryjnym. Wszystkie wyszukiwania klientów i zleceń są ograniczone do punktów dostępnych dla zalogowanego konta. Dane kosztowe są przeznaczone dla OWNER, BOSS i COORDINATOR.',
+    updated_at=now()
+WHERE slug='service';
+
+UPDATE assistant_knowledge
+SET keywords=ARRAY['email','mail','gmail','powiadomienie','status','retry','ponów','ponow','historia','test','przyjęcie','przyjecie','received','gmail.send'],
+    body='Powiadomienia serwisowe są konfigurowane osobno dla punktu. Po jednorazowej zgodzie Google ServiceOS używa wyłącznie zakresu gmail.send do wysyłania wiadomości i nie czyta skrzynki Gmail. OWNER, BOSS lub COORDINATOR może połączyć nadawcę, wysłać test, wybrać statusy generujące wiadomość, ustawić nazwę nadawcy i stopkę oraz przeglądać historię dostawy. Nieudane wysyłki mają exponential backoff i mogą być ponawiane automatycznie przez worker Neon lub ręcznie przez uprawnionego użytkownika.',
+    updated_at=now()
+WHERE slug='notifications';
+
+UPDATE assistant_knowledge
+SET keywords=ARRAY['login','logowanie','google','oauth','pkce','gmail','zgoda'],
+    body='Logowanie desktopowe otwiera systemową przeglądarkę i używa Authorization Code z PKCE oraz state. Hasło Google nie jest wpisywane do ServiceOS. Dla uprawnionego użytkownika z jednym punktem aplikacja może po zalogowaniu od razu sprawdzić konfigurację Gmail i, jeśli trzeba, przeprowadzić jednorazową zgodę na gmail.send.',
+    updated_at=now()
+WHERE slug='login';
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v9','Refresh assistant knowledge for rich service workspace and Gmail onboarding')
+ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v10: account blocking and inter-point service logistics.
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS blocked_at timestamptz,
+  ADD COLUMN IF NOT EXISTS blocked_reason text,
+  ADD COLUMN IF NOT EXISTS blocked_by_user_id text REFERENCES users(id);
+
+ALTER TABLE points
+  ADD COLUMN IF NOT EXISTS service_enabled boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS accepts_external_repairs boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS service_note text;
+
+UPDATE points
+SET service_enabled=true, accepts_external_repairs=true
+WHERE id='nowogard';
+
+CREATE TABLE IF NOT EXISTS service_order_transfers (
+  id text PRIMARY KEY,
+  service_order_id text NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+  from_point_id text NOT NULL REFERENCES points(id),
+  to_point_id text NOT NULL REFERENCES points(id),
+  status text NOT NULL DEFAULT 'REQUESTED'
+    CHECK (status IN ('REQUESTED','IN_TRANSIT','DELIVERED','ACCEPTED','REJECTED','CANCELLED')),
+  note text,
+  sent_by_user_id text NOT NULL REFERENCES users(id),
+  accepted_by_user_id text REFERENCES users(id),
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  shipped_at timestamptz,
+  delivered_at timestamptz,
+  accepted_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (from_point_id <> to_point_id)
+);
+
+CREATE INDEX IF NOT EXISTS service_order_transfers_order_idx
+  ON service_order_transfers(service_order_id, requested_at DESC);
+
+CREATE INDEX IF NOT EXISTS service_order_transfers_destination_idx
+  ON service_order_transfers(to_point_id, status, requested_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS service_order_transfers_one_open_idx
+  ON service_order_transfers(service_order_id)
+  WHERE status IN ('REQUESTED','IN_TRANSIT','DELIVERED');
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v10','Account blocking, service-capable points and inter-point service transfers')
 ON CONFLICT (version) DO NOTHING;

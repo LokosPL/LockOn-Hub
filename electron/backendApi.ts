@@ -88,11 +88,20 @@ export async function backendRequest<T>(
       typeof data === 'object' && data && 'message' in data
         ? String((data as { message?: unknown }).message || `Błąd API ${response.status}`)
         : `Błąd API ${response.status}`;
-    throw new Error(message);
+    const error = new Error(message) as Error & { code?: string; status?: number };
+    error.code = typeof data === 'object' && data && 'error' in data ? String((data as { error?: unknown }).error || '') : '';
+    error.status = response.status;
+    throw error;
   }
 
   return data as T;
 }
+
+export const backendGoogleCodeLogin = (payload: { code:string; codeVerifier:string; redirectUri:string }) =>
+  backendRequest<BackendLoginPayload>('/auth/google-code', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
 
 export const backendGoogleLogin = (idToken: string) =>
   backendRequest<BackendLoginPayload>('/auth/google', {

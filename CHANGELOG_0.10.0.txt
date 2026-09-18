@@ -1,0 +1,30 @@
+LockOn ServiceOS 0.10.0
+
+- Spójniejszy Google OAuth + Gmail onboarding dla OWNER/BOSS/COORDINATOR z jednym punktem.
+- Jedno kliknięcie logowania może prowadzić bezpośrednio do wymaganej jednorazowej zgody gmail.send.
+- Gmail OAuth używa login_hint konta ServiceOS, aby ograniczyć przypadkowe wybranie innego konta.
+- Czytelne strony callbacku i dokładniejsze komunikaty access_denied / błędów Google.
+- Historia statusów zlecenia w module Serwis: oś czasu, użytkownik, czas i notatka.
+- Endpoint historii z kontrolą roli i punktu po stronie centralnego backendu.
+- Twarda deduplikacja klientów po lower(email) i znormalizowanym numerze telefonu.
+- Race-safe tworzenie klienta przy równoległej pracy wielu komputerów.
+- Walidacja e-mail/telefon po stronie UI i backendu.
+- Produkcyjny backend Neon zachowuje server-side kontrolę uprawnień.
+- gmail.send pozostaje jedynym zakresem Gmail; aplikacja nie czyta skrzynki.
+- Rozbudowany workspace zlecenia: IMEI, numer seryjny, termin, technik, wycena i koszt końcowy.
+- Wewnętrzne notatki do zlecenia z autorem i czasem; nie są wysyłane klientowi.
+- Karta klienta pokazuje historię jego urządzeń i zleceń wyłącznie w zakresie punktów dostępnych dla konta.
+- Istniejący telefon jest ponownie używany po IMEI lub zgodnym numerze seryjnym zamiast tworzenia kolejnej karty urządzenia.
+- PostgreSQL wymusza unikalność niepustego IMEI.
+- SUPPORT nie otrzymuje kosztów zlecenia z centralnego API.
+- Nowy mobilny panel WWW: tworzenie zleceń, lista napraw, zmiana statusu, notatki i przekazania z telefonu.
+- Nowy portal ServiceOS pod app.serviceos.pl z logowaniem kodem z aplikacji w prawym górnym rogu.
+- Panel WWW działa jako PWA i może być dodany do ekranu głównego telefonu.
+- Punkty mogą być oznaczone jako posiadające serwis i przyjmujące naprawy z innych lokalizacji.
+- Przekazania zleceń między punktami mają osobny stan logistyczny: w drodze, dostarczono, przyjęte, odrzucone, anulowane.
+- Klient może dostać osobne e-maile o wysłaniu do serwisu, dostarczeniu i przyjęciu przez serwisanta.
+- OWNER może blokować i odblokowywać konta, natychmiast unieważniać sesje użytkownika oraz wylogować wszystkie urządzenia poza własną sesją.
+- Panel OWNER pokazuje aktywne sesje WWW/desktop, punkty serwisowe, otwarte przekazania i ostatni audyt.
+- Zablokowane konto jest odcinane po stronie backendu także od już istniejących sesji.
+- Google OAuth desktop i Gmail preferują server-side Authorization Code + PKCE; zachowany jest bezpieczny fallback przejściowy.
+- CORS centralnego API dopuszcza wyłącznie portal app.serviceos.pl, dotychczasowy GitHub Pages i lokalne środowisko developerskie.

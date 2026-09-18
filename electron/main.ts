@@ -375,7 +375,7 @@ const secureHandle = (channel: string, listener: SecureHandler) => {
   });
 };
 
-const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf') => {
+const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf') => {
   const text = String(value ?? '');
   if (!new RegExp(`^${prefix}_[a-f0-9]{20}$`).test(text)) throw new Error('Nieprawidłowy identyfikator.');
   return text;
@@ -463,6 +463,36 @@ const registerIpc = () => {
     }, token);
   });
 
+  secureHandle('admin:updatePointService', async (pointId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    const safePointId = String(pointId ?? '').trim().slice(0, 80);
+    return backendRequest(`/admin/points/${encodeURIComponent(safePointId)}/service`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }, token);
+  });
+  secureHandle('admin:blockUser', async (userId: string, blocked: boolean, reason?: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/admin/users/${encodeURIComponent(safeId(userId, 'usr'))}/block`, {
+      method: 'POST',
+      body: JSON.stringify({ blocked: Boolean(blocked), reason: String(reason ?? '').trim().slice(0, 500) })
+    }, token);
+  });
+  secureHandle('admin:logoutUserSessions', async (userId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/admin/users/${encodeURIComponent(safeId(userId, 'usr'))}/logout-all`, {
+      method: 'POST',
+      body: '{}'
+    }, token);
+  });
+  secureHandle('admin:logoutAllSessions', async (exceptCurrent = true) => {
+    const token = requireSessionToken();
+    return backendRequest('/admin/logout-all', {
+      method: 'POST',
+      body: JSON.stringify({ exceptCurrent: exceptCurrent !== false })
+    }, token);
+  });
+
   secureHandle('finance:list', async () => {
     const token = requireSessionToken();
     return backendRequest('/finance/revenues', {}, token);
@@ -490,6 +520,45 @@ const registerIpc = () => {
     if (safeQuery.length < 2) return [];
     return backendRequest(`/service/customers/search?q=${encodeURIComponent(safeQuery)}`, {}, token);
   });
+  secureHandle('service:getCustomer', async (customerId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/customers/${encodeURIComponent(safeId(customerId, 'cst'))}`, {}, token);
+  });
+  secureHandle('service:listTechnicians', async (pointId: string) => {
+    const token = requireSessionToken();
+    const safePointId = String(pointId ?? '').trim().slice(0, 80);
+    return backendRequest(`/service/technicians?pointId=${encodeURIComponent(safePointId)}`, {}, token);
+  });
+  secureHandle('service:listServicePoints', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/service/service-points', {}, token);
+  });
+  secureHandle('service:listTransfers', async (incoming = false, status?: string) => {
+    const token = requireSessionToken();
+    const params = new URLSearchParams();
+    if (incoming) params.set('incoming', '1');
+    const cleanStatus = String(status ?? '').trim().slice(0, 30);
+    if (cleanStatus) params.set('status', cleanStatus);
+    return backendRequest('/service/transfers' + (params.size ? '?' + params.toString() : ''), {}, token);
+  });
+  secureHandle('service:transferOrder', async (orderId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/transfer`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }, token);
+  });
+  secureHandle('service:updateTransferStatus', async (transferId: string, status: string, note?: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/transfers/${encodeURIComponent(safeId(transferId, 'trf'))}/status`, {
+      method: 'POST',
+      body: JSON.stringify({
+        status: String(status ?? '').trim().slice(0, 30),
+        note: String(note ?? '').trim().slice(0, 500)
+      })
+    }, token);
+  });
+
   secureHandle('service:createOrder', async (payload: unknown) => {
     const token = requireSessionToken();
     return backendRequest('/service/orders', {
@@ -500,6 +569,28 @@ const registerIpc = () => {
   secureHandle('service:listOrders', async () => {
     const token = requireSessionToken();
     return backendRequest('/service/orders', {}, token);
+  });
+  secureHandle('service:getHistory', async (orderId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/history`, {}, token);
+  });
+  secureHandle('service:getNotes', async (orderId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/notes`, {}, token);
+  });
+  secureHandle('service:addNote', async (orderId: string, body: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ body: String(body ?? '').trim().slice(0, 2000) })
+    }, token);
+  });
+  secureHandle('service:updateDetails', async (orderId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/details`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }, token);
   });
   secureHandle('service:updateStatus', async (orderId: string, status: string, note?: string) => {
     const token = requireSessionToken();

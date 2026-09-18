@@ -1,16 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  BellRing, CheckCircle2, ClipboardList, ClipboardPlus, Clock3, Mail, MailCheck,
-  RefreshCw, RotateCcw, Search, Send, Settings2, Smartphone, UserRound, XCircle
+  BadgeDollarSign, BellRing, CalendarClock, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus,
+  Clock3, History, IdCard, Mail, MailCheck, MapPin, PackageCheck, RefreshCw, RotateCcw, Save, Search, Send,
+  Settings2, Smartphone, StickyNote, Truck, UserCog, UserRound, XCircle
 } from 'lucide-react';
 import type {
+  AdminPoint,
   AuthState,
   GmailConnectionStatus,
   NotificationHistoryItem,
   NotificationSettings,
   ServiceCreateOrderResult,
   ServiceCustomer,
-  ServiceOrderSummary
+  ServiceCustomerDetail,
+  ServiceOrderNote,
+  ServiceOrderSummary,
+  ServiceStatusHistoryItem,
+  ServiceTechnician,
+  ServiceTransfer
 } from '../types/electron';
 import type { UserRole } from '../config/roles';
 
@@ -21,7 +28,27 @@ interface ServicePageProps {
 
 const emptyForm = {
   firstName: '', lastName: '', email: '', phone: '',
-  brand: '', model: '', issueDescription: '', orderType: 'REPAIR' as 'REPAIR' | 'COMPLAINT'
+  brand: '', model: '', imei: '', serialNumber: '', deviceNotes: '',
+  issueDescription: '', orderType: 'REPAIR' as 'REPAIR' | 'COMPLAINT',
+  assignedTechnicianId: '', estimatedCost: '', estimatedCompletionAt: ''
+};
+
+const toLocalDateTimeInput = (value?: string | null) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return shifted.toISOString().slice(0, 16);
+};
+
+type OrderDetailsDraft = {
+  imei: string;
+  serialNumber: string;
+  deviceNotes: string;
+  assignedTechnicianId: string;
+  estimatedCost: string;
+  finalCost: string;
+  estimatedCompletionAt: string;
 };
 
 const statuses = [
@@ -46,7 +73,7 @@ const deliveryLabel = (status: NotificationHistoryItem['status']) => ({
 }[status]);
 
 export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
-  const [tab, setTab] = useState<'NEW' | 'ORDERS' | 'EMAILS'>('NEW');
+  const [tab, setTab] = useState<'NEW' | 'ORDERS' | 'TRANSFERS' | 'EMAILS'>('NEW');
   const [form, setForm] = useState(emptyForm);
   const [query, setQuery] = useState('');
   const [matches, setMatches] = useState<ServiceCustomer[]>([]);
@@ -61,10 +88,24 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const [notificationBusy, setNotificationBusy] = useState(false);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryItem[]>([]);
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const [orderHistories, setOrderHistories] = useState<Record<string, ServiceStatusHistoryItem[]>>({});
+  const [orderNotes, setOrderNotes] = useState<Record<string, ServiceOrderNote[]>>({});
+  const [customerCards, setCustomerCards] = useState<Record<string, ServiceCustomerDetail>>({});
+  const [techniciansByPoint, setTechniciansByPoint] = useState<Record<string, ServiceTechnician[]>>({});
+  const [detailsDrafts, setDetailsDrafts] = useState<Record<string, OrderDetailsDraft>>({});
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+  const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
+  const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
+  const [technicians, setTechnicians] = useState<ServiceTechnician[]>([]);
+  const [servicePoints, setServicePoints] = useState<AdminPoint[]>([]);
+  const [transfers, setTransfers] = useState<ServiceTransfer[]>([]);
+  const [transferDrafts, setTransferDrafts] = useState<Record<string,{toPointId:string;note:string}>>({});
 
   const pointOptions = useMemo(() => auth.points, [auth.points]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
   const canEditStatus = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
+  const canManageOrderMeta = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
   const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
 
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -78,6 +119,71 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
       setError(e instanceof Error ? e.message : 'Nie udało się pobrać zleceń.');
     } finally {
       setOrdersBusy(false);
+    }
+  };
+
+  const loadTransfers = async () => {
+    try {
+      const [points, items] = await Promise.all([
+        window.lockOn.service.listServicePoints(),
+        window.lockOn.service.listTransfers(false)
+      ]);
+      setServicePoints(points);
+      setTransfers(items);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać przekazań serwisowych.');
+    }
+  };
+
+  const toggleOrderHistory = async (order: ServiceOrderSummary) => {
+    if (expandedOrderId === order.id) {
+      setExpandedOrderId(null);
+      return;
+    }
+
+    setExpandedOrderId(order.id);
+    setDetailsDrafts((current) => ({
+      ...current,
+      [order.id]: current[order.id] ?? {
+        imei: order.imei ?? '',
+        serialNumber: order.serialNumber ?? '',
+        deviceNotes: order.deviceNotes ?? '',
+        assignedTechnicianId: order.assignedTechnicianId ?? '',
+        estimatedCost: order.estimatedCost == null ? '' : String(order.estimatedCost),
+        finalCost: order.finalCost == null ? '' : String(order.finalCost),
+        estimatedCompletionAt: toLocalDateTimeInput(order.estimatedCompletionAt)
+      }
+    }));
+
+    setHistoryBusyId(order.id);
+    setError('');
+    try {
+      const requests: Promise<unknown>[] = [];
+      if (!orderHistories[order.id]) {
+        requests.push(window.lockOn.service.getHistory(order.id).then((history) =>
+          setOrderHistories((current) => ({ ...current, [order.id]: history }))
+        ));
+      }
+      if (!orderNotes[order.id]) {
+        requests.push(window.lockOn.service.getNotes(order.id).then((notes) =>
+          setOrderNotes((current) => ({ ...current, [order.id]: notes }))
+        ));
+      }
+      if (!customerCards[order.customerId]) {
+        requests.push(window.lockOn.service.getCustomer(order.customerId).then((card) =>
+          setCustomerCards((current) => ({ ...current, [order.customerId]: card }))
+        ));
+      }
+      if (canManageOrderMeta && !techniciansByPoint[order.pointId]) {
+        requests.push(window.lockOn.service.listTechnicians(order.pointId).then((items) =>
+          setTechniciansByPoint((current) => ({ ...current, [order.pointId]: items }))
+        ));
+      }
+      await Promise.all(requests);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać szczegółów zlecenia.');
+    } finally {
+      setHistoryBusyId(null);
     }
   };
 
@@ -107,11 +213,22 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
 
   useEffect(() => {
     void loadOrders();
+    void loadTransfers();
   }, []);
 
   useEffect(() => {
     void loadMailData(pointId);
   }, [pointId, canManageGmail]);
+
+  useEffect(() => {
+    if (!pointId || !canManageOrderMeta) {
+      setTechnicians([]);
+      return;
+    }
+    void window.lockOn.service.listTechnicians(pointId)
+      .then(setTechnicians)
+      .catch(() => setTechnicians([]));
+  }, [pointId, canManageOrderMeta]);
 
   const search = async () => {
     const clean = query.trim();
@@ -132,10 +249,44 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   };
 
   const submit = async () => {
+    const cleanEmail = form.email.trim();
+    const cleanPhone = form.phone.replace(/\D/g, '');
+    if (!form.firstName.trim() || !form.lastName.trim() || !form.brand.trim() || !form.model.trim() || !form.issueDescription.trim()) {
+      setError('Uzupełnij imię, nazwisko, markę, model i opis usterki.');
+      return;
+    }
+    if (!cleanEmail && !cleanPhone) {
+      setError('Podaj adres e-mail lub numer telefonu klienta.');
+      return;
+    }
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setError('Adres e-mail klienta jest nieprawidłowy.');
+      return;
+    }
+    if (form.phone.trim() && cleanPhone.length < 7) {
+      setError('Numer telefonu klienta jest zbyt krótki.');
+      return;
+    }
+    const cleanImei = form.imei.replace(/\s/g, '');
+    if (cleanImei && !/^\d{14,16}$/.test(cleanImei)) {
+      setError('IMEI powinien zawierać 14–16 cyfr.');
+      return;
+    }
+
     setBusy(true); setError(''); setNotice(''); setResult(null);
     try {
-      const created = await window.lockOn.service.createOrder({ ...form, pointId });
+      const created = await window.lockOn.service.createOrder({
+        ...form,
+        imei: cleanImei,
+        pointId,
+        estimatedCost: canManageOrderMeta && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
+        assignedTechnicianId: canManageOrderMeta ? form.assignedTechnicianId || undefined : undefined,
+        estimatedCompletionAt: form.estimatedCompletionAt ? new Date(form.estimatedCompletionAt).toISOString() : undefined
+      });
       setResult(created);
+      if (created.reusedDevice) {
+        setNotice('Zlecenie utworzone. Rozpoznano istniejące urządzenie klienta i użyto jego karty.');
+      }
       if (created.notification?.sent) {
         setNotice('Zlecenie utworzone. Potwierdzenie przyjęcia urządzenia zostało wysłane do klienta.');
       } else if (created.notification?.queued) {
@@ -161,6 +312,10 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     try {
       const updated = await window.lockOn.service.updateStatus(order.id, status);
       setOrders((current) => current.map((item) => item.id === order.id ? updated.order : item));
+      if (orderHistories[order.id]) {
+        const history = await window.lockOn.service.getHistory(order.id);
+        setOrderHistories((current) => ({ ...current, [order.id]: history }));
+      }
       const n = updated.notification;
       if (n.sent) {
         setNotice('Status zapisany. Wiadomość e-mail została wysłana do klienta.');
@@ -182,6 +337,97 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
       setError(e instanceof Error ? e.message : 'Nie udało się zmienić statusu.');
       await loadOrders();
     }
+  };
+
+  const saveOrderDetails = async (order: ServiceOrderSummary) => {
+    const draft = detailsDrafts[order.id];
+    if (!draft) return;
+    const cleanImei = draft.imei.replace(/\s/g, '');
+    if (cleanImei && !/^\d{14,16}$/.test(cleanImei)) {
+      setError('IMEI powinien zawierać 14–16 cyfr.');
+      return;
+    }
+    setOrderBusyId(order.id); setError(''); setNotice('');
+    try {
+      const updated = await window.lockOn.service.updateDetails(order.id, {
+        imei: cleanImei,
+        serialNumber: draft.serialNumber,
+        deviceNotes: draft.deviceNotes,
+        estimatedCompletionAt: draft.estimatedCompletionAt ? new Date(draft.estimatedCompletionAt).toISOString() : null,
+        ...(canManageOrderMeta ? {
+          assignedTechnicianId: draft.assignedTechnicianId || null,
+          estimatedCost: draft.estimatedCost === '' ? null : Number(draft.estimatedCost),
+          finalCost: draft.finalCost === '' ? null : Number(draft.finalCost)
+        } : {})
+      });
+      setOrders((current) => current.map((item) => item.id === order.id ? updated : item));
+      setDetailsDrafts((current) => ({
+        ...current,
+        [order.id]: {
+          imei: updated.imei ?? '',
+          serialNumber: updated.serialNumber ?? '',
+          deviceNotes: updated.deviceNotes ?? '',
+          assignedTechnicianId: updated.assignedTechnicianId ?? '',
+          estimatedCost: updated.estimatedCost == null ? '' : String(updated.estimatedCost),
+          finalCost: updated.finalCost == null ? '' : String(updated.finalCost),
+          estimatedCompletionAt: toLocalDateTimeInput(updated.estimatedCompletionAt)
+        }
+      }));
+      if (customerCards[order.customerId]) {
+        const card = await window.lockOn.service.getCustomer(order.customerId);
+        setCustomerCards((current) => ({ ...current, [order.customerId]: card }));
+      }
+      setNotice('Szczegóły zlecenia zostały zapisane.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się zapisać szczegółów zlecenia.');
+    } finally {
+      setOrderBusyId(null);
+    }
+  };
+
+  const addOrderNote = async (orderId: string) => {
+    const body = (noteDrafts[orderId] ?? '').trim();
+    if (!body) return;
+    setOrderBusyId(orderId); setError(''); setNotice('');
+    try {
+      const note = await window.lockOn.service.addNote(orderId, body);
+      setOrderNotes((current) => ({ ...current, [orderId]: [note, ...(current[orderId] ?? [])] }));
+      setNoteDrafts((current) => ({ ...current, [orderId]: '' }));
+      setNotice('Notatka została dodana do zlecenia.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się dodać notatki.');
+    } finally {
+      setOrderBusyId(null);
+    }
+  };
+
+  const sendTransfer = async (order: ServiceOrderSummary) => {
+    const draft = transferDrafts[order.id] ?? {toPointId:'',note:''};
+    if (!draft.toPointId) { setError('Wybierz docelowy punkt serwisowy.'); return; }
+    setOrderBusyId(order.id); setError(''); setNotice('');
+    try {
+      const result = await window.lockOn.service.transferOrder(order.id, draft);
+      setNotice(result.notification?.sent
+        ? 'Zlecenie wysłano do serwisu i klient otrzymał wiadomość.'
+        : 'Zlecenie wysłano do serwisu.');
+      setTransferDrafts((current)=>({...current,[order.id]:{toPointId:'',note:''}}));
+      await Promise.all([loadOrders(),loadTransfers()]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się wysłać zlecenia.');
+    } finally { setOrderBusyId(null); }
+  };
+
+  const changeTransferStatus = async (transfer: ServiceTransfer, status: ServiceTransfer['status']) => {
+    setOrderBusyId(transfer.id); setError(''); setNotice('');
+    try {
+      const result = await window.lockOn.service.updateTransferStatus(transfer.id,status);
+      setNotice(result.notification?.sent
+        ? 'Etap przekazania zapisany. Klient otrzymał wiadomość e-mail.'
+        : 'Etap przekazania został zapisany.');
+      await Promise.all([loadOrders(),loadTransfers()]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się zmienić etapu przekazania.');
+    } finally { setOrderBusyId(null); }
   };
 
   const connectGmail = async () => {
@@ -276,6 +522,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
         <div className="service-tabs">
           <button className={tab === 'NEW' ? 'active' : ''} onClick={() => setTab('NEW')}><ClipboardPlus size={15}/> Nowe zlecenie</button>
           <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia</button>
+          <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
           {canManageGmail && <button className={tab === 'EMAILS' ? 'active' : ''} onClick={() => setTab('EMAILS')}><BellRing size={15}/> Powiadomienia</button>}
         </div>
       </section>
@@ -336,8 +583,16 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
             <div className="service-form-grid">
               <label><span>Marka</span><input value={form.brand} onChange={(e)=>update('brand',e.target.value)} /></label>
               <label><span>Model</span><input value={form.model} onChange={(e)=>update('model',e.target.value)} /></label>
-              <label className="full"><span>Punkt</span><select value={pointId} onChange={(e)=>setPointId(e.target.value)}>{pointOptions.map((p)=><option key={p.id} value={p.id}>{p.name}{p.city ? ' — ' + p.city : ''}</option>)}</select></label>
-              <label className="full"><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Nowe zlecenie</option><option value="COMPLAINT">Zlecenie reklamacyjne</option></select></label>
+              <label><span>IMEI</span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="Opcjonalnie"/></label>
+              <label><span>Numer seryjny</span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Opcjonalnie"/></label>
+              <label className="full"><span>Punkt</span><select value={pointId} onChange={(e)=>{setPointId(e.target.value);update('assignedTechnicianId','');}}>{pointOptions.map((p)=><option key={p.id} value={p.id}>{p.name}{p.city ? ' — ' + p.city : ''}</option>)}</select></label>
+              <label><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Nowe zlecenie</option><option value="COMPLAINT">Zlecenie reklamacyjne</option></select></label>
+              <label><span>Przewidywany termin</span><input type="datetime-local" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>
+              {canManageOrderMeta && <>
+                <label><span>Technik</span><select value={form.assignedTechnicianId} onChange={(e)=>update('assignedTechnicianId',e.target.value)}><option value="">Nieprzypisany</option>{technicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>
+                <label><span>Szacowany koszt (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>
+              </>}
+              <label className="full"><span>Uwagi do urządzenia</span><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Stan obudowy, hasło serwisowe przekazane osobno, akcesoria…"/></label>
               <label className="full"><span>Opis usterki</span><textarea rows={6} value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} /></label>
             </div>
             <button className="button primary wide service-submit" disabled={busy || !pointId} onClick={()=>void submit()}>{busy ? 'Zapisywanie…' : 'Utwórz zlecenie'}</button>
@@ -352,24 +607,165 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
             <button className="button small secondary" disabled={ordersBusy} onClick={() => void loadOrders()}><RefreshCw className={ordersBusy ? 'spin' : ''} size={14}/> Odśwież</button>
           </div>
           <div className="service-orders-list">
-            {orders.map((order) => (
-              <article key={order.id} className="service-order-row">
-                <div className="service-order-number">#{order.orderNumber}</div>
-                <div className="service-order-main">
-                  <strong>{order.customerName}</strong>
-                  <span>{order.brand} {order.model} · {order.pointName}</span>
-                  <small>{order.orderType === 'COMPLAINT' ? 'Reklamacja' : 'Naprawa'} · {order.customerEmail || order.customerPhone || 'brak kontaktu'}</small>
-                </div>
-                <div className="service-order-status">
-                  {canEditStatus ? (
-                    <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
-                      {statuses.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
-                    </select>
-                  ) : <span className="status-badge">{order.statusLabel}</span>}
-                </div>
-              </article>
-            ))}
+            {orders.map((order) => {
+              const draft = detailsDrafts[order.id];
+              const card = customerCards[order.customerId];
+              const notes = orderNotes[order.id] ?? [];
+              const pointTechnicians = techniciansByPoint[order.pointId] ?? [];
+              const currentServicePointId = (order.transfers ?? []).find((item)=>item.status==='ACCEPTED')?.toPointId ?? order.pointId;
+              return (
+                <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''}`}>
+                  <div className="service-order-row">
+                    <div className="service-order-number">#{order.orderNumber}</div>
+                    <div className="service-order-main">
+                      <strong>{order.customerName}</strong>
+                      <span>{order.brand} {order.model} · {order.pointName}</span>
+                      <small>{order.orderType === 'COMPLAINT' ? 'Reklamacja' : 'Naprawa'} · {order.customerEmail || order.customerPhone || 'brak kontaktu'}</small>
+                      <div className="service-order-quick-meta">
+                        <span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span>
+                        <span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleString('pl-PL') : 'Brak terminu'}</span>
+                        {canManageOrderMeta && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
+                        {order.latestTransfer && <span><Truck size={11}/>{order.latestTransfer.status === 'IN_TRANSIT' ? 'W drodze do ' : order.latestTransfer.status === 'DELIVERED' ? 'Dostarczono do ' : order.latestTransfer.status === 'ACCEPTED' ? 'Przyjęte przez ' : 'Przekazanie: '}{order.latestTransfer.toPointName}</span>}
+                      </div>
+                    </div>
+                    <div className="service-order-actions">
+                      <div className="service-order-status">
+                        {canEditStatus ? (
+                          <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
+                            {statuses.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+                          </select>
+                        ) : <span className="status-badge">{order.statusLabel}</span>}
+                      </div>
+                      <button className="button small secondary service-history-button" onClick={() => void toggleOrderHistory(order)}>
+                        <History size={13}/>
+                        Szczegóły
+                        {expandedOrderId === order.id ? <ChevronUp size={13}/> : <ChevronDown size={13}/>}
+                      </button>
+                    </div>
+                  </div>
+
+                  {expandedOrderId === order.id && (
+                    <div className="service-order-workspace">
+                      {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
+
+                      {draft && (
+                        <section className="service-workspace-card">
+                          <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
+                          <div className="service-details-grid">
+                            <label><span>IMEI</span><input disabled={!canEditStatus} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
+                            <label><span>Numer seryjny</span><input disabled={!canEditStatus} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
+                            <label><span>Przewidywany termin</span><input disabled={!canEditStatus} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>
+                            {canManageOrderMeta && <label><span>Technik</span><select value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+                            {canManageOrderMeta && <label><span>Koszt szacowany</span><input type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
+                            {canManageOrderMeta && <label><span>Koszt końcowy</span><input type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
+                            <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditStatus} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
+                          </div>
+                          {canEditStatus && <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
+                        </section>
+                      )}
+
+                      <section className="service-workspace-card service-transfer-card">
+                        <div className="service-workspace-title"><Truck size={15}/><div><strong>Przekazanie do innego serwisu</strong><span>Logistyka jest niezależna od statusu samej naprawy.</span></div></div>
+                        {order.latestTransfer && ['IN_TRANSIT','DELIVERED','REQUESTED'].includes(order.latestTransfer.status) ? (
+                          <div className="active-transfer-summary">
+                            <div><MapPin size={15}/><span>{order.latestTransfer.fromPointName}</span><b>→</b><strong>{order.latestTransfer.toPointName}</strong></div>
+                            <small>{order.latestTransfer.status === 'IN_TRANSIT' ? 'Urządzenie jest w drodze.' : order.latestTransfer.status === 'DELIVERED' ? 'Urządzenie zostało dostarczone i czeka na przyjęcie.' : 'Przekazanie oczekuje.'}</small>
+                          </div>
+                        ) : canEditStatus ? (
+                          <div className="transfer-compose">
+                            <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
+                              <option value="">Wybierz serwis docelowy…</option>
+                              {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
+                            </select>
+                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
+                            <button className="button secondary small" disabled={orderBusyId===order.id || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
+                          </div>
+                        ) : <div className="service-history-empty">Brak aktywnego przekazania.</div>}
+                        {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
+                          {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
+                        </div>}
+                      </section>
+
+                      <section className="service-workspace-card">
+                        <div className="service-workspace-title"><IdCard size={15}/><div><strong>Karta klienta</strong><span>Historia widoczna tylko w Twoim zakresie punktów.</span></div></div>
+                        {card ? <>
+                          <div className="service-customer-card-head">
+                            <div><strong>{card.customer.firstName} {card.customer.lastName}</strong><span>{card.customer.email || 'brak e-maila'} · {card.customer.phone || 'brak telefonu'}</span></div>
+                            <b>{card.totalVisibleOrders} zleceń</b>
+                          </div>
+                          <div className="service-customer-order-mini">
+                            {card.orders.slice(0,5).map((item)=><div key={item.id}><span>#{item.orderNumber} · {item.brand} {item.model}</span><small>{item.statusLabel} · {new Date(item.receivedAt).toLocaleDateString('pl-PL')}</small></div>)}
+                          </div>
+                        </> : <div className="service-history-empty">Pobieram kartę klienta…</div>}
+                      </section>
+
+                      <section className="service-workspace-card">
+                        <div className="service-workspace-title"><StickyNote size={15}/><div><strong>Notatki wewnętrzne</strong><span>Nie są wysyłane klientowi.</span></div></div>
+                        {canEditStatus && <div className="service-note-compose">
+                          <textarea rows={3} maxLength={2000} value={noteDrafts[order.id] ?? ''} onChange={(e)=>setNoteDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="Diagnoza technika, zamówione części, ustalenia z klientem…"/>
+                          <button className="button secondary small" disabled={orderBusyId===order.id || !(noteDrafts[order.id] ?? '').trim()} onClick={()=>void addOrderNote(order.id)}>Dodaj notatkę</button>
+                        </div>}
+                        <div className="service-note-list">
+                          {notes.map((note)=><div key={note.id}><div><strong>{note.authorName}</strong><span>{new Date(note.createdAt).toLocaleString('pl-PL')}</span></div><p>{note.body}</p></div>)}
+                          {notes.length===0 && <div className="service-history-empty">Brak notatek wewnętrznych.</div>}
+                        </div>
+                      </section>
+
+                      <section className="service-workspace-card service-workspace-history">
+                        <div className="service-workspace-title"><History size={15}/><div><strong>Historia statusów</strong><span>Pełna oś czasu zlecenia #{order.orderNumber}</span></div></div>
+                        {(orderHistories[order.id] ?? []).map((item, index) => (
+                          <div className="service-history-item" key={item.id}>
+                            <div className="service-history-line"><i className={index === (orderHistories[order.id] ?? []).length - 1 ? 'current' : ''}></i></div>
+                            <div className="service-history-content">
+                              <div className="service-history-status">{item.fromLabel && <span>{item.fromLabel}</span>}{item.fromLabel && <b>→</b>}<strong>{item.toLabel}</strong></div>
+                              <small>{new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
+                              {item.note && <p>{item.note}</p>}
+                            </div>
+                          </div>
+                        ))}
+                        {(orderHistories[order.id] ?? []).length === 0 && <div className="service-history-empty">Brak zapisanych zmian statusu.</div>}
+                      </section>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
             {!ordersBusy && orders.length === 0 && <div className="service-empty">Brak zleceń w Twoim zakresie.</div>}
+          </div>
+        </section>
+      )}
+
+      {tab === 'TRANSFERS' && (
+        <section className="panel-card service-orders-card service-transfers-board">
+          <div className="panel-heading">
+            <div><span className="eyebrow"><Truck size={13}/> LOGISTYKA SERWISOWA</span><h2>Przekazania między punktami</h2><p>Wysłane urządzenia, dostawy oczekujące na przyjęcie i zakończone przekazania.</p></div>
+            <button className="button small secondary" onClick={()=>void loadTransfers()}><RefreshCw size={14}/> Odśwież</button>
+          </div>
+          <div className="transfer-board-list">
+            {transfers.map((transfer)=>{
+              const canActDestination=pointOptions.some((point)=>point.id===transfer.toPointId);
+              const canActSource=pointOptions.some((point)=>point.id===transfer.fromPointId);
+              return <article key={transfer.id} className={`transfer-board-row transfer-${transfer.status.toLowerCase()}`}>
+                <div className="transfer-board-icon">{transfer.status==='ACCEPTED'?<PackageCheck size={18}/>:<Truck size={18}/>}</div>
+                <div className="transfer-board-main">
+                  <strong>#{transfer.orderNumber} · {transfer.customerName}</strong>
+                  <span>{transfer.device}</span>
+                  <small>{transfer.fromPointName} → {transfer.toPointName}</small>
+                  {transfer.note && <p>{transfer.note}</p>}
+                </div>
+                <div className="transfer-board-status">
+                  <strong>{transfer.status==='IN_TRANSIT'?'W drodze':transfer.status==='DELIVERED'?'Dostarczono':transfer.status==='ACCEPTED'?'Przyjęte':transfer.status==='REJECTED'?'Odrzucone':transfer.status==='CANCELLED'?'Anulowane':'Oczekuje'}</strong>
+                  <small>{new Date(transfer.updatedAt).toLocaleString('pl-PL')}</small>
+                </div>
+                <div className="transfer-board-actions">
+                  {transfer.status==='IN_TRANSIT' && canActDestination && <button className="button small primary" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'DELIVERED')}>Dostarczono</button>}
+                  {transfer.status==='IN_TRANSIT' && canActSource && <button className="button small secondary" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'CANCELLED')}>Anuluj</button>}
+                  {transfer.status==='DELIVERED' && canActDestination && <button className="button small primary" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'ACCEPTED')}><PackageCheck size={13}/> Przyjmij</button>}
+                  {transfer.status==='DELIVERED' && canActDestination && <button className="button small danger-soft" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'REJECTED')}>Odrzuć</button>}
+                </div>
+              </article>;
+            })}
+            {transfers.length===0 && <div className="service-empty">Brak przekazań w Twoim zakresie.</div>}
           </div>
         </section>
       )}

@@ -6,10 +6,12 @@ import path from 'node:path';
 import { APP_CONFIG, hasGoogleClientId, type UserRole } from './appConfig';
 import {
   backendDevOwnerLogin,
+  backendGoogleCodeLogin,
   backendGoogleLogin,
   backendLogout,
   backendMe,
   type BackendAuthPayload,
+  type BackendLoginPayload,
   type BackendRequestedPoint
 } from './backendApi';
 
@@ -222,9 +224,6 @@ export const loginLocalStarter = async (development: boolean): Promise<AuthState
 export const loginWithGoogle = async (development: boolean): Promise<AuthState> => {
   if (!hasGoogleClientId()) return emptyState(development, 'Najpierw skonfiguruj Google OAuth Client ID.');
 
-  const clientSecret = APP_CONFIG.auth.googleClientSecret.trim();
-  if (!clientSecret) throw new Error('Brak danych Google OAuth wymaganych przez klienta desktopowego.');
-
   const { verifier, challenge } = createPkce();
   const stateToken = base64Url(crypto.randomBytes(24));
 
@@ -245,9 +244,16 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         }
 
         const error = callbackUrl.searchParams.get('error');
+        const errorDescription = callbackUrl.searchParams.get('error_description') || '';
         const returnedState = callbackUrl.searchParams.get('state');
         const code = callbackUrl.searchParams.get('code');
-        if (error) throw new Error(`Google OAuth: ${error}`);
+        if (error) {
+          const cleanDescription = errorDescription.replace(/[\r\n]+/g, ' ').trim().slice(0, 280);
+          if (error === 'access_denied') {
+            throw new Error('Logowanie Google zostało anulowane lub dostęp został odrzucony.');
+          }
+          throw new Error(cleanDescription || `Google OAuth: ${error}`);
+        }
         if (returnedState !== stateToken) throw new Error('Nieprawidłowy stan sesji logowania.');
         if (!code) throw new Error('Google nie zwrócił kodu autoryzacji.');
 
@@ -255,40 +261,55 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         if (!address || typeof address === 'string') throw new Error('Błąd lokalnego callbacku OAuth.');
         const redirectUri = `http://127.0.0.1:${address.port}/oauth2/callback`;
 
-        const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          redirect: 'error',
-          body: new URLSearchParams({
-            client_id: APP_CONFIG.auth.googleClientId,
-            client_secret: clientSecret,
+        let payload: BackendLoginPayload;
+        try {
+          payload = await backendGoogleCodeLogin({
             code,
-            code_verifier: verifier,
-            grant_type: 'authorization_code',
-            redirect_uri: redirectUri
-          })
-        });
+            codeVerifier: verifier,
+            redirectUri
+          });
+        } catch (serverError) {
+          const typed = serverError as Error & { code?: string; status?: number };
+          const canFallback = typed.code === 'SERVER_OAUTH_NOT_CONFIGURED' || typed.code === 'NOT_FOUND' || typed.status === 404;
+          if (!canFallback) throw serverError;
 
-        if (!tokenResponse.ok) {
-          let googleError = '';
-          try {
-            const errorPayload = await tokenResponse.json() as { error?: unknown; error_description?: unknown };
-            const code = typeof errorPayload.error === 'string' ? errorPayload.error : '';
-            const description = typeof errorPayload.error_description === 'string' ? errorPayload.error_description : '';
-            googleError = [code, description].filter(Boolean).join(': ');
-          } catch {
-            // Nie pokazujemy surowej odpowiedzi, aby przypadkiem nie ujawnić danych wrażliwych.
+          const clientSecret = APP_CONFIG.auth.googleClientSecret.trim();
+          if (!clientSecret) {
+            throw new Error('Serwerowe Google OAuth nie jest jeszcze skonfigurowane. Administrator musi dodać credential po stronie ServiceOS.');
           }
-          throw new Error(
-            `Google odrzucił logowanie (HTTP ${tokenResponse.status})${googleError ? `: ${googleError}` : '.'}`
-          );
+
+          const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            redirect: 'error',
+            body: new URLSearchParams({
+              client_id: APP_CONFIG.auth.googleClientId,
+              client_secret: clientSecret,
+              code,
+              code_verifier: verifier,
+              grant_type: 'authorization_code',
+              redirect_uri: redirectUri
+            })
+          });
+
+          if (!tokenResponse.ok) {
+            let googleError = '';
+            try {
+              const errorPayload = await tokenResponse.json() as { error?: unknown; error_description?: unknown };
+              const errorCode = typeof errorPayload.error === 'string' ? errorPayload.error : '';
+              const description = typeof errorPayload.error_description === 'string' ? errorPayload.error_description : '';
+              googleError = [errorCode, description].filter(Boolean).join(': ');
+            } catch {}
+            throw new Error(
+              `Google odrzucił logowanie (HTTP ${tokenResponse.status})${googleError ? `: ${googleError}` : '.'}`
+            );
+          }
+
+          const tokens = (await tokenResponse.json()) as { id_token?: string };
+          if (!tokens.id_token) throw new Error('Google nie zwrócił tokena tożsamości.');
+          payload = await backendGoogleLogin(tokens.id_token);
         }
 
-        const tokens = (await tokenResponse.json()) as { id_token?: string };
-        if (!tokens.id_token) throw new Error('Google nie zwrócił tokena tożsamości.');
-
-        // Backend weryfikuje podpis, issuer, czas ważności i audience ID tokena.
-        const payload = await backendGoogleLogin(tokens.id_token);
         writeStoredSession({ apiToken: payload.token, provider: 'google', savedAt: new Date().toISOString() });
         const state = toAuthState(payload, development);
 
@@ -313,8 +334,17 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
           resolve(state);
         });
       } catch (error) {
-        response.writeHead(500, oauthHtmlHeaders);
-        response.end('<h2>Logowanie nie powiodło się. Wróć do LockOn ServiceOS.</h2>');
+        const message = error instanceof Error ? error.message : 'Logowanie nie powiodło się.';
+        response.writeHead(400, oauthHtmlHeaders);
+        response.end(`
+          <!doctype html>
+          <html lang="pl"><head><meta charset="utf-8"><title>LockOn ServiceOS</title></head>
+          <body style="font-family:Arial;background:#111;color:#fff;padding:40px">
+            <h2>Logowanie nie powiodło się</h2>
+            <p style="color:#c3c8cf">${escapeHtml(message)}</p>
+            <p style="color:#777">Możesz zamknąć tę kartę i wrócić do aplikacji.</p>
+          </body></html>
+        `);
         finish(() => {
           server.close();
           reject(error);

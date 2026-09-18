@@ -17,13 +17,15 @@ const authorName = (message: HelpMessage, auth: AuthState) => {
   return auth.user?.name ?? 'Użytkownik';
 };
 
-export function HelpChat({ open, onClose, auth }: HelpChatProps) {
+export function HelpChat({ open, onClose, auth, effectiveRole }: HelpChatProps) {
   const [messages, setMessages] = useState<HelpMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const endRef = useRef<HTMLDivElement | null>(null);
+  const canSearchService = ['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN'].includes(effectiveRole);
+  const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
 
   const loadConversation = async () => {
     setLoading(true);
@@ -98,6 +100,14 @@ export function HelpChat({ open, onClose, auth }: HelpChatProps) {
           </button>
         </div>
 
+        <div className="help-chat-quick-actions" aria-label="Szybkie akcje pomocy">
+          {canSearchService && <button onClick={() => setDraft('znajdź klienta ')}>Znajdź klienta</button>}
+          {canSearchService && <button onClick={() => setDraft('zlecenie ')}>Sprawdź zlecenie</button>}
+          {canSearchService && <button onClick={() => setDraft('historia klienta ')}>Historia klienta</button>}
+          {canManageGmail && <button onClick={() => void sendText('Jak działają powiadomienia Gmail?')}>Gmail</button>}
+          <button onClick={() => void sendText('Jakie są moje uprawnienia?')}>Moje uprawnienia</button>
+        </div>
+
         <div className="help-chat-messages">
           {loading && (
             <div className="chat-message chat-system">
@@ -136,7 +146,7 @@ export function HelpChat({ open, onClose, auth }: HelpChatProps) {
                   void sendText(draft);
                 }
               }}
-              placeholder='Np. "znajdź klienta Kowalski", "zlecenie 123" albo "jak działa aktualizacja?"'
+              placeholder='Np. "historia klienta Kowalski", "zlecenie 123 statusy" albo "jak działa aktualizacja?"'
               rows={2}
             />
             <button className="help-send-button" onClick={() => void sendText(draft)} disabled={!draft.trim() || sending} title="Wyślij">
