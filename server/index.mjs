@@ -37,6 +37,8 @@ const googleVerifier = new OAuth2Client();
 const ROLES = ['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER'];
 const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
+const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN']);
+const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 
 const nowIso = () => new Date().toISOString();
 const id = (prefix) => `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
@@ -547,6 +549,7 @@ const handle = async (req, res) => {
   if (method === 'GET' && url.pathname === '/service/customers/search') {
     const user = requireActive(req, res);
     if (!user) return;
+    if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do danych klientów.' });
     const query = cleanText(url.searchParams.get('q') || '', 120).toLowerCase();
     if (query.length < 2) return json(res, 200, []);
 
@@ -578,6 +581,7 @@ const handle = async (req, res) => {
   if (method === 'POST' && url.pathname === '/service/orders') {
     const user = requireActive(req, res);
     if (!user) return;
+    if (!SERVICE_CREATE_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do tworzenia zleceń.' });
 
     const body = await readBody(req);
     const pointId = cleanText(body.pointId, 80);
@@ -676,6 +680,7 @@ const handle = async (req, res) => {
   if (method === 'GET' && url.pathname === '/service/orders') {
     const user = requireActive(req, res);
     if (!user) return;
+    if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do zleceń.' });
     const orders = db.serviceOrders
       .filter((order) => canSeePoint(user, order.pointId))
       .map((order) => {
@@ -709,7 +714,7 @@ const handle = async (req, res) => {
   if (method === 'POST' && serviceStatusMatch) {
     const user = requireActive(req, res);
     if (!user) return;
-    if (!['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(user.role)) {
+    if (!SERVICE_CREATE_ROLES.has(user.role)) {
       return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do zmiany statusu.' });
     }
     const order = db.serviceOrders.find((item) => item.id === serviceStatusMatch[1]);
