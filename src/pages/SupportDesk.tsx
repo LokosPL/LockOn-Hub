@@ -15,7 +15,7 @@ export function SupportDesk({ role, onOpenChat }: SupportDeskProps) {
         <div>
           <div className="eyebrow"><span className="live-dot" /> POMOC LOCKON</div>
           <h1>Pomoc bez zajmowania całego ekranu.</h1>
-          <p>Panel otwiera się z prawej strony i zostawia Ci widok aplikacji. W obecnej wersji rozmowa jest zapisywana lokalnie na komputerze.</p>
+          <p>Panel otwiera się z prawej strony i zostawia Ci widok aplikacji. Rozmowa jest zapisywana centralnie i przypisana wyłącznie do zalogowanego konta.</p>
           <button className="button primary" onClick={onOpenChat}>
             <MessageSquareText size={17} /> Otwórz pomoc
           </button>
@@ -33,8 +33,8 @@ export function SupportDesk({ role, onOpenChat }: SupportDeskProps) {
         <article className="panel-card support-card">
           <MessageSquareText size={20} />
           <span>Rozmowa</span>
-          <strong>Lokalna</strong>
-          <small>Historia zostaje na tym urządzeniu i nie udaje jeszcze centralnego systemu zgłoszeń.</small>
+          <strong>Prywatna · centralna</strong>
+          <small>Historia jest pobierana z centralnego backendu dla bieżącego konta. Dostęp do danych nadal ograniczają role i punkty.</small>
         </article>
       </section>
     </div>
