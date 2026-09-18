@@ -11,3 +11,9 @@ LockOn ServiceOS 0.10.0
 - Walidacja e-mail/telefon po stronie UI i backendu.
 - Produkcyjny backend Neon zachowuje server-side kontrolę uprawnień.
 - gmail.send pozostaje jedynym zakresem Gmail; aplikacja nie czyta skrzynki.
+- Rozbudowany workspace zlecenia: IMEI, numer seryjny, termin, technik, wycena i koszt końcowy.
+- Wewnętrzne notatki do zlecenia z autorem i czasem; nie są wysyłane klientowi.
+- Karta klienta pokazuje historię jego urządzeń i zleceń wyłącznie w zakresie punktów dostępnych dla konta.
+- Istniejący telefon jest ponownie używany po IMEI lub zgodnym numerze seryjnym zamiast tworzenia kolejnej karty urządzenia.
+- PostgreSQL wymusza unikalność niepustego IMEI.
+- SUPPORT nie otrzymuje kosztów zlecenia z centralnego API.
