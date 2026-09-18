@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('lockOn', {
     searchCustomers: (query: string) => ipcRenderer.invoke('service:searchCustomers', query),
     createOrder: (payload: unknown) => ipcRenderer.invoke('service:createOrder', payload),
     listOrders: () => ipcRenderer.invoke('service:listOrders'),
+    getHistory: (orderId: string) => ipcRenderer.invoke('service:getHistory', orderId),
     updateStatus: (orderId: string, status: string, note?: string) => ipcRenderer.invoke('service:updateStatus', orderId, status, note)
   },
   gmail: {
