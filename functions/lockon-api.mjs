@@ -913,18 +913,47 @@ const route = async (request) => {
 
   const statusMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/status$/);
   if(method==='POST'&&statusMatch){
-    const session=await requireActive(request),u=session.user;if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
-    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500);if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
-    const found=(await q('SELECT id,point_id,status,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];if(!found)return json(request,{error:'NOT_FOUND'},404);await requirePoint(u,found.point_id);
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
+    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500);
+    if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
+
+    const found=(await q('SELECT id,point_id,status,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
+    if(!found)return json(request,{error:'NOT_FOUND'},404);
+    await requirePoint(u,found.point_id);
+
+    if(found.status===next){
+      const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
+      return json(request,{order:view,notification:{queued:false,sent:false,reason:'STATUS_UNCHANGED'}});
+    }
+
     await q("UPDATE service_orders SET status=$1,updated_at=now(),completed_at=CASE WHEN $1='COMPLETED' THEN now() ELSE completed_at END WHERE id=$2",[next,found.id]);
     await q('INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,note,changed_by_user_id) VALUES($1,$2,$3,$4,$5,$6)',[makeId('hst'),found.id,found.status,next,note||null,u.id]);
+
     const customer=(await q('SELECT email FROM customers WHERE id=$1',[found.customer_id])).rows[0];
-    let notification={queued:false,sent:false};
-    if(customer?.email){
-      const nid=makeId('ntf');await q("INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",[nid,u.id,found.customer_id,found.id,customer.email,JSON.stringify({from:found.status,to:next})]);
+    const settingsResult=await q(
+      "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
+      [found.point_id]
+    );
+    const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
+    let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
+
+    if(!customer?.email){
+      notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
+    }else if(settings.automatic_email_enabled!==true){
+      notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
+    }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes(next)){
+      notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
+    }else{
+      const nid=makeId('ntf');
+      await q(
+        "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",
+        [nid,u.id,found.customer_id,found.id,customer.email,JSON.stringify({from:found.status,to:next,note:note||null})]
+      );
       notification={queued:true,...(await processNotification(nid))};
     }
-    await audit(u.id,'SERVICE_STATUS_CHANGED','service_order',found.id,found.point_id,{from:found.status,to:next});
+
+    await audit(u.id,'SERVICE_STATUS_CHANGED','service_order',found.id,found.point_id,{from:found.status,to:next,notification});
     const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
     return json(request,{order:view,notification});
   }
@@ -948,6 +977,107 @@ const route = async (request) => {
     const session=await requireActive(request),u=session.user;if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień.'),{status:403});
     const pointId=cleanText(url.searchParams.get('pointId'),80);await requirePoint(u,pointId);await q('DELETE FROM point_email_senders WHERE point_id=$1',[pointId]);await audit(u.id,'GMAIL_DISCONNECTED','point',pointId,pointId,{});
     return json(request,{ok:true});
+  }
+
+  if(method==='GET'&&url.pathname==='/notifications/settings'){
+    const session=await requireActive(request),u=session.user;
+    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    await requirePoint(u,pointId);
+    await q("INSERT INTO point_notification_settings(point_id) VALUES($1) ON CONFLICT(point_id) DO NOTHING",[pointId]);
+    const {rows}=await q("SELECT point_id,automatic_email_enabled,notify_statuses,sender_display_name,footer_text,updated_at FROM point_notification_settings WHERE point_id=$1 LIMIT 1",[pointId]);
+    const row=rows[0];
+    return json(request,{
+      pointId:row.point_id,
+      automaticEmailEnabled:row.automatic_email_enabled,
+      notifyStatuses:row.notify_statuses||[],
+      senderDisplayName:row.sender_display_name,
+      footerText:row.footer_text||'',
+      updatedAt:row.updated_at
+    });
+  }
+
+  if(method==='POST'&&url.pathname==='/notifications/settings'){
+    const session=await requireActive(request),u=session.user;
+    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do ustawień powiadomień.'),{status:403});
+    const body=await readJson(request),pointId=cleanText(body.pointId,80);
+    await requirePoint(u,pointId);
+    const automaticEmailEnabled=body.automaticEmailEnabled!==false;
+    const rawStatuses=Array.isArray(body.notifyStatuses)?body.notifyStatuses:[];
+    const notifyStatuses=[...new Set(rawStatuses.map((value)=>String(value).toUpperCase()).filter((value)=>SERVICE_STATUSES.has(value)))];
+    const senderDisplayName=cleanText(body.senderDisplayName||'LockOn ServiceOS',80).replace(/[\r\n]+/g,' ');
+    const footerText=cleanText(body.footerText||'',500);
+    await q(
+      "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,footer_text,updated_by_user_id,updated_at) VALUES($1,$2,$3::text[],$4,NULLIF($5,''),$6,now()) ON CONFLICT(point_id) DO UPDATE SET automatic_email_enabled=EXCLUDED.automatic_email_enabled,notify_statuses=EXCLUDED.notify_statuses,sender_display_name=EXCLUDED.sender_display_name,footer_text=EXCLUDED.footer_text,updated_by_user_id=EXCLUDED.updated_by_user_id,updated_at=now()",
+      [pointId,automaticEmailEnabled,notifyStatuses,senderDisplayName,footerText,u.id]
+    );
+    await audit(u.id,'NOTIFICATION_SETTINGS_UPDATED','point',pointId,pointId,{automaticEmailEnabled,notifyStatuses});
+    return json(request,{ok:true,pointId,automaticEmailEnabled,notifyStatuses,senderDisplayName,footerText});
+  }
+
+  if(method==='GET'&&url.pathname==='/notifications/history'){
+    const session=await requireActive(request),u=session.user;
+    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    await requirePoint(u,pointId);
+    const {rows}=await q(
+      "SELECT n.id,n.service_order_id,n.recipient,n.status,n.attempts,n.subject,n.provider_message_id,n.last_error,n.available_at,n.sent_at,n.created_at,n.updated_at,s.order_number,c.first_name,c.last_name,d.brand,d.model FROM notification_outbox n LEFT JOIN service_orders s ON s.id=n.service_order_id LEFT JOIN customers c ON c.id=n.customer_id LEFT JOIN devices d ON d.id=s.device_id WHERE s.point_id=$1 ORDER BY n.created_at DESC LIMIT 100",
+      [pointId]
+    );
+    return json(request,rows.map((row)=>({
+      id:row.id,
+      orderId:row.service_order_id,
+      orderNumber:row.order_number?Number(row.order_number):null,
+      recipient:row.recipient,
+      status:row.status,
+      attempts:Number(row.attempts||0),
+      subject:row.subject||null,
+      providerMessageId:row.provider_message_id||null,
+      lastError:row.last_error||null,
+      availableAt:row.available_at,
+      sentAt:row.sent_at||null,
+      createdAt:row.created_at,
+      updatedAt:row.updated_at,
+      customerName:row.first_name?[row.first_name,row.last_name].filter(Boolean).join(' '):null,
+      device:[row.brand,row.model].filter(Boolean).join(' ')
+    })));
+  }
+
+  if(method==='POST'&&url.pathname==='/integrations/gmail/test'){
+    const session=await requireActive(request),u=session.user;
+    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do testowania Gmail.'),{status:403});
+    const body=await readJson(request),pointId=cleanText(body.pointId,80);
+    await requirePoint(u,pointId);
+    const sender=(await q(
+      "SELECT e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,p.name AS point_name FROM point_email_senders e JOIN points p ON p.id=e.point_id LEFT JOIN point_notification_settings ns ON ns.point_id=e.point_id WHERE e.point_id=$1 LIMIT 1",
+      [pointId]
+    )).rows[0];
+    if(!sender||sender.status!=='ACTIVE')return json(request,{error:'NO_SENDER',message:'Najpierw połącz aktywne konto Gmail z tym punktem.'},409);
+    const recipient=normalizeEmail(u.email);
+    const subject='LockOn ServiceOS · test powiadomień · '+sender.point_name;
+    const textBody='To jest wiadomość testowa z LockOn ServiceOS.\n\nPunkt: '+sender.point_name+'\nNadawca: '+sender.sender_email+'\n\nJeżeli ją widzisz, integracja Gmail działa poprawnie.';
+    const htmlBody='<!doctype html><html lang="pl"><body style="background:#111318;color:#eceff3;font-family:Arial,sans-serif;padding:28px"><div style="max-width:600px;margin:auto;border:1px solid #2a2f37;border-radius:16px;background:#171a20;padding:22px"><div style="color:#ff7b45;font-size:12px;font-weight:700">LOCKON SERVICEOS</div><h2 style="margin:8px 0 12px">Test powiadomień Gmail</h2><p>Integracja dla punktu <strong>'+escapeHtml(sender.point_name)+'</strong> działa poprawnie.</p><p style="color:#89939e">Nadawca: '+escapeHtml(sender.sender_email)+'</p></div></body></html>';
+    try{
+      const sent=await sendGmail(sender,recipient,subject,textBody,htmlBody,sender.sender_display_name);
+      await q("UPDATE point_email_senders SET last_error=NULL,status='ACTIVE',updated_at=now() WHERE point_id=$1",[pointId]);
+      await audit(u.id,'GMAIL_TEST_SENT','point',pointId,pointId,{recipient,messageId:sent.id});
+      return json(request,{ok:true,recipient,messageId:sent.id});
+    }catch(error){
+      const message=cleanText(error instanceof Error?error.message:error,500);
+      await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1",[pointId,message]);
+      throw Object.assign(new Error(message),{status:502,code:'GMAIL_TEST_FAILED'});
+    }
+  }
+
+  const retryNotification=url.pathname.match(/^\/notifications\/([^/]+)\/retry$/);
+  if(method==='POST'&&retryNotification){
+    const session=await requireActive(request),u=session.user;
+    const row=(await q("SELECT n.id,s.point_id FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id WHERE n.id=$1 LIMIT 1",[retryNotification[1]])).rows[0];
+    if(!row)return json(request,{error:'NOT_FOUND'},404);
+    await requirePoint(u,row.point_id);
+    if(!SERVICE_EDIT_ROLES.has(u.role_code)&&!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do ponowienia wysyłki.'),{status:403});
+    await q("UPDATE notification_outbox SET status='PENDING',available_at=now(),last_error=NULL,updated_at=now() WHERE id=$1",[row.id]);
+    const result=await processNotification(row.id);
+    await audit(u.id,'NOTIFICATION_RETRIED','notification',row.id,row.point_id,result);
+    return json(request,{id:row.id,...result});
   }
 
   if(method==='POST'&&url.pathname==='/notifications/process'){
