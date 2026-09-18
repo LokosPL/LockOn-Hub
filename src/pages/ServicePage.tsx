@@ -612,6 +612,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               const card = customerCards[order.customerId];
               const notes = orderNotes[order.id] ?? [];
               const pointTechnicians = techniciansByPoint[order.pointId] ?? [];
+              const currentServicePointId = (order.transfers ?? []).find((item)=>item.status==='ACCEPTED')?.toPointId ?? order.pointId;
               return (
                 <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''}`}>
                   <div className="service-order-row">
@@ -674,7 +675,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                           <div className="transfer-compose">
                             <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
                               <option value="">Wybierz serwis docelowy…</option>
-                              {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==order.pointId).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
+                              {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                             </select>
                             <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
                             <button className="button secondary small" disabled={orderBusyId===order.id || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
