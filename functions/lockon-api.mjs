@@ -356,10 +356,10 @@ const listVisibleOrders = async (user) => {
     return rows.map((row) => orderViewForUser(row, user));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id JOIN user_point_access a ON a.point_id=s.point_id AND a.user_id=$1 ORDER BY s.created_at DESC LIMIT 100",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id JOIN user_point_access a ON a.point_id=s.point_id AND a.user_id=$1 ORDER BY s.created_at DESC LIMIT 100",
     [user.id]
   );
-  return rows.map(orderView);
+  return rows.map((row) => orderViewForUser(row, user));
 };
 
 const listVisibleCustomerOrders = async (user, customerId) => {
@@ -368,13 +368,13 @@ const listVisibleCustomerOrders = async (user, customerId) => {
       "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 ORDER BY s.created_at DESC LIMIT 100",
       [customerId]
     );
-    return rows.map(orderView);
+    return rows.map((row) => orderViewForUser(row, user));
   }
   const { rows } = await q(
     "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id JOIN user_point_access a ON a.point_id=s.point_id AND a.user_id=$2 WHERE s.customer_id=$1 ORDER BY s.created_at DESC LIMIT 100",
     [customerId, user.id]
   );
-  return rows.map(orderView);
+  return rows.map((row) => orderViewForUser(row, user));
 };
 
 const gmailKey = () => {
