@@ -236,3 +236,54 @@ ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, city=EXCLUDED.city, active=EX
 INSERT INTO users(id,email,name,role_code,status,first_login_at,last_login_at)
 VALUES ('usr_owner','nowogar@gmail.com','Bartłomiej Motłoch','OWNER','ACTIVE',now(),now())
 ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email,name=EXCLUDED.name,role_code='OWNER',status='ACTIVE',updated_at=now();
+
+
+-- 2026-09-18 central-v2: account-scoped help, Gmail sender and assistant knowledge.
+CREATE TABLE IF NOT EXISTS point_email_senders (
+  point_id text PRIMARY KEY REFERENCES points(id) ON DELETE CASCADE,
+  connected_by_user_id text NOT NULL REFERENCES users(id),
+  sender_email text NOT NULL,
+  google_sub text,
+  refresh_token_ciphertext text NOT NULL,
+  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','REVOKED','ERROR')),
+  last_error text,
+  connected_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS assistant_knowledge (
+  slug text PRIMARY KEY,
+  title text NOT NULL,
+  keywords text[] NOT NULL DEFAULT '{}',
+  body text NOT NULL,
+  audience text NOT NULL DEFAULT 'ALL' CHECK (audience IN ('ALL','OWNER')),
+  enabled boolean NOT NULL DEFAULT true,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS support_open_conversation_user_uq
+  ON support_conversations(user_id) WHERE status = 'OPEN';
+
+CREATE INDEX IF NOT EXISTS notification_outbox_order_idx
+  ON notification_outbox(service_order_id, created_at DESC)
+  WHERE service_order_id IS NOT NULL;
+
+INSERT INTO assistant_knowledge(slug,title,keywords,body,audience) VALUES
+ ('login','Logowanie Google',ARRAY['login','logowanie','google','oauth'],'Logowanie desktopowe otwiera systemową przeglądarkę i używa Authorization Code z PKCE oraz state. Hasło Google nie jest wpisywane do ServiceOS.','ALL'),
+ ('service','Moduł Serwis',ARRAY['serwis','klient','telefon','naprawa','zlecenie','reklamacja'],'Moduł Serwis pozwala wyszukać istniejącego klienta, dodać klienta i urządzenie, utworzyć nowe zlecenie lub reklamację oraz śledzić status naprawy. Klient jest ponownie używany po zgodnym emailu lub numerze telefonu.','ALL'),
+ ('notifications','Powiadomienia klienta',ARRAY['email','mail','powiadomienie','status'],'Po zmianie statusu zlecenia ServiceOS może wysłać klientowi wiadomość przez Gmail nadawcy połączonego z danym punktem. Token Gmail jest przechowywany wyłącznie po stronie centralnego backendu w postaci zaszyfrowanej.','ALL'),
+ ('website','Logowanie na stronie',ARRAY['strona','www','kod','autoryzacja'],'Zalogowany użytkownik może wygenerować jednorazowy kod do strony. Kod ma krótki termin ważności, może być użyty tylko raz, a baza przechowuje jego hash.','ALL'),
+ ('updates','Aktualizacje',ARRAY['aktualizacja','update','wersja'],'ServiceOS sprawdza GitHub Releases po starcie, cyklicznie podczas pracy i po powrocie do aplikacji. Aktualizacja pobiera się automatycznie, a instalacja następuje po potwierdzeniu użytkownika.','ALL'),
+ ('security','Bezpieczeństwo',ARRAY['bezpieczeństwo','security','token','sesja'],'ServiceOS używa sandboxa Electron, contextIsolation, nodeIntegration=false, walidacji IPC, CSP, bezpiecznego magazynu sesji oraz hashy tokenów po stronie backendu.','ALL'),
+ ('roles-owner','Role i uprawnienia',ARRAY['role','uprawnienia','owner','boss','coordinator','support','technician','user'],'Pełny katalog ról i uprawnień jest informacją administracyjną widoczną wyłącznie dla OWNER.','OWNER')
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title,
+  keywords=EXCLUDED.keywords,
+  body=EXCLUDED.body,
+  audience=EXCLUDED.audience,
+  enabled=true,
+  updated_at=now();
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v2','Gmail sender, account-scoped help and assistant knowledge')
+ON CONFLICT (version) DO NOTHING;
