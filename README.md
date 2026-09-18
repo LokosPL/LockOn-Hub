@@ -19,7 +19,7 @@ Każde wydanie zawiera również metadane aktualizatora, SHA-256 i GitHub Artifa
 
 ## Aktualizacje
 
-Aplikacja korzysta z `electron-updater` oraz GitHub Releases. Od wersji 0.6.7 sprawdza nowe wydania podczas pracy, pobiera je w tle i po jednym potwierdzeniu samodzielnie wykonuje restart potrzebny do podmiany wersji.
+Aplikacja korzysta z `electron-updater` oraz GitHub Releases. Od wersji 0.7.0 każda zainstalowana kopia sprawdza nowe wydanie chwilę po uruchomieniu, ponawia sprawdzanie co 10 minut podczas pracy, pobiera aktualizację w tle i po jednym potwierdzeniu samodzielnie wykonuje restart potrzebny do podmiany wersji.
 
 ## Motywy osobiste
 
@@ -100,4 +100,4 @@ Zasady współpracy: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Aktualna wersja
 
-**0.6.7**
+**0.7.0**
