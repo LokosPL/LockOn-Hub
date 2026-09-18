@@ -728,3 +728,33 @@ input,textarea,select{line-height:1.45}
   .service-order-row{grid-template-columns:58px minmax(0,1fr)}
   .service-order-status{grid-column:1/-1}
 }
+
+
+/* notification control center */
+.service-mail-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.notification-layout{display:grid;grid-template-columns:minmax(320px,.86fr) minmax(0,1.14fr);gap:12px}
+.notification-settings-card,.notification-history-card{padding:20px}
+.notification-toggle{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start;padding:12px;border:1px solid var(--line);border-radius:12px;background:#101318;margin:14px 0}
+.notification-toggle input{margin-top:2px;accent-color:#ff7b45}
+.notification-toggle span{display:flex;flex-direction:column;gap:3px}
+.notification-toggle strong{font-size:12px}
+.notification-toggle small{font-size:10px;color:#6f7883;line-height:1.45}
+.notification-field{display:flex;flex-direction:column;gap:7px;margin:12px 0}
+.notification-field>span{font-size:10px;color:#7d8792;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+.notification-field input,.notification-field textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:#0d1014;color:#eef1f4}
+.notification-status-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.notification-status-grid button{display:flex;align-items:center;gap:7px;min-height:36px;padding:0 10px;border:1px solid var(--line);border-radius:9px;background:#0e1116;color:#77818c;cursor:pointer;text-align:left;font-size:11px;font-weight:700}
+.notification-status-grid button:hover{border-color:var(--line2);color:#dfe3e8}
+.notification-status-grid button.active{background:rgba(255,117,54,.08);border-color:rgba(255,117,54,.26);color:#ff8b58}
+.notification-history-list{display:flex;flex-direction:column;gap:7px;margin-top:14px;max-height:560px;overflow:auto;padding-right:2px}
+.notification-history-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:11px;border:1px solid var(--line);border-radius:12px;background:#101318}
+.notification-delivery-icon{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:#0c0f13;color:#7d8792}
+.notification-history-row.status-sent .notification-delivery-icon{color:#75dda0;background:rgba(78,201,132,.07)}
+.notification-history-row.status-failed .notification-delivery-icon{color:#ff817b;background:rgba(255,91,84,.07)}
+.notification-history-main{min-width:0;display:flex;flex-direction:column}
+.notification-history-main strong{font-size:12px}
+.notification-history-main span{font-size:10px;color:#858f9a;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.notification-history-main small{font-size:9px;color:#5f6974;margin-top:3px}
+.notification-history-main .notification-error-text{color:#d87570;white-space:normal;line-height:1.35}
+@media(max-width:1100px){.notification-layout{grid-template-columns:1fr}}
+@media(max-width:720px){.notification-status-grid{grid-template-columns:1fr}.notification-history-row{grid-template-columns:30px minmax(0,1fr)}.notification-history-row>button{grid-column:1/-1}}

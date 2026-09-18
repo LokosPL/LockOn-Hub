@@ -297,3 +297,47 @@ ALTER TABLE point_email_senders
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-18-central-v3','Store encrypted OAuth client credential for Gmail refresh flow')
 ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v4: production-grade notification settings and delivery history.
+CREATE TABLE IF NOT EXISTS point_notification_settings (
+  point_id text PRIMARY KEY REFERENCES points(id) ON DELETE CASCADE,
+  automatic_email_enabled boolean NOT NULL DEFAULT true,
+  notify_statuses text[] NOT NULL DEFAULT ARRAY['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']::text[],
+  sender_display_name text NOT NULL DEFAULT 'LockOn ServiceOS',
+  footer_text text,
+  updated_by_user_id text REFERENCES users(id),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE notification_outbox ADD COLUMN IF NOT EXISTS subject text;
+ALTER TABLE notification_outbox ADD COLUMN IF NOT EXISTS body_text text;
+ALTER TABLE notification_outbox ADD COLUMN IF NOT EXISTS body_html text;
+ALTER TABLE notification_outbox ADD COLUMN IF NOT EXISTS provider_message_id text;
+ALTER TABLE notification_outbox ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS notification_outbox_retry_idx
+  ON notification_outbox(status, available_at, attempts)
+  WHERE status IN ('PENDING','FAILED');
+
+INSERT INTO point_notification_settings(point_id)
+SELECT id FROM points
+ON CONFLICT (point_id) DO NOTHING;
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v4','Notification settings, email rendering metadata and retry tracking')
+ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v5: configurable intake confirmation.
+ALTER TABLE point_notification_settings
+  ALTER COLUMN notify_statuses
+  SET DEFAULT ARRAY['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']::text[];
+
+UPDATE point_notification_settings
+SET notify_statuses = array_prepend('RECEIVED', notify_statuses), updated_at=now()
+WHERE NOT ('RECEIVED'=ANY(notify_statuses));
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v5','Send configurable intake confirmation at RECEIVED status')
+ON CONFLICT (version) DO NOTHING;

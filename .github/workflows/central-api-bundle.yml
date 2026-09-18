@@ -44,12 +44,10 @@ jobs:
             --format=esm \
             --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" \
             --outfile=central-api-dist/index.mjs
-          (cd central-api-dist && zip -9 function.zip index.mjs)
-
       - name: Upload Neon function bundle
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: lockon-central-api
-          path: central-api-dist/function.zip
+          path: central-api-dist/index.mjs
           if-no-files-found: error
           retention-days: 3

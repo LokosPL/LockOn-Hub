@@ -73,6 +73,8 @@ const initialDb = () => ({
   devices: [],
   serviceOrders: [],
   serviceOrderStatusHistory: [],
+  notificationSettings: [],
+  notificationHistory: [],
   supportConversations: [],
   supportMessages: [],
   sessions: []
@@ -99,6 +101,8 @@ const loadDb = () => {
       devices: Array.isArray(raw.devices) ? raw.devices : [],
       serviceOrders: Array.isArray(raw.serviceOrders) ? raw.serviceOrders : [],
       serviceOrderStatusHistory: Array.isArray(raw.serviceOrderStatusHistory) ? raw.serviceOrderStatusHistory : [],
+      notificationSettings: Array.isArray(raw.notificationSettings) ? raw.notificationSettings : [],
+      notificationHistory: Array.isArray(raw.notificationHistory) ? raw.notificationHistory : [],
       supportConversations: Array.isArray(raw.supportConversations) ? raw.supportConversations : [],
       supportMessages: Array.isArray(raw.supportMessages) ? raw.supportMessages : [],
       sessions: Array.isArray(raw.sessions) ? raw.sessions : []
@@ -771,6 +775,80 @@ const handle = async (req, res) => {
     return json(res, 409, {
       error: 'CENTRAL_API_REQUIRED',
       message: 'Połączenie Gmail jest dostępne w centralnym API. Ustaw LOCKON_API_URL na endpoint Neon podczas testu.'
+    });
+  }
+
+  if (method === 'GET' && url.pathname === '/notifications/settings') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    const pointId = cleanText(url.searchParams.get('pointId'), 80);
+    if (!canSeePoint(user, pointId)) return json(res, 403, { error: 'POINT' });
+    let settings = db.notificationSettings.find((item) => item.pointId === pointId);
+    if (!settings) {
+      settings = {
+        pointId,
+        automaticEmailEnabled: true,
+        notifyStatuses: ['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED'],
+        senderDisplayName: 'LockOn ServiceOS',
+        footerText: '',
+        updatedAt: nowIso()
+      };
+      db.notificationSettings.push(settings);
+      saveDb();
+    }
+    return json(res, 200, settings);
+  }
+
+  if (method === 'POST' && url.pathname === '/notifications/settings') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!['OWNER','BOSS','COORDINATOR'].includes(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const body = await readBody(req);
+    const pointId = cleanText(body.pointId, 80);
+    if (!canSeePoint(user, pointId)) return json(res, 403, { error: 'POINT' });
+    const allowed = new Set(['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','CANCELLED','REJECTED']);
+    const notifyStatuses = Array.isArray(body.notifyStatuses)
+      ? [...new Set(body.notifyStatuses.map((value) => String(value).toUpperCase()).filter((value) => allowed.has(value)))]
+      : [];
+    const next = {
+      pointId,
+      automaticEmailEnabled: body.automaticEmailEnabled !== false,
+      notifyStatuses,
+      senderDisplayName: cleanText(body.senderDisplayName || 'LockOn ServiceOS', 80),
+      footerText: cleanText(body.footerText || '', 500),
+      updatedAt: nowIso()
+    };
+    const index = db.notificationSettings.findIndex((item) => item.pointId === pointId);
+    if (index >= 0) db.notificationSettings[index] = next;
+    else db.notificationSettings.push(next);
+    saveDb();
+    return json(res, 200, { ok: true, ...next });
+  }
+
+  if (method === 'GET' && url.pathname === '/notifications/history') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    const pointId = cleanText(url.searchParams.get('pointId'), 80);
+    if (!canSeePoint(user, pointId)) return json(res, 403, { error: 'POINT' });
+    return json(res, 200, db.notificationHistory.filter((item) => item.pointId === pointId).slice(0, 100));
+  }
+
+  if (method === 'POST' && url.pathname === '/integrations/gmail/test') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    return json(res, 409, {
+      error: 'CENTRAL_API_REQUIRED',
+      message: 'Test Gmail wymaga centralnego API Neon.'
+    });
+  }
+
+  const localRetryNotification = url.pathname.match(/^\/notifications\/([^/]+)\/retry$/);
+  if (method === 'POST' && localRetryNotification) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    return json(res, 409, {
+      error: 'CENTRAL_API_REQUIRED',
+      message: 'Ponowienie wysyłki wymaga centralnego API Neon.'
     });
   }
 

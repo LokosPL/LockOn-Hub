@@ -43,7 +43,14 @@ contextBridge.exposeInMainWorld('lockOn', {
   gmail: {
     getStatus: (pointId: string) => ipcRenderer.invoke('gmail:getStatus', pointId),
     connect: (pointId: string) => ipcRenderer.invoke('gmail:connect', pointId),
-    disconnect: (pointId: string) => ipcRenderer.invoke('gmail:disconnect', pointId)
+    disconnect: (pointId: string) => ipcRenderer.invoke('gmail:disconnect', pointId),
+    test: (pointId: string) => ipcRenderer.invoke('gmail:test', pointId)
+  },
+  notifications: {
+    getSettings: (pointId: string) => ipcRenderer.invoke('notifications:getSettings', pointId),
+    updateSettings: (payload: unknown) => ipcRenderer.invoke('notifications:updateSettings', payload),
+    getHistory: (pointId: string) => ipcRenderer.invoke('notifications:getHistory', pointId),
+    retry: (notificationId: string) => ipcRenderer.invoke('notifications:retry', notificationId)
   },
   assistant: {
     getConversation: () => ipcRenderer.invoke('assistant:getConversation'),

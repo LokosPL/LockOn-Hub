@@ -40,3 +40,18 @@ Planned one-time website login codes use `website_auth_codes`:
 ## Email notifications
 
 Do not store Gmail passwords or OAuth client secrets in Electron. Status mail is queued in `notification_outbox` and will be sent by a server-side worker/provider. Provider credentials remain server-side only.
+
+
+## Notification worker
+
+ServiceOS stores outgoing status emails in `notification_outbox`.
+
+Delivery behavior:
+- immediate send attempt after an eligible status change;
+- delivery result and Gmail message ID are persisted;
+- failures use exponential backoff;
+- manual retry is available from the Service module;
+- Neon Function Trigger `serviceos-notification-worker` invokes `/internal/notifications/process` every 5 minutes;
+- the scheduled route accepts only Neon trigger calls carrying `X-Neon-Trigger-Invocation-Id`.
+
+Per-point configuration lives in `point_notification_settings` and controls automatic delivery, enabled statuses, sender display name and footer text.
