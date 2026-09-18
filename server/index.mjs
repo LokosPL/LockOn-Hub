@@ -71,6 +71,8 @@ const initialDb = () => ({
   devices: [],
   serviceOrders: [],
   serviceOrderStatusHistory: [],
+  supportConversations: [],
+  supportMessages: [],
   sessions: []
 });
 
@@ -95,6 +97,8 @@ const loadDb = () => {
       devices: Array.isArray(raw.devices) ? raw.devices : [],
       serviceOrders: Array.isArray(raw.serviceOrders) ? raw.serviceOrders : [],
       serviceOrderStatusHistory: Array.isArray(raw.serviceOrderStatusHistory) ? raw.serviceOrderStatusHistory : [],
+      supportConversations: Array.isArray(raw.supportConversations) ? raw.supportConversations : [],
+      supportMessages: Array.isArray(raw.supportMessages) ? raw.supportMessages : [],
       sessions: Array.isArray(raw.sessions) ? raw.sessions : []
     };
   } catch {
@@ -666,6 +670,145 @@ const handle = async (req, res) => {
       order,
       reusedCustomer
     });
+  }
+
+
+  if (method === 'GET' && url.pathname === '/service/orders') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    const orders = db.serviceOrders
+      .filter((order) => canSeePoint(user, order.pointId))
+      .map((order) => {
+        const customer = db.customers.find((item) => item.id === order.customerId);
+        const device = db.devices.find((item) => item.id === order.deviceId);
+        const point = db.points.find((item) => item.id === order.pointId);
+        return {
+          ...order,
+          pointName: point?.name || 'Punkt',
+          customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Klient',
+          customerEmail: customer?.email || null,
+          customerPhone: customer?.phone || null,
+          brand: device?.brand || '',
+          model: device?.model || '',
+          statusLabel: ({
+            RECEIVED: 'Przyjęto urządzenie',
+            DIAGNOSIS: 'Diagnoza',
+            WAITING_PARTS: 'Oczekiwanie na części',
+            IN_REPAIR: 'W naprawie',
+            READY: 'Gotowe do odbioru',
+            COMPLETED: 'Zakończone',
+            CANCELLED: 'Anulowane',
+            REJECTED: 'Odrzucone'
+          })[order.status] || order.status
+        };
+      });
+    return json(res, 200, orders);
+  }
+
+  const serviceStatusMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/status$/);
+  if (method === 'POST' && serviceStatusMatch) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(user.role)) {
+      return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do zmiany statusu.' });
+    }
+    const order = db.serviceOrders.find((item) => item.id === serviceStatusMatch[1]);
+    if (!order) return json(res, 404, { error: 'NOT_FOUND' });
+    if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
+    const body = await readBody(req);
+    const status = String(body.status || '').toUpperCase();
+    const allowed = ['RECEIVED', 'DIAGNOSIS', 'WAITING_PARTS', 'IN_REPAIR', 'READY', 'COMPLETED', 'CANCELLED', 'REJECTED'];
+    if (!allowed.includes(status)) return json(res, 400, { error: 'STATUS' });
+    const previous = order.status;
+    order.status = status;
+    order.updatedAt = nowIso();
+    if (status === 'COMPLETED') order.completedAt = nowIso();
+    db.serviceOrderStatusHistory.push({
+      id: id('hst'),
+      serviceOrderId: order.id,
+      fromStatus: previous,
+      toStatus: status,
+      note: cleanText(body.note, 500) || null,
+      changedByUserId: user.id,
+      createdAt: nowIso()
+    });
+    saveDb();
+    const customer = db.customers.find((item) => item.id === order.customerId);
+    const device = db.devices.find((item) => item.id === order.deviceId);
+    const point = db.points.find((item) => item.id === order.pointId);
+    return json(res, 200, {
+      order: {
+        ...order,
+        pointName: point?.name || 'Punkt',
+        customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Klient',
+        customerEmail: customer?.email || null,
+        customerPhone: customer?.phone || null,
+        brand: device?.brand || '',
+        model: device?.model || '',
+        statusLabel: status
+      },
+      notification: { queued: false, sent: false, reason: 'CENTRAL_API_REQUIRED' }
+    });
+  }
+
+  if (method === 'GET' && url.pathname === '/integrations/gmail') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    const pointId = cleanText(url.searchParams.get('pointId'), 80);
+    if (!canSeePoint(user, pointId)) return json(res, 403, { error: 'POINT' });
+    return json(res, 200, { connected: false, pointId, status: 'CENTRAL_API_REQUIRED' });
+  }
+
+  if ((method === 'POST' && url.pathname === '/integrations/gmail/connect') ||
+      (method === 'DELETE' && url.pathname === '/integrations/gmail')) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    return json(res, 409, {
+      error: 'CENTRAL_API_REQUIRED',
+      message: 'Połączenie Gmail jest dostępne w centralnym API. Ustaw LOCKON_API_URL na endpoint Neon podczas testu.'
+    });
+  }
+
+  if (method === 'GET' && url.pathname === '/support/conversation') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    let conversation = db.supportConversations.find((item) => item.userId === user.id && item.status === 'OPEN');
+    if (!conversation) {
+      conversation = { id: id('sup'), userId: user.id, status: 'OPEN', createdAt: nowIso(), updatedAt: nowIso() };
+      db.supportConversations.push(conversation);
+      saveDb();
+    }
+    const messages = db.supportMessages
+      .filter((item) => item.conversationId === conversation.id)
+      .map((item) => ({ id: item.id, author: item.author, text: item.text, createdAt: item.createdAt }));
+    return json(res, 200, { id: conversation.id, status: conversation.status, messages });
+  }
+
+  if (method === 'POST' && url.pathname === '/assistant/chat') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    const body = await readBody(req);
+    const message = cleanText(body.message, 1500);
+    if (!message) return json(res, 400, { error: 'MESSAGE' });
+    let conversation = db.supportConversations.find((item) => item.userId === user.id && item.status === 'OPEN');
+    if (!conversation) {
+      conversation = { id: id('sup'), userId: user.id, status: 'OPEN', createdAt: nowIso(), updatedAt: nowIso() };
+      db.supportConversations.push(conversation);
+    }
+    const userMessage = { id: id('msg'), conversationId: conversation.id, author: 'user', text: message, createdAt: nowIso() };
+    const lower = message.toLowerCase();
+    let answer = 'Mogę pomóc w obsłudze ServiceOS. Centralne wyszukiwanie klientów, zleceń i kod WWW działają po podłączeniu aplikacji do Neon API.';
+    if (lower.includes('aktualiz')) answer = 'ServiceOS sprawdza aktualizacje po starcie, cyklicznie podczas pracy i po powrocie do aplikacji.';
+    if (lower.includes('klient')) {
+      const term = lower.replace(/znajdź|znajdz|wyszukaj|klienta|klient|pokaż|pokaz|szukaj/g, ' ').trim();
+      const found = term.length >= 2 ? db.customers.filter((item) => `${item.firstName} ${item.lastName} ${item.email || ''} ${item.phone || ''}`.toLowerCase().includes(term)).slice(0, 5) : [];
+      if (found.length) answer = 'Znalazłem lokalnie:\n' + found.map((item) => `- ${item.firstName} ${item.lastName} · ${item.email || item.phone || 'brak kontaktu'}`).join('\n');
+    }
+    const assistantMessage = { id: id('msg'), conversationId: conversation.id, author: 'assistant', text: answer, createdAt: nowIso() };
+    db.supportMessages.push(userMessage, assistantMessage);
+    conversation.updatedAt = nowIso();
+    saveDb();
+    return json(res, 200, { userMessage, assistantMessage, action: null });
   }
 
   if (method === 'GET' && url.pathname === '/finance/revenues') {
