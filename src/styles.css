@@ -319,3 +319,35 @@ textarea{resize:vertical}
   .login-card,.pending-card{padding:22px}
   .settings-role-card{width:100%}
 }
+
+
+/* refined layered dark theme */
+:root{
+  --bg:#0a0d12;
+  --bg2:#0e1218;
+  --panel:#121720;
+  --panel2:#171d27;
+  --panel3:#1d2530;
+  --line:rgba(196,210,226,.085);
+  --line2:rgba(211,222,235,.15);
+  --text:#f2f5f8;
+  --muted:#9aa6b4;
+  --muted2:#6e7b89;
+  --shadow:0 28px 80px rgba(0,0,0,.34);
+}
+body{background:linear-gradient(145deg,#0b0e13,#080a0e 72%);color:var(--text)}
+.app-shell{background:
+  radial-gradient(circle at 86% -8%,rgba(255,111,31,.09),transparent 27%),
+  radial-gradient(circle at 16% 104%,rgba(55,89,125,.07),transparent 30%),
+  linear-gradient(145deg,#0b0e13,#090b0f 72%)}
+.titlebar{background:rgba(13,17,23,.97)}
+.sidebar{background:linear-gradient(180deg,rgba(15,20,27,.98),rgba(10,13,18,.98))}
+.content-shell{background:
+  radial-gradient(circle at 78% -5%,rgba(255,105,29,.045),transparent 27%),
+  linear-gradient(145deg,#0d1117,#0a0d12)}
+.panel-card,.stat-card,.shortcut-card{box-shadow:inset 0 1px rgba(255,255,255,.025),0 16px 38px rgba(0,0,0,.12)}
+.chat-assistant{border-color:rgba(255,126,56,.15);background:linear-gradient(135deg,rgba(255,126,56,.08),rgba(24,30,39,.92))}
+.chat-assistant .chat-message-meta span{color:#ff9b69}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{scroll-behavior:auto!important;animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+}
