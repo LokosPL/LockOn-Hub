@@ -1,0 +1,14 @@
+LockOn ServiceOS 0.9.0
+
+- Rozbudowany moduł powiadomień klienta.
+- Czytelne wiadomości Gmail w HTML + fallback tekstowy.
+- Konfiguracja automatycznych maili osobno dla każdego punktu.
+- Wybór statusów naprawy, po których wysyłana jest wiadomość.
+- Konfigurowalna nazwa nadawcy oraz stopka.
+- Test integracji Gmail wysyłany do aktualnie zalogowanego użytkownika.
+- Historia wysyłek: SENT / FAILED / PENDING, liczba prób, błąd i Gmail messageId.
+- Ręczne ponawianie nieudanych wiadomości.
+- Exponential backoff dla nieudanych wysyłek.
+- Automatyczny worker Neon Function do przetwarzania kolejki.
+- Naprawiony proces budowania ZIP Neon Function; aktywny deployment jest weryfikowany.
+- Bez zmian w zasadzie bezpieczeństwa: hasło Gmail nie jest przechowywane, tokeny i wymagane credentiale są szyfrowane po stronie centralnego backendu.
