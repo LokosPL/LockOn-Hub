@@ -245,9 +245,16 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         }
 
         const error = callbackUrl.searchParams.get('error');
+        const errorDescription = callbackUrl.searchParams.get('error_description') || '';
         const returnedState = callbackUrl.searchParams.get('state');
         const code = callbackUrl.searchParams.get('code');
-        if (error) throw new Error(`Google OAuth: ${error}`);
+        if (error) {
+          const cleanDescription = errorDescription.replace(/[\r\n]+/g, ' ').trim().slice(0, 280);
+          if (error === 'access_denied') {
+            throw new Error('Logowanie Google zostało anulowane lub dostęp został odrzucony.');
+          }
+          throw new Error(cleanDescription || `Google OAuth: ${error}`);
+        }
         if (returnedState !== stateToken) throw new Error('Nieprawidłowy stan sesji logowania.');
         if (!code) throw new Error('Google nie zwrócił kodu autoryzacji.');
 
@@ -313,8 +320,17 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
           resolve(state);
         });
       } catch (error) {
-        response.writeHead(500, oauthHtmlHeaders);
-        response.end('<h2>Logowanie nie powiodło się. Wróć do LockOn ServiceOS.</h2>');
+        const message = error instanceof Error ? error.message : 'Logowanie nie powiodło się.';
+        response.writeHead(400, oauthHtmlHeaders);
+        response.end(`
+          <!doctype html>
+          <html lang="pl"><head><meta charset="utf-8"><title>LockOn ServiceOS</title></head>
+          <body style="font-family:Arial;background:#111;color:#fff;padding:40px">
+            <h2>Logowanie nie powiodło się</h2>
+            <p style="color:#c3c8cf">${escapeHtml(message)}</p>
+            <p style="color:#777">Możesz zamknąć tę kartę i wrócić do aplikacji.</p>
+          </body></html>
+        `);
         finish(() => {
           server.close();
           reject(error);
