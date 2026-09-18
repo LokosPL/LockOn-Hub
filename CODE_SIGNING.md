@@ -6,7 +6,7 @@ LockOn ServiceOS is an open-source Windows desktop application built from this r
 
 **Free code signing provided by SignPath.io, certificate by SignPath Foundation.**
 
-Status: integration is prepared and will become active after SignPath Foundation accepts the project. Until then, release binaries may remain unsigned and Windows Smart App Control can block them.
+Status: the free SignPath Foundation Open Source application has been submitted and is awaiting review. The GitHub integration is prepared and will become active after approval. Until then, release binaries may remain unsigned and Windows Smart App Control can block them.
 
 ## Source and build origin
 
