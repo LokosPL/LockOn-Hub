@@ -396,32 +396,94 @@ const orderViewForUser = (row, user) => {
   return view;
 };
 
+const transferView = (row) => ({
+  id: row.id,
+  orderId: row.service_order_id,
+  fromPointId: row.from_point_id,
+  fromPointName: row.from_point_name,
+  fromPointCity: row.from_point_city,
+  toPointId: row.to_point_id,
+  toPointName: row.to_point_name,
+  toPointCity: row.to_point_city,
+  status: row.status,
+  note: row.note || null,
+  sentByUserId: row.sent_by_user_id,
+  sentByName: row.sent_by_name || row.sent_by_email || 'Użytkownik',
+  acceptedByUserId: row.accepted_by_user_id || null,
+  acceptedByName: row.accepted_by_name || row.accepted_by_email || null,
+  requestedAt: row.requested_at,
+  shippedAt: row.shipped_at || null,
+  deliveredAt: row.delivered_at || null,
+  acceptedAt: row.accepted_at || null,
+  updatedAt: row.updated_at
+});
+
+const loadTransfersForOrders = async (orderIds) => {
+  if (!orderIds.length) return new Map();
+  const { rows } = await q(
+    "SELECT t.*,fp.name AS from_point_name,fp.city AS from_point_city,tp.name AS to_point_name,tp.city AS to_point_city,su.name AS sent_by_name,su.email AS sent_by_email,au.name AS accepted_by_name,au.email AS accepted_by_email FROM service_order_transfers t JOIN points fp ON fp.id=t.from_point_id JOIN points tp ON tp.id=t.to_point_id JOIN users su ON su.id=t.sent_by_user_id LEFT JOIN users au ON au.id=t.accepted_by_user_id WHERE t.service_order_id=ANY($1::text[]) ORDER BY t.requested_at DESC",
+    [orderIds]
+  );
+  const map = new Map();
+  for (const row of rows) {
+    const item = transferView(row);
+    const list = map.get(item.orderId) || [];
+    list.push(item);
+    map.set(item.orderId, list);
+  }
+  return map;
+};
+
+const attachTransfers = async (orders) => {
+  const map = await loadTransfersForOrders(orders.map((order) => order.id));
+  return orders.map((order) => {
+    const transfers = map.get(order.id) || [];
+    return { ...order, latestTransfer: transfers[0] || null, transfers };
+  });
+};
+
+const canSeeOrder = async (user, orderId) => {
+  if (GLOBAL_ROLES.has(user.role_code)) return true;
+  const { rowCount } = await q(
+    "SELECT 1 FROM service_orders s WHERE s.id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id)) LIMIT 1",
+    [orderId, user.id]
+  );
+  return rowCount > 0;
+};
+
+const requireOrder = async (user, orderId) => {
+  if (!(await canSeeOrder(user, orderId))) {
+    throw Object.assign(new Error('Brak dostępu do tego zlecenia.'), { status: 403, code: 'ORDER_FORBIDDEN' });
+  }
+};
+
 const getVisibleOrderByNumber = async (user, number) => {
   const params = [Number(number)];
   let access = '';
   if (!GLOBAL_ROLES.has(user.role_code)) {
     params.push(user.id);
-    access = ' AND EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=s.point_id)';
+    access = " AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id))";
   }
   const { rows } = await q(
     "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
     params
   );
-  return rows[0] ? orderViewForUser(rows[0], user) : null;
+  if (!rows[0]) return null;
+  return (await attachTransfers([orderViewForUser(rows[0], user)]))[0];
 };
 
 const listVisibleOrders = async (user) => {
   if (GLOBAL_ROLES.has(user.role_code)) {
     const { rows } = await q(
-      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY s.created_at DESC LIMIT 100"
+      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150"
     );
-    return rows.map((row) => orderViewForUser(row, user));
+    return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id JOIN user_point_access a ON a.point_id=s.point_id AND a.user_id=$1 ORDER BY s.created_at DESC LIMIT 100",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150",
     [user.id]
   );
-  return rows.map((row) => orderViewForUser(row, user));
+  return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
 };
 
 const listVisibleCustomerOrders = async (user, customerId) => {
@@ -430,13 +492,13 @@ const listVisibleCustomerOrders = async (user, customerId) => {
       "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 ORDER BY s.created_at DESC LIMIT 100",
       [customerId]
     );
-    return rows.map((row) => orderViewForUser(row, user));
+    return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id JOIN user_point_access a ON a.point_id=s.point_id AND a.user_id=$2 WHERE s.customer_id=$1 ORDER BY s.created_at DESC LIMIT 100",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id)) ORDER BY s.created_at DESC LIMIT 100",
     [customerId, user.id]
   );
-  return rows.map((row) => orderViewForUser(row, user));
+  return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
 };
 
 const gmailKey = () => {
