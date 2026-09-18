@@ -131,11 +131,11 @@ let updateTimer: NodeJS.Timeout | null = null;
 export const startAutomaticUpdateChecks = () => {
   if (!app.isPackaged || updateTimer) return;
 
-  // Pierwsze sprawdzenie robi main.ts po starcie. Później ponawiamy je co 4h,
-  // żeby użytkownik nie musiał zamykać aplikacji, by zobaczyć nowe wydanie.
+  // Pierwsze sprawdzenie robi main.ts po starcie. Później ponawiamy je co 30 minut,
+  // więc nowa wersja wpada podczas normalnej pracy bez ręcznego restartowania aplikacji.
   updateTimer = setInterval(() => {
     void checkForUpdates().catch(() => undefined);
-  }, 4 * 60 * 60 * 1000);
+  }, 30 * 60 * 1000);
 };
 
 export const stopAutomaticUpdateChecks = () => {
