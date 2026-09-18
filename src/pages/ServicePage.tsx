@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  BellRing, CheckCircle2, ClipboardList, ClipboardPlus, Clock3, Mail, MailCheck,
+  BellRing, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus, Clock3, History, Mail, MailCheck,
   RefreshCw, RotateCcw, Search, Send, Settings2, Smartphone, UserRound, XCircle
 } from 'lucide-react';
 import type {
@@ -10,7 +10,8 @@ import type {
   NotificationSettings,
   ServiceCreateOrderResult,
   ServiceCustomer,
-  ServiceOrderSummary
+  ServiceOrderSummary,
+  ServiceStatusHistoryItem
 } from '../types/electron';
 import type { UserRole } from '../config/roles';
 
@@ -61,6 +62,9 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const [notificationBusy, setNotificationBusy] = useState(false);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryItem[]>([]);
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const [orderHistories, setOrderHistories] = useState<Record<string, ServiceStatusHistoryItem[]>>({});
+  const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
 
   const pointOptions = useMemo(() => auth.points, [auth.points]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
@@ -78,6 +82,28 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
       setError(e instanceof Error ? e.message : 'Nie udało się pobrać zleceń.');
     } finally {
       setOrdersBusy(false);
+    }
+  };
+
+  const toggleOrderHistory = async (orderId: string) => {
+    if (expandedOrderId === orderId) {
+      setExpandedOrderId(null);
+      return;
+    }
+
+    setExpandedOrderId(orderId);
+    if (orderHistories[orderId]) return;
+
+    setHistoryBusyId(orderId);
+    setError('');
+    try {
+      const history = await window.lockOn.service.getHistory(orderId);
+      setOrderHistories((current) => ({ ...current, [orderId]: history }));
+    } catch (e) {
+      setExpandedOrderId(null);
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać historii zlecenia.');
+    } finally {
+      setHistoryBusyId(null);
     }
   };
 
@@ -161,6 +187,10 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     try {
       const updated = await window.lockOn.service.updateStatus(order.id, status);
       setOrders((current) => current.map((item) => item.id === order.id ? updated.order : item));
+      if (orderHistories[order.id]) {
+        const history = await window.lockOn.service.getHistory(order.id);
+        setOrderHistories((current) => ({ ...current, [order.id]: history }));
+      }
       const n = updated.notification;
       if (n.sent) {
         setNotice('Status zapisany. Wiadomość e-mail została wysłana do klienta.');
@@ -353,20 +383,57 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
           </div>
           <div className="service-orders-list">
             {orders.map((order) => (
-              <article key={order.id} className="service-order-row">
-                <div className="service-order-number">#{order.orderNumber}</div>
-                <div className="service-order-main">
-                  <strong>{order.customerName}</strong>
-                  <span>{order.brand} {order.model} · {order.pointName}</span>
-                  <small>{order.orderType === 'COMPLAINT' ? 'Reklamacja' : 'Naprawa'} · {order.customerEmail || order.customerPhone || 'brak kontaktu'}</small>
+              <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''}`}>
+                <div className="service-order-row">
+                  <div className="service-order-number">#{order.orderNumber}</div>
+                  <div className="service-order-main">
+                    <strong>{order.customerName}</strong>
+                    <span>{order.brand} {order.model} · {order.pointName}</span>
+                    <small>{order.orderType === 'COMPLAINT' ? 'Reklamacja' : 'Naprawa'} · {order.customerEmail || order.customerPhone || 'brak kontaktu'}</small>
+                  </div>
+                  <div className="service-order-actions">
+                    <div className="service-order-status">
+                      {canEditStatus ? (
+                        <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
+                          {statuses.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+                        </select>
+                      ) : <span className="status-badge">{order.statusLabel}</span>}
+                    </div>
+                    <button className="button small secondary service-history-button" onClick={() => void toggleOrderHistory(order.id)}>
+                      <History size={13}/>
+                      Historia
+                      {expandedOrderId === order.id ? <ChevronUp size={13}/> : <ChevronDown size={13}/>}
+                    </button>
+                  </div>
                 </div>
-                <div className="service-order-status">
-                  {canEditStatus ? (
-                    <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
-                      {statuses.map(([value,label]) => <option key={value} value={value}>{label}</option>)}
-                    </select>
-                  ) : <span className="status-badge">{order.statusLabel}</span>}
-                </div>
+
+                {expandedOrderId === order.id && (
+                  <div className="service-order-history">
+                    <div className="service-history-head">
+                      <div><strong>Historia statusów</strong><span>Pełna oś czasu zlecenia #{order.orderNumber}</span></div>
+                    </div>
+                    {historyBusyId === order.id && <div className="service-history-empty">Pobieram historię…</div>}
+                    {historyBusyId !== order.id && (orderHistories[order.id] ?? []).map((item, index) => (
+                      <div className="service-history-item" key={item.id}>
+                        <div className="service-history-line">
+                          <i className={index === (orderHistories[order.id] ?? []).length - 1 ? 'current' : ''}></i>
+                        </div>
+                        <div className="service-history-content">
+                          <div className="service-history-status">
+                            {item.fromLabel && <span>{item.fromLabel}</span>}
+                            {item.fromLabel && <b>→</b>}
+                            <strong>{item.toLabel}</strong>
+                          </div>
+                          <small>{new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
+                          {item.note && <p>{item.note}</p>}
+                        </div>
+                      </div>
+                    ))}
+                    {historyBusyId !== order.id && (orderHistories[order.id] ?? []).length === 0 && (
+                      <div className="service-history-empty">Brak zapisanych zmian statusu.</div>
+                    )}
+                  </div>
+                )}
               </article>
             ))}
             {!ordersBusy && orders.length === 0 && <div className="service-empty">Brak zleceń w Twoim zakresie.</div>}
