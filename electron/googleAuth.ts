@@ -11,6 +11,7 @@ import {
   backendLogout,
   backendMe,
   type BackendAuthPayload,
+  type BackendLoginPayload,
   type BackendRequestedPoint
 } from './backendApi';
 
