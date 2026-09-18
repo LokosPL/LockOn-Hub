@@ -31,7 +31,14 @@ export interface FinancePayload { entries: RevenueEntry[]; summary: { approvedRe
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; issueDescription:string; status:string; receivedAt:string; }
+export interface ServiceOrderSummary extends ServiceOrder { pointName:string; customerName:string; customerEmail?:string|null; customerPhone?:string|null; brand:string; model:string; statusLabel:string; assignedTechnicianId?:string|null; completedAt?:string|null; }
 export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; }
+export interface ServiceStatusResult { order:ServiceOrderSummary; notification:{queued:boolean;sent:boolean;reason?:string}; }
+export interface GmailConnectionStatus { connected:boolean; pointId:string; email?:string; status?:string; lastError?:string|null; connectedAt?:string; }
+export interface HelpMessage { id:string; author:'user'|'support'|'system'|'assistant'; text:string; createdAt:string; }
+export interface HelpConversation { id:string; status:string; messages:HelpMessage[]; }
+export interface AssistantReply { userMessage:HelpMessage; assistantMessage:HelpMessage; action?:{type:string;code?:string;expiresAt?:string}|null; }
+export interface WebsiteAuthCode { code:string; expiresAt:string; }
 
 declare global {
   interface Window {
@@ -57,7 +64,19 @@ declare global {
       service: {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
         createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT'}) => Promise<ServiceCreateOrderResult>;
+        listOrders: () => Promise<ServiceOrderSummary[]>;
+        updateStatus: (orderId:string,status:string,note?:string) => Promise<ServiceStatusResult>;
       };
+      gmail: {
+        getStatus: (pointId:string) => Promise<GmailConnectionStatus>;
+        connect: (pointId:string) => Promise<GmailConnectionStatus>;
+        disconnect: (pointId:string) => Promise<{ok:true}>;
+      };
+      assistant: {
+        getConversation: () => Promise<HelpConversation>;
+        send: (message:string) => Promise<AssistantReply>;
+      };
+      website: { createAuthCode: () => Promise<WebsiteAuthCode>; };
       browser: {
         getState: () => Promise<BrowserState>; setVisible: (visible:boolean)=>Promise<void>; setBounds:(bounds:BrowserBounds)=>Promise<void>;
         navigate:(input:string)=>Promise<BrowserState>; back:()=>Promise<BrowserState>; forward:()=>Promise<BrowserState>; reload:()=>Promise<BrowserState>; home:()=>Promise<BrowserState>; openExternal:()=>Promise<void>;
