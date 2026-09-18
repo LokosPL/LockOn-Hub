@@ -83,19 +83,19 @@ export function UpdatePrompt() {
           <h2>ServiceOS v{update.version}<br /><span>jest gotowy do instalacji.</span></h2>
           <p>
             Masz teraz v{appInfo?.version ?? '—'}. Nowa wersja została już pobrana w tle.
-            Nie musisz pobierać instalatora ze strony.
+            ServiceOS zaktualizuje się po cichu w tym samym folderze i uruchomi ponownie.
           </p>
 
           <div className="global-update-actions">
             <button className="button primary" onClick={() => void window.lockOn.updater.install()}>
-              Zainstaluj i uruchom ponownie
+              Uruchom ponownie i zaktualizuj
             </button>
             <button className="button ghost" onClick={() => setDismissedVersion(update.version)}>
               Później
             </button>
           </div>
 
-          <small>Jeżeli wybierzesz „Później”, aktualizacja zainstaluje się przy zamknięciu aplikacji.</small>
+          <small>Bez kreatora instalacji i bez ponownego wyboru użytkownika lub katalogu.</small>
         </section>
       </div>
     );
