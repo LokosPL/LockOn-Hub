@@ -1077,11 +1077,14 @@ const route = async (request) => {
   if (method === 'GET' && url.pathname === '/admin/overview') {
     const session = await requireActive(request);
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
-    const [points, users, loginEvents, pendingRevenue] = await Promise.all([
+    const [points, users, loginEvents, pendingRevenue, sessions, recentAudit, transferSummary] = await Promise.all([
       q('SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points ORDER BY name'),
-      q("SELECT id,google_sub,email,name,picture_url,role_code,status,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
+      q("SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
       q("SELECT a.id,a.actor_user_id AS user_id,u.email,u.name,u.role_code AS role,u.status,a.created_at FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id WHERE a.action LIKE 'LOGIN_%' ORDER BY a.created_at DESC LIMIT 100"),
-      q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC")
+      q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC"),
+      q("SELECT client_type,count(*)::int AS count FROM auth_sessions WHERE revoked_at IS NULL AND expires_at>now() AND absolute_expires_at>now() GROUP BY client_type"),
+      q("SELECT a.id,a.action,a.entity_type,a.entity_id,a.point_id,a.metadata,a.created_at,u.name AS actor_name,u.email AS actor_email FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id ORDER BY a.created_at DESC LIMIT 80"),
+      q("SELECT status,count(*)::int AS count FROM service_order_transfers GROUP BY status")
     ]);
     const mappedUsers = [];
     for (const user of users.rows) mappedUsers.push(await publicUser(user));
@@ -1090,12 +1093,34 @@ const route = async (request) => {
       splitTechnicianPercent:50,splitBossPercent:50,technicianShare:0,bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,
       technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}
     }));
+    const sessionCounts=Object.fromEntries(sessions.rows.map((row)=>[row.client_type,Number(row.count)]));
+    const transferCounts=Object.fromEntries(transferSummary.rows.map((row)=>[row.status,Number(row.count)]));
     return json(request, {
       points: points.rows.map(pointView),
       users: mappedUsers,
-      pendingUsers: mappedUsers.filter((u) => u.status === 'PENDING'),
+      pendingUsers: mappedUsers.filter((u) => u.status === 'PENDING' && !u.blocked),
+      blockedUsers: mappedUsers.filter((u) => u.blocked),
       loginEvents: loginEvents.rows.map((e) => ({id:e.id,userId:e.user_id,email:e.email||'',name:e.name||'',role:e.role||null,status:e.status||'PENDING',pointIds:[],createdAt:e.created_at})),
-      pendingRevenue: revenues
+      pendingRevenue: revenues,
+      system: {
+        activeSessions: Object.values(sessionCounts).reduce((sum,value)=>sum+Number(value||0),0),
+        desktopSessions: Number(sessionCounts.DESKTOP||0),
+        webSessions: Number(sessionCounts.WEB||0),
+        servicePoints: points.rows.filter((point)=>point.service_enabled===true).length,
+        openTransfers: Number(transferCounts.REQUESTED||0)+Number(transferCounts.IN_TRANSIT||0)+Number(transferCounts.DELIVERED||0),
+        blockedUsers: mappedUsers.filter((u)=>u.blocked).length
+      },
+      transferSummary: transferCounts,
+      recentAudit: recentAudit.rows.map((row)=>({
+        id:row.id,
+        action:row.action,
+        entityType:row.entity_type,
+        entityId:row.entity_id||null,
+        pointId:row.point_id||null,
+        actorName:row.actor_name||row.actor_email||'System',
+        metadata:row.metadata||{},
+        createdAt:row.created_at
+      }))
     });
   }
 
@@ -1104,12 +1129,15 @@ const route = async (request) => {
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
     const body = await readJson(request);
     const name = cleanText(body.name, 90), city = cleanText(body.city, 90);
+    const serviceEnabled=body.serviceEnabled===true;
+    const acceptsExternalRepairs=serviceEnabled&&body.acceptsExternalRepairs===true;
+    const serviceNote=cleanText(body.serviceNote,500);
     if (!name || !city) return json(request, { error:'VALIDATION',message:'Wpisz nazwę punktu i miasto.' }, 400);
     let result = await q('SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE lower(name)=lower($1) AND lower(city)=lower($2) LIMIT 1',[name,city]);
     if (result.rows[0]) return json(request, pointView(result.rows[0]));
     const pointId=makeId('pnt');
-    result=await q('INSERT INTO points(id,name,city,active) VALUES($1,$2,$3,true) RETURNING id,name,city,active',[pointId,name,city]);
-    await audit(session.user.id,'POINT_CREATED','point',pointId,pointId,{});
+    result=await q("INSERT INTO points(id,name,city,active,service_enabled,accepts_external_repairs,service_note) VALUES($1,$2,$3,true,$4,$5,NULLIF($6,'')) RETURNING id,name,city,active,service_enabled,accepts_external_repairs,service_note",[pointId,name,city,serviceEnabled,acceptsExternalRepairs,serviceNote]);
+    await audit(session.user.id,'POINT_CREATED','point',pointId,pointId,{serviceEnabled,acceptsExternalRepairs});
     return json(request, pointView(result.rows[0]), 201);
   }
 
@@ -1169,6 +1197,65 @@ const route = async (request) => {
     const client=await pool.connect();try{await client.query('BEGIN');await client.query("UPDATE users SET role_code=$1,status='ACTIVE',updated_at=now() WHERE id=$2",[role,target.id]);await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);if(!GLOBAL_ROLES.has(role))for(const pointId of pointIds)await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK').catch(()=>undefined);throw error;}finally{client.release();}
     await audit(session.user.id,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds});
     return json(request,await authPayload(await loadUser(target.id)));
+  }
+
+  const pointServiceMatch=url.pathname.match(/^\/admin\/points\/([^/]+)\/service$/);
+  if(method==='POST'&&pointServiceMatch){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const body=await readJson(request);
+    const serviceEnabled=body.serviceEnabled===true;
+    const acceptsExternalRepairs=serviceEnabled&&body.acceptsExternalRepairs===true;
+    const serviceNote=cleanText(body.serviceNote,500);
+    const row=(await q("UPDATE points SET service_enabled=$1,accepts_external_repairs=$2,service_note=NULLIF($3,''),updated_at=now() WHERE id=$4 RETURNING id,name,city,active,service_enabled,accepts_external_repairs,service_note",[serviceEnabled,acceptsExternalRepairs,serviceNote,pointServiceMatch[1]])).rows[0];
+    if(!row)return json(request,{error:'NOT_FOUND'},404);
+    await audit(session.user.id,'POINT_SERVICE_UPDATED','point',row.id,row.id,{serviceEnabled,acceptsExternalRepairs});
+    return json(request,pointView(row));
+  }
+
+  const blockUserMatch=url.pathname.match(/^\/admin\/users\/([^/]+)\/block$/);
+  if(method==='POST'&&blockUserMatch){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const target=await loadUser(blockUserMatch[1]);
+    if(!target)return json(request,{error:'NOT_FOUND'},404);
+    if(target.role_code==='OWNER')return json(request,{error:'OWNER_PROTECTED',message:'Konta OWNER nie można zablokować.'},400);
+    const body=await readJson(request),blocked=body.blocked!==false,reason=cleanText(body.reason,500);
+    if(blocked){
+      await q("UPDATE users SET blocked_at=now(),blocked_reason=NULLIF($1,''),blocked_by_user_id=$2,updated_at=now() WHERE id=$3",[reason,session.user.id,target.id]);
+      await q("UPDATE auth_sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE user_id=$1 AND revoked_at IS NULL",[target.id]);
+      await audit(session.user.id,'USER_BLOCKED','user',target.id,null,{reason:reason||null});
+    }else{
+      await q("UPDATE users SET blocked_at=NULL,blocked_reason=NULL,blocked_by_user_id=NULL,updated_at=now() WHERE id=$1",[target.id]);
+      await audit(session.user.id,'USER_UNBLOCKED','user',target.id);
+    }
+    return json(request,await publicUser(await loadUser(target.id)));
+  }
+
+  const logoutUserMatch=url.pathname.match(/^\/admin\/users\/([^/]+)\/logout-all$/);
+  if(method==='POST'&&logoutUserMatch){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const target=await loadUser(logoutUserMatch[1]);
+    if(!target)return json(request,{error:'NOT_FOUND'},404);
+    const keepCurrent=target.id===session.user.id?session.sessionId:null;
+    const result=keepCurrent
+      ? await q("UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL AND id<>$2",[target.id,keepCurrent])
+      : await q("UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL",[target.id]);
+    await audit(session.user.id,'USER_SESSIONS_REVOKED','user',target.id,null,{revoked:Number(result.rowCount||0)});
+    return json(request,{ok:true,revoked:Number(result.rowCount||0)});
+  }
+
+  if(method==='POST'&&url.pathname==='/admin/logout-all'){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const body=await readJson(request);
+    const exceptCurrent=body.exceptCurrent!==false;
+    const result=exceptCurrent
+      ? await q("UPDATE auth_sessions SET revoked_at=now() WHERE revoked_at IS NULL AND id<>$1",[session.sessionId])
+      : await q("UPDATE auth_sessions SET revoked_at=now() WHERE revoked_at IS NULL");
+    await audit(session.user.id,'ALL_SESSIONS_REVOKED','session',null,null,{revoked:Number(result.rowCount||0),exceptCurrent});
+    return json(request,{ok:true,revoked:Number(result.rowCount||0),exceptCurrent});
   }
 
   if(method==='GET'&&url.pathname==='/finance/revenues'){
