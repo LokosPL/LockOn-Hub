@@ -363,12 +363,13 @@ const decryptSecret = (packed) => {
   return Buffer.concat([decipher.update(Buffer.from(parts[1], 'base64')), decipher.final()]).toString('utf8');
 };
 
-const refreshGmailAccess = async (refreshToken) => {
+const refreshGmailAccess = async (refreshToken, clientSecret) => {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       client_id: GOOGLE_DESKTOP_CLIENT_ID,
+      client_secret: clientSecret,
       refresh_token: refreshToken,
       grant_type: 'refresh_token'
     })
@@ -391,7 +392,8 @@ const encodeSubject = (value) => '=?UTF-8?B?' + Buffer.from(value, 'utf8').toStr
 
 const sendGmail = async (sender, recipient, subject, body) => {
   const refreshToken = decryptSecret(sender.refresh_token_ciphertext);
-  const accessToken = await refreshGmailAccess(refreshToken);
+  const clientSecret = decryptSecret(sender.oauth_client_secret_ciphertext);
+  const accessToken = await refreshGmailAccess(refreshToken, clientSecret);
   const raw = [
     'From: ' + sender.sender_email,
     'To: ' + recipient,
@@ -415,7 +417,7 @@ const sendGmail = async (sender, recipient, subject, body) => {
 
 const processNotification = async (notificationId) => {
   const { rows } = await q(
-    "SELECT n.id,n.recipient,n.service_order_id,n.payload,n.attempts,s.order_number,s.status,s.point_id,p.name AS point_name,c.first_name,d.brand,d.model,e.sender_email,e.refresh_token_ciphertext,e.status AS sender_status FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN point_email_senders e ON e.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
+    "SELECT n.id,n.recipient,n.service_order_id,n.payload,n.attempts,s.order_number,s.status,s.point_id,p.name AS point_name,c.first_name,d.brand,d.model,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.status AS sender_status FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN point_email_senders e ON e.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
     [notificationId]
   );
   const item = rows[0];
@@ -858,9 +860,9 @@ const route = async (request) => {
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/connect'){
     const session=await requireActive(request),u=session.user;if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do połączenia Gmail.'),{status:403});
-    const body=await readJson(request),pointId=cleanText(body.pointId,80),refreshToken=cleanText(body.refreshToken,4096);await requirePoint(u,pointId);if(!refreshToken)return json(request,{error:'TOKEN'},400);
-    const accessToken=await refreshGmailAccess(refreshToken);const profile=await gmailProfile(accessToken);
-    await q("INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,status='ACTIVE',last_error=NULL,updated_at=now()",[pointId,u.id,profile.email,encryptSecret(refreshToken)]);
+    const body=await readJson(request),pointId=cleanText(body.pointId,80),refreshToken=cleanText(body.refreshToken,4096),clientSecret=cleanText(body.clientSecret,4096);await requirePoint(u,pointId);if(!refreshToken||!clientSecret)return json(request,{error:'TOKEN'},400);
+    const accessToken=await refreshGmailAccess(refreshToken,clientSecret);const profile=await gmailProfile(accessToken);
+    await q("INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,status='ACTIVE',last_error=NULL,updated_at=now()",[pointId,u.id,profile.email,encryptSecret(refreshToken),encryptSecret(clientSecret)]);
     await audit(u.id,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email});
     return json(request,{connected:true,pointId,email:profile.email,status:'ACTIVE'});
   }
