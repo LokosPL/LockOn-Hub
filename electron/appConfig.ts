@@ -1,3 +1,4 @@
+import { GOOGLE_CLIENT_SECRET } from './generatedSecrets';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -48,6 +49,10 @@ export const APP_CONFIG = {
     googleClientId:
       '996585439932-e10mu53j95s6u13vrua841tm4oco38so.apps.googleusercontent.com',
 
+    // Google wymaga tego credentialu dla aktualnej konfiguracji Desktop OAuth
+    // podczas wymiany authorization code na token. Wartość jest wstrzykiwana
+    // wyłącznie podczas release z GitHub Actions Secret i nie jest commitowana.
+    googleClientSecret: process.env.LOCKON_GOOGLE_CLIENT_SECRET || GOOGLE_CLIENT_SECRET,
 
     // Tylko development; backend /auth/dev-owner działa, gdy LOCKON_ALLOW_DEV_LOGIN=1.
     allowLocalStarterLogin: true

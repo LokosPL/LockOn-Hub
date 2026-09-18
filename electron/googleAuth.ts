@@ -222,6 +222,8 @@ export const loginLocalStarter = async (development: boolean): Promise<AuthState
 export const loginWithGoogle = async (development: boolean): Promise<AuthState> => {
   if (!hasGoogleClientId()) return emptyState(development, 'Najpierw skonfiguruj Google OAuth Client ID.');
 
+  const clientSecret = APP_CONFIG.auth.googleClientSecret.trim();
+  if (!clientSecret) throw new Error('Brak danych Google OAuth wymaganych przez klienta desktopowego.');
 
   const { verifier, challenge } = createPkce();
   const stateToken = base64Url(crypto.randomBytes(24));
@@ -259,6 +261,7 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
           redirect: 'error',
           body: new URLSearchParams({
             client_id: APP_CONFIG.auth.googleClientId,
+            client_secret: clientSecret,
             code,
             code_verifier: verifier,
             grant_type: 'authorization_code',
