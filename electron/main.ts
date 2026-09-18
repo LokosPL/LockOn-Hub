@@ -94,11 +94,20 @@ const windowSize = () => {
   };
 };
 
-const uiZoomFactor = () => {
+type UiScaleMode = 'auto' | 'compact' | 'comfortable' | 'large';
+
+const automaticUiZoom = () => {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-  if (width >= 3000 || height >= 1800) return 1.24;
-  if (width >= 2400 || height >= 1400) return 1.12;
+  if (width >= 3000 || height >= 1800) return 1.32;
+  if (width >= 2400 || height >= 1400) return 1.18;
+  if (width >= 1900 || height >= 1100) return 1.06;
   return 1;
+};
+
+const resolveUiZoom = (mode: UiScaleMode) => {
+  const base = automaticUiZoom();
+  const multiplier = mode === 'compact' ? 0.92 : mode === 'comfortable' ? 1.08 : mode === 'large' ? 1.18 : 1;
+  return Math.max(0.9, Math.min(1.55, Number((base * multiplier).toFixed(2))));
 };
 
 const reserveLoopbackPort = () => new Promise<number>((resolve, reject) => {
@@ -263,7 +272,7 @@ const createMainWindow = () => {
   });
 
   protectLocalWindow(mainWindow);
-  mainWindow.webContents.setZoomFactor(uiZoomFactor());
+  mainWindow.webContents.setZoomFactor(resolveUiZoom('auto'));
   attachBrowser(mainWindow);
   mainReady = new Promise((resolve) => mainWindow?.once('ready-to-show', () => resolve()));
   void mainWindow.loadURL(rendererUrl());
@@ -351,6 +360,13 @@ const registerIpc = () => {
     packaged: app.isPackaged,
     apiBaseUrl: getBackendApiBaseUrl()
   }));
+
+  secureHandle('ui:setScale', (scale: UiScaleMode) => {
+    const safeScale: UiScaleMode = ['auto', 'compact', 'comfortable', 'large'].includes(scale) ? scale : 'auto';
+    const factor = resolveUiZoom(safeScale);
+    mainWindow?.webContents.setZoomFactor(factor);
+    return factor;
+  });
 
   secureHandle('window:minimize', () => mainWindow?.minimize());
   secureHandle('window:toggleMaximize', () => {
