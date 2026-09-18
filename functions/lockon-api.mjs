@@ -7,6 +7,7 @@ pool.on('error', (error) => console.error('[postgres idle client]', error));
 
 const OWNER_EMAIL = String(process.env.LOCKON_OWNER_EMAIL || 'nowogar@gmail.com').trim().toLowerCase();
 const GOOGLE_DESKTOP_CLIENT_ID = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_ID || '').trim();
+const GOOGLE_DESKTOP_CLIENT_SECRET = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET || '').trim();
 const GOOGLE_WEB_CLIENT_ID = String(process.env.LOCKON_GOOGLE_WEB_CLIENT_ID || '').trim();
 const SITE_ORIGIN = String(process.env.LOCKON_SITE_ORIGIN || 'https://lokospl.github.io').replace(/\/$/, '');
 const GMAIL_TOKEN_KEY = String(process.env.LOCKON_GMAIL_TOKEN_KEY || '');
@@ -229,6 +230,55 @@ const verifyGoogle = async (idToken, audience) => {
   };
 };
 
+const validateDesktopRedirectUri = (value, expectedPath) => {
+  let parsed;
+  try { parsed = new URL(String(value || '')); }
+  catch { throw Object.assign(new Error('Nieprawidłowy adres callbacku OAuth.'), { status: 400, code: 'OAUTH_REDIRECT' }); }
+  if (
+    parsed.protocol !== 'http:' ||
+    parsed.hostname !== '127.0.0.1' ||
+    !parsed.port ||
+    parsed.pathname !== expectedPath ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw Object.assign(new Error('Odrzucono nieprawidłowy callback OAuth.'), { status: 400, code: 'OAUTH_REDIRECT' });
+  }
+  return parsed.origin + parsed.pathname;
+};
+
+const exchangeDesktopAuthorizationCode = async (body, expectedPath) => {
+  if (!GOOGLE_DESKTOP_CLIENT_ID || !GOOGLE_DESKTOP_CLIENT_SECRET) {
+    throw Object.assign(new Error('Serwerowa wymiana Google OAuth nie jest jeszcze skonfigurowana.'), { status: 503, code: 'SERVER_OAUTH_NOT_CONFIGURED' });
+  }
+  const code = cleanText(body.code, 4096);
+  const codeVerifier = cleanText(body.codeVerifier, 256);
+  const redirectUri = validateDesktopRedirectUri(body.redirectUri, expectedPath);
+  if (!code || !/^[A-Za-z0-9._~-]{43,128}$/.test(codeVerifier)) {
+    throw Object.assign(new Error('Nieprawidłowe dane PKCE.'), { status: 400, code: 'OAUTH_PKCE' });
+  }
+
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    redirect: 'error',
+    body: new URLSearchParams({
+      client_id: GOOGLE_DESKTOP_CLIENT_ID,
+      client_secret: GOOGLE_DESKTOP_CLIENT_SECRET,
+      code,
+      code_verifier: codeVerifier,
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUri
+    })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = cleanText(payload?.error_description || payload?.error || 'Google odrzucił wymianę kodu OAuth.', 300);
+    throw Object.assign(new Error(message), { status: 400, code: 'GOOGLE_CODE_EXCHANGE_FAILED' });
+  }
+  return payload;
+};
+
 const loginProfile = async (profile, clientType, allowCreate) => {
   let result = await q(
     'SELECT id,google_sub,email,name,picture_url,role_code,status,first_login_at,last_login_at FROM users WHERE google_sub=$1 OR lower(email)=lower($2) ORDER BY CASE WHEN google_sub=$1 THEN 0 ELSE 1 END LIMIT 1',
@@ -398,7 +448,9 @@ const decryptSecret = (packed) => {
   return Buffer.concat([decipher.update(Buffer.from(parts[1], 'base64')), decipher.final()]).toString('utf8');
 };
 
-const refreshGmailAccess = async (refreshToken, clientSecret) => {
+const refreshGmailAccess = async (refreshToken, legacyClientSecret = '') => {
+  const clientSecret = GOOGLE_DESKTOP_CLIENT_SECRET || legacyClientSecret;
+  if (!clientSecret) throw new Error('Brak serwerowego credentialu Google OAuth.');
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -476,8 +528,8 @@ const renderStatusEmail = (item) => {
 
 const sendGmail = async (sender, recipient, subject, textBody, htmlBody, displayName = 'LockOn ServiceOS') => {
   const refreshToken = decryptSecret(sender.refresh_token_ciphertext);
-  const clientSecret = decryptSecret(sender.oauth_client_secret_ciphertext);
-  const accessToken = await refreshGmailAccess(refreshToken, clientSecret);
+  const legacyClientSecret = sender.oauth_client_secret_ciphertext ? decryptSecret(sender.oauth_client_secret_ciphertext) : '';
+  const accessToken = await refreshGmailAccess(refreshToken, legacyClientSecret);
   const boundary = 'lockon_' + crypto.randomBytes(12).toString('hex');
   const fromName = encodeSubject(sanitizeHeader(displayName || 'LockOn ServiceOS'));
   const raw = [
@@ -524,7 +576,7 @@ const processNotification = async (notificationId) => {
   const retryMinutes = Math.min(240, 5 * Math.pow(2, Math.max(0, attempt - 1)));
   const nextAttemptAt = new Date(Date.now() + retryMinutes * 60_000);
 
-  if (!item.sender_email || item.sender_status !== 'ACTIVE' || !item.oauth_client_secret_ciphertext) {
+  if (!item.sender_email || item.sender_status !== 'ACTIVE' || !item.refresh_token_ciphertext || (!GOOGLE_DESKTOP_CLIENT_SECRET && !item.oauth_client_secret_ciphertext)) {
     const error = 'Brak aktywnego, kompletnego nadawcy Gmail dla punktu.';
     await q(
       "UPDATE notification_outbox SET status='FAILED',attempts=$2,last_error=$3,available_at=$4,updated_at=now() WHERE id=$1",
@@ -1265,7 +1317,7 @@ const route = async (request) => {
           [pointId]
         );
         const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
-        const senderReady=(await q("SELECT 1 FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL AND oauth_client_secret_ciphertext IS NOT NULL LIMIT 1",[pointId])).rowCount>0;
+        const senderReady=(await q("SELECT refresh_token_ciphertext,oauth_client_secret_ciphertext FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1",[pointId])).rows.some((sender)=>Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||sender.oauth_client_secret_ciphertext));
         if(!customer.email){
           notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
         }else if(settings.automatic_email_enabled!==true){
@@ -1323,7 +1375,7 @@ const route = async (request) => {
         [found.point_id]
       );
       const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
-      const senderReady=(await q("SELECT 1 FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL AND oauth_client_secret_ciphertext IS NOT NULL LIMIT 1",[found.point_id])).rowCount>0;
+      const senderReady=(await q("SELECT refresh_token_ciphertext,oauth_client_secret_ciphertext FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1",[found.point_id])).rows.some((sender)=>Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||sender.oauth_client_secret_ciphertext));
 
       if(!customer?.email){
         notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
@@ -1357,10 +1409,10 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/integrations/gmail'){
     const session=await requireActive(request),pointId=cleanText(url.searchParams.get('pointId'),80);await requirePoint(session.user,pointId);
-    const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,(refresh_token_ciphertext IS NOT NULL AND oauth_client_secret_ciphertext IS NOT NULL) AS credential_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
+    const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
     const row=rows[0];
     if(!row)return json(request,{connected:false,pointId,needsReconnect:false});
-    const complete=row.credential_complete===true&&row.status==='ACTIVE';
+    const complete=row.refresh_complete===true&&Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||row.legacy_secret_complete)&&row.status==='ACTIVE';
     return json(request,{
       connected:complete,
       needsReconnect:!complete,
