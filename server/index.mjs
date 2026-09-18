@@ -42,6 +42,14 @@ const nowIso = () => new Date().toISOString();
 const id = (prefix) => `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
 const normalizeEmail = (value = '') => value.trim().toLowerCase();
 const cleanText = (value, max = 240) => String(value ?? '').trim().slice(0, max);
+const normalizePhone = (value = '') => String(value).replace(/\D/g, '').slice(-15);
+const customerView = (customer) => ({
+  id: customer.id,
+  firstName: customer.firstName,
+  lastName: customer.lastName,
+  email: customer.email || null,
+  phone: customer.phone || null
+});
 
 const ensureDir = () => fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
 
@@ -59,6 +67,10 @@ const initialDb = () => ({
   ],
   loginEvents: [],
   revenueEntries: [],
+  customers: [],
+  devices: [],
+  serviceOrders: [],
+  serviceOrderStatusHistory: [],
   sessions: []
 });
 
@@ -79,6 +91,10 @@ const loadDb = () => {
       points: Array.isArray(raw.points) && raw.points.length ? raw.points : initialDb().points,
       loginEvents: Array.isArray(raw.loginEvents) ? raw.loginEvents : [],
       revenueEntries: Array.isArray(raw.revenueEntries) ? raw.revenueEntries : [],
+      customers: Array.isArray(raw.customers) ? raw.customers : [],
+      devices: Array.isArray(raw.devices) ? raw.devices : [],
+      serviceOrders: Array.isArray(raw.serviceOrders) ? raw.serviceOrders : [],
+      serviceOrderStatusHistory: Array.isArray(raw.serviceOrderStatusHistory) ? raw.serviceOrderStatusHistory : [],
       sessions: Array.isArray(raw.sessions) ? raw.sessions : []
     };
   } catch {
@@ -521,6 +537,135 @@ const handle = async (req, res) => {
     target.pointIds = GLOBAL_ROLES.has(role) ? [] : pointIds;
     saveDb();
     return json(res, 200, authPayload(target));
+  }
+
+
+  if (method === 'GET' && url.pathname === '/service/customers/search') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    const query = cleanText(url.searchParams.get('q') || '', 120).toLowerCase();
+    if (query.length < 2) return json(res, 200, []);
+
+    const visibleCustomerIds = GLOBAL_ROLES.has(user.role)
+      ? null
+      : new Set(
+          db.serviceOrders
+            .filter((order) => canSeePoint(user, order.pointId))
+            .map((order) => order.customerId)
+        );
+
+    const matches = db.customers
+      .filter((customer) => {
+        if (visibleCustomerIds && !visibleCustomerIds.has(customer.id)) return false;
+        const haystack = [
+          customer.firstName,
+          customer.lastName,
+          customer.email || '',
+          customer.phone || ''
+        ].join(' ').toLowerCase();
+        return haystack.includes(query);
+      })
+      .slice(0, 20)
+      .map(customerView);
+
+    return json(res, 200, matches);
+  }
+
+  if (method === 'POST' && url.pathname === '/service/orders') {
+    const user = requireActive(req, res);
+    if (!user) return;
+
+    const body = await readBody(req);
+    const pointId = cleanText(body.pointId, 80);
+    if (!pointId || !canSeePoint(user, pointId)) {
+      return json(res, 403, { error: 'POINT', message: 'Nie masz dostępu do wybranego punktu.' });
+    }
+
+    const firstName = cleanText(body.firstName, 80);
+    const lastName = cleanText(body.lastName, 100);
+    const email = normalizeEmail(cleanText(body.email, 180));
+    const phone = cleanText(body.phone, 50);
+    const phoneNormalized = normalizePhone(phone);
+    const brand = cleanText(body.brand, 80);
+    const model = cleanText(body.model, 120);
+    const issueDescription = cleanText(body.issueDescription, 2000);
+    const orderType = String(body.orderType || 'REPAIR').toUpperCase();
+
+    if (!firstName || !lastName || !brand || !model || !issueDescription) {
+      return json(res, 400, { error: 'VALIDATION', message: 'Uzupełnij klienta, markę, model i opis usterki.' });
+    }
+    if (!['REPAIR', 'COMPLAINT'].includes(orderType)) {
+      return json(res, 400, { error: 'ORDER_TYPE', message: 'Nieprawidłowy typ zlecenia.' });
+    }
+
+    let customer = db.customers.find((candidate) =>
+      (email && normalizeEmail(candidate.email || '') === email) ||
+      (phoneNormalized && normalizePhone(candidate.phone || '') === phoneNormalized)
+    );
+    const reusedCustomer = Boolean(customer);
+
+    if (!customer) {
+      customer = {
+        id: id('cst'),
+        firstName,
+        lastName,
+        email: email || null,
+        phone: phone || null,
+        phoneNormalized: phoneNormalized || null,
+        createdByUserId: user.id,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      db.customers.push(customer);
+    } else {
+      customer.firstName = firstName || customer.firstName;
+      customer.lastName = lastName || customer.lastName;
+      if (email) customer.email = email;
+      if (phone) customer.phone = phone;
+      if (phoneNormalized) customer.phoneNormalized = phoneNormalized;
+      customer.updatedAt = nowIso();
+    }
+
+    const device = {
+      id: id('dev'),
+      customerId: customer.id,
+      brand,
+      model,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+    db.devices.push(device);
+
+    const order = {
+      id: id('srv'),
+      orderNumber: db.serviceOrders.reduce((max, item) => Math.max(max, Number(item.orderNumber) || 0), 0) + 1,
+      pointId,
+      customerId: customer.id,
+      deviceId: device.id,
+      orderType,
+      issueDescription,
+      status: 'RECEIVED',
+      createdByUserId: user.id,
+      receivedAt: nowIso(),
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+    db.serviceOrders.unshift(order);
+    db.serviceOrderStatusHistory.push({
+      id: id('hst'),
+      serviceOrderId: order.id,
+      fromStatus: null,
+      toStatus: 'RECEIVED',
+      changedByUserId: user.id,
+      createdAt: nowIso()
+    });
+
+    saveDb();
+    return json(res, 201, {
+      customer: customerView(customer),
+      order,
+      reusedCustomer
+    });
   }
 
   if (method === 'GET' && url.pathname === '/finance/revenues') {

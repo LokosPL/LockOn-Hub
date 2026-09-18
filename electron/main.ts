@@ -483,6 +483,20 @@ const registerIpc = () => {
     return backendRequest('/dashboard', {}, token);
   });
 
+  secureHandle('service:searchCustomers', async (query: string) => {
+    const token = requireSessionToken();
+    const safeQuery = String(query ?? '').trim().slice(0, 120);
+    if (safeQuery.length < 2) return [];
+    return backendRequest(`/service/customers/search?q=${encodeURIComponent(safeQuery)}`, {}, token);
+  });
+  secureHandle('service:createOrder', async (payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest('/service/orders', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }, token);
+  });
+
   secureHandle('browser:getState', () => getBrowserState());
   secureHandle('browser:setVisible', (value: boolean) =>
     withMainWindow((window) => setBrowserVisible(window, Boolean(value)))

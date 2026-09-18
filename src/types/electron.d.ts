@@ -29,6 +29,9 @@ export interface RevenueEntry { id: string; userId: string; pointId: string; amo
 export interface AdminOverview { points: AdminPoint[]; users: AdminUser[]; pendingUsers: AdminUser[]; loginEvents: LoginEvent[]; pendingRevenue: RevenueEntry[]; }
 export interface FinancePayload { entries: RevenueEntry[]; summary: { approvedRevenue:number; technicianShare:number; bossShare:number; pendingRevenue:number; }; }
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
+export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
+export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; issueDescription:string; status:string; receivedAt:string; }
+export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; }
 
 declare global {
   interface Window {
@@ -51,6 +54,10 @@ declare global {
         review: (revenueId:string, action:'APPROVE'|'REJECT') => Promise<RevenueEntry>;
       };
       data: { getDashboard: () => Promise<DashboardData>; };
+      service: {
+        searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
+        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT'}) => Promise<ServiceCreateOrderResult>;
+      };
       browser: {
         getState: () => Promise<BrowserState>; setVisible: (visible:boolean)=>Promise<void>; setBounds:(bounds:BrowserBounds)=>Promise<void>;
         navigate:(input:string)=>Promise<BrowserState>; back:()=>Promise<BrowserState>; forward:()=>Promise<BrowserState>; reload:()=>Promise<BrowserState>; home:()=>Promise<BrowserState>; openExternal:()=>Promise<void>;

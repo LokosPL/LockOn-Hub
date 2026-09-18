@@ -13,6 +13,7 @@ import { SupportDesk } from './pages/SupportDesk';
 import { SettingsPage } from './pages/SettingsPage';
 import { AdministrationPage } from './pages/AdministrationPage';
 import { EarningsPage } from './pages/EarningsPage';
+import { ServicePage } from './pages/ServicePage';
 import type { AuthState } from './types/electron';
 import { ROLE_DEFINITIONS, roleCanNavigate, type UserRole } from './config/roles';
 import { applyStoredUiPreferences } from './uiPreferences';
@@ -126,6 +127,7 @@ export default function App() {
             />
           )}
           {active === 'administration' && <AdministrationPage />}
+          {active === 'service' && <ServicePage auth={auth} />}
           {active === 'earnings' && <EarningsPage auth={auth} effectiveRole={effectiveRole!} />}
           {active === 'browser' && <BrowserPage />}
           {active === 'support' && <SupportDesk role={effectiveRole!} onOpenChat={() => setHelpOpen(true)} />}
