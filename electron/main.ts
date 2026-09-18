@@ -501,6 +501,10 @@ const registerIpc = () => {
     const token = requireSessionToken();
     return backendRequest('/service/orders', {}, token);
   });
+  secureHandle('service:getHistory', async (orderId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/history`, {}, token);
+  });
   secureHandle('service:updateStatus', async (orderId: string, status: string, note?: string) => {
     const token = requireSessionToken();
     return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/status`, {
