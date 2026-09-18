@@ -95,8 +95,13 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
   const apiToken = getStoredApiToken();
   if (!apiToken) throw new Error('Brak aktywnej sesji LockOn.');
 
-  const me = await backendRequest<{ user?: { email?: string } }>('/me', {}, apiToken).catch(() => ({}));
-  const preferredEmail = String(me.user?.email || '').trim().toLowerCase();
+  let preferredEmail = '';
+  try {
+    const me = await backendRequest<{ user?: { email?: string } }>('/me', {}, apiToken);
+    preferredEmail = String(me.user?.email || '').trim().toLowerCase();
+  } catch {
+    // login_hint jest tylko ułatwieniem UX; brak /me nie może blokować OAuth.
+  }
 
   const { verifier, challenge } = createPkce();
   const stateToken = base64Url(crypto.randomBytes(24));
