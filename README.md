@@ -1,6 +1,6 @@
 # LockOn ServiceOS
 
-LockOn ServiceOS to otwartoźródłowa aplikacja desktopowa dla Windows do codziennej pracy serwisu. Obecny zakres projektu obejmuje pulpit, logowanie Google, role i dostęp do punktów, administrację, rozliczenia, wbudowaną przeglądarkę, pomoc oraz automatyczne aktualizacje.
+LockOn ServiceOS to otwartoźródłowa aplikacja desktopowa dla Windows do codziennej pracy serwisu. Obecny zakres projektu obejmuje pulpit, centralne konto i role, klientów, urządzenia i zlecenia serwisowe, administrację, rozliczenia, wbudowaną przeglądarkę, prywatną pomoc per konto oraz automatyczne aktualizacje.
 
 **Autor i maintainer:** Bartłomiej Motłoch  
 **Repozytorium:** https://github.com/LokosPL/LockOn-Hub
@@ -65,7 +65,7 @@ Polityka prywatności:
 
 https://lokospl.github.io/lockon-serviceos-site/privacy.html
 
-Podstawowe logowanie Google korzysta tylko z `openid email profile`; aplikacja nie potrzebuje treści Gmaila ani Google Drive do uwierzytelnienia.
+Podstawowe logowanie Google korzysta z `openid email profile`. Opcjonalne połączenie nadawcy powiadomień prosi osobno o `gmail.send`; ServiceOS nie odczytuje skrzynki Gmail, a refresh token nadawcy jest przechowywany wyłącznie po stronie centralnego backendu w formie zaszyfrowanej.
 
 ## Budowanie
 
@@ -100,4 +100,4 @@ Zasady współpracy: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Aktualna wersja
 
-**0.7.0**
+**0.8.0**

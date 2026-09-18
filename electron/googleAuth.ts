@@ -55,13 +55,6 @@ interface StoredSession {
   savedAt: string;
 }
 
-interface GoogleCredentialFile {
-  installed?: {
-    client_id?: string;
-    client_secret?: string;
-  };
-}
-
 const SESSION_FILE = 'auth-session.json';
 const sessionPath = () => path.join(app.getPath('userData'), SESSION_FILE);
 
@@ -198,52 +191,6 @@ const createPkce = () => {
   return { verifier, challenge };
 };
 
-const tryReadGoogleCredentials = (filePath: string): GoogleCredentialFile['installed'] | null => {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as GoogleCredentialFile;
-    if (!parsed.installed?.client_id || !parsed.installed?.client_secret) return null;
-    return parsed.installed;
-  } catch {
-    return null;
-  }
-};
-
-const findCredentialFile = (directory: string) => {
-  try {
-    return fs.readdirSync(directory)
-      .filter((name) => /^client_secret_.*\.apps\.googleusercontent\.com\.json$/i.test(name))
-      .map((name) => path.join(directory, name));
-  } catch {
-    return [] as string[];
-  }
-};
-
-const resolveGoogleClientSecret = () => {
-  if (APP_CONFIG.auth.googleClientSecret.trim()) return APP_CONFIG.auth.googleClientSecret.trim();
-
-  // Installed-app OAuth clients are public clients. Do not ship a reusable
-  // client_secret inside the desktop binary. A local secret is accepted only
-  // for development compatibility with the current Google client setup.
-  if (app.isPackaged) return '';
-
-  const envSecret = process.env.LOCKON_GOOGLE_CLIENT_SECRET?.trim();
-  if (envSecret) return envSecret;
-
-  const candidates = [
-    path.join(process.cwd(), 'google-oauth.local.json'),
-    ...findCredentialFile(process.cwd()),
-    ...findCredentialFile(app.getPath('downloads'))
-  ];
-
-  for (const candidate of candidates) {
-    const credentials = tryReadGoogleCredentials(candidate);
-    if (credentials?.client_id === APP_CONFIG.auth.googleClientId && credentials.client_secret) {
-      return credentials.client_secret;
-    }
-  }
-  return '';
-};
-
 const oauthHtmlHeaders = {
   'Content-Type': 'text/html; charset=utf-8',
   'Cache-Control': 'no-store, max-age=0',
@@ -275,7 +222,6 @@ export const loginLocalStarter = async (development: boolean): Promise<AuthState
 export const loginWithGoogle = async (development: boolean): Promise<AuthState> => {
   if (!hasGoogleClientId()) return emptyState(development, 'Najpierw skonfiguruj Google OAuth Client ID.');
 
-  const clientSecret = resolveGoogleClientSecret();
 
   const { verifier, challenge } = createPkce();
   const stateToken = base64Url(crypto.randomBytes(24));
@@ -313,7 +259,6 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
           redirect: 'error',
           body: new URLSearchParams({
             client_id: APP_CONFIG.auth.googleClientId,
-            ...(clientSecret ? { client_secret: clientSecret } : {}),
             code,
             code_verifier: verifier,
             grant_type: 'authorization_code',

@@ -34,6 +34,7 @@ import {
   loginWithGoogle,
   logout
 } from './googleAuth';
+import { connectGmailSender, disconnectGmailSender, getGmailConnectionStatus } from './gmailAuth';
 import {
   checkForUpdates,
   checkForUpdatesIfStale,
@@ -374,7 +375,7 @@ const secureHandle = (channel: string, listener: SecureHandler) => {
   });
 };
 
-const safeId = (value: unknown, prefix: 'usr' | 'rev') => {
+const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv') => {
   const text = String(value ?? '');
   if (!new RegExp(`^${prefix}_[a-f0-9]{20}$`).test(text)) throw new Error('Nieprawidłowy identyfikator.');
   return text;
@@ -495,6 +496,46 @@ const registerIpc = () => {
       method: 'POST',
       body: JSON.stringify(payload)
     }, token);
+  });
+  secureHandle('service:listOrders', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/service/orders', {}, token);
+  });
+  secureHandle('service:updateStatus', async (orderId: string, status: string, note?: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/status`, {
+      method: 'POST',
+      body: JSON.stringify({
+        status: String(status ?? '').trim().slice(0, 30),
+        note: String(note ?? '').trim().slice(0, 500)
+      })
+    }, token);
+  });
+
+  secureHandle('gmail:getStatus', (pointId: string) =>
+    getGmailConnectionStatus(String(pointId ?? '').trim().slice(0, 80))
+  );
+  secureHandle('gmail:connect', (pointId: string) =>
+    connectGmailSender(String(pointId ?? '').trim().slice(0, 80))
+  );
+  secureHandle('gmail:disconnect', (pointId: string) =>
+    disconnectGmailSender(String(pointId ?? '').trim().slice(0, 80))
+  );
+
+  secureHandle('assistant:getConversation', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/support/conversation', {}, token);
+  });
+  secureHandle('assistant:send', async (message: string) => {
+    const token = requireSessionToken();
+    return backendRequest('/assistant/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message: String(message ?? '').trim().slice(0, 1500) })
+    }, token);
+  });
+  secureHandle('website:createAuthCode', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/website/auth-code', { method: 'POST', body: '{}' }, token);
   });
 
   secureHandle('browser:getState', () => getBrowserState());
