@@ -65,6 +65,9 @@ jobs:
       - name: Build renderer
         run: npm run build:web
 
+      - name: Build self-contained packaged API
+        run: npm run build:server
+
       - name: Package smoke build
         run: npx electron-builder --win --dir
 
@@ -72,7 +75,7 @@ jobs:
         shell: pwsh
         run: |
           $exe = Resolve-Path "release/win-unpacked/LockOn ServiceOS.exe"
-          $server = Resolve-Path "release/win-unpacked/resources/app.asar.unpacked/server/index.mjs"
+          $server = Resolve-Path "release/win-unpacked/resources/app.asar.unpacked/dist-server/index.cjs"
           $data = Join-Path $env:RUNNER_TEMP "lockon-smoke-database.json"
           $env:ELECTRON_RUN_AS_NODE = "1"
           $env:LOCKON_API_HOST = "127.0.0.1"
@@ -81,7 +84,7 @@ jobs:
           $env:LOCKON_OWNER_EMAIL = "nowogar@gmail.com"
           $env:LOCKON_GOOGLE_CLIENT_ID = "996585439932-e10mu53j95s6u13vrua841tm4oco38so.apps.googleusercontent.com"
 
-          $process = Start-Process -FilePath $exe -ArgumentList @($server) -PassThru -WindowStyle Hidden
+          $process = Start-Process -FilePath $exe -ArgumentList @($server) -WorkingDirectory $env:RUNNER_TEMP -PassThru -WindowStyle Hidden
           try {
             $ok = $false
             for ($i = 0; $i -lt 20; $i++) {
