@@ -8,6 +8,14 @@ interface LoginScreenProps {
   onAuthenticated: (state: AuthState) => void;
 }
 
+const friendlyError = (error: unknown, fallback: string) => {
+  if (!(error instanceof Error) || !error.message) return fallback;
+  return error.message
+    .replace(/^Error invoking remote method '[^']+':\s*Error:\s*/i, '')
+    .replace(/^Error:\s*/i, '')
+    .trim() || fallback;
+};
+
 export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
   const [busy, setBusy] = useState<'google' | 'local' | null>(null);
   const [message, setMessage] = useState(auth.message ?? '');
@@ -20,7 +28,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
       if (state.authenticated) onAuthenticated(state);
       else setMessage(state.message ?? 'Nie udało się zalogować.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Nie udało się zalogować przez Google.');
+      setMessage(friendlyError(error, 'Nie udało się zalogować przez Google.'));
     } finally {
       setBusy(null);
     }
@@ -32,7 +40,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
       const state = await window.lockOn.auth.loginLocal();
       onAuthenticated(state);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Nie udało się uruchomić trybu lokalnego.');
+      setMessage(friendlyError(error, 'Nie udało się uruchomić trybu lokalnego.'));
     } finally {
       setBusy(null);
     }
