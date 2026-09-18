@@ -45,8 +45,9 @@ export const APP_CONFIG = {
     googleClientId:
       '996585439932-e10mu53j95s6u13vrua841tm4oco38so.apps.googleusercontent.com',
 
-    // Do developmentu można wkleić secret tutaj albo zostawić puste.
-    // Preferowane: LOCKON_GOOGLE_CLIENT_SECRET w lokalnym .env lub plik client_secret_*.json w Pobrane.
+    // Google wydaje credential również dla klienta typu Desktop. W aplikacji instalowanej
+    // nie traktujemy go jako tajemnicy bezpieczeństwa — ochronę przepływu daje PKCE + state.
+    // Release pobiera wartość z GitHub Actions Secret, żeby nie commitować jej do repo.
     googleClientSecret: process.env.LOCKON_GOOGLE_CLIENT_SECRET || GOOGLE_CLIENT_SECRET,
 
     // Tylko development; backend /auth/dev-owner działa, gdy LOCKON_ALLOW_DEV_LOGIN=1.
