@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('lockOn', {
   app: { getInfo: () => ipcRenderer.invoke('app:getInfo') },
+  ui: {
+    setScale: (scale: 'auto' | 'compact' | 'comfortable' | 'large') => ipcRenderer.invoke('ui:setScale', scale)
+  },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),

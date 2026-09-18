@@ -15,6 +15,7 @@ import { AdministrationPage } from './pages/AdministrationPage';
 import { EarningsPage } from './pages/EarningsPage';
 import type { AuthState } from './types/electron';
 import { ROLE_DEFINITIONS, roleCanNavigate, type UserRole } from './config/roles';
+import { applyStoredUiPreferences } from './uiPreferences';
 
 const view = new URLSearchParams(window.location.search).get('view');
 
@@ -26,6 +27,7 @@ export default function App() {
 
   useEffect(() => {
     if (view === 'splash') return;
+    void applyStoredUiPreferences().catch(() => undefined);
     void window.lockOn.auth.getState().then(setAuth);
   }, []);
 

@@ -34,6 +34,7 @@ declare global {
   interface Window {
     lockOn: {
       app: { getInfo: () => Promise<AppInfo> };
+      ui: { setScale: (scale:'auto'|'compact'|'comfortable'|'large') => Promise<number>; };
       window: { minimize: () => Promise<void>; toggleMaximize: () => Promise<void>; close: () => Promise<void>; };
       auth: { getState: () => Promise<AuthState>; loginGoogle: () => Promise<AuthState>; loginLocal: () => Promise<AuthState>; logout: () => Promise<AuthState>; };
       access: { requestPoint: (payload:{pointName:string;city:string;requestedRole:UserRole}) => Promise<AuthState>; };
