@@ -522,6 +522,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
         <div className="service-tabs">
           <button className={tab === 'NEW' ? 'active' : ''} onClick={() => setTab('NEW')}><ClipboardPlus size={15}/> Nowe zlecenie</button>
           <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia</button>
+          <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
           {canManageGmail && <button className={tab === 'EMAILS' ? 'active' : ''} onClick={() => setTab('EMAILS')}><BellRing size={15}/> Powiadomienia</button>}
         </div>
       </section>
@@ -623,6 +624,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                         <span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span>
                         <span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleString('pl-PL') : 'Brak terminu'}</span>
                         {canManageOrderMeta && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
+                        {order.latestTransfer && <span><Truck size={11}/>{order.latestTransfer.status === 'IN_TRANSIT' ? 'W drodze do ' : order.latestTransfer.status === 'DELIVERED' ? 'Dostarczono do ' : order.latestTransfer.status === 'ACCEPTED' ? 'Przyjęte przez ' : 'Przekazanie: '}{order.latestTransfer.toPointName}</span>}
                       </div>
                     </div>
                     <div className="service-order-actions">
@@ -660,6 +662,28 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                           {canEditStatus && <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
                         </section>
                       )}
+
+                      <section className="service-workspace-card service-transfer-card">
+                        <div className="service-workspace-title"><Truck size={15}/><div><strong>Przekazanie do innego serwisu</strong><span>Logistyka jest niezależna od statusu samej naprawy.</span></div></div>
+                        {order.latestTransfer && ['IN_TRANSIT','DELIVERED','REQUESTED'].includes(order.latestTransfer.status) ? (
+                          <div className="active-transfer-summary">
+                            <div><MapPin size={15}/><span>{order.latestTransfer.fromPointName}</span><b>→</b><strong>{order.latestTransfer.toPointName}</strong></div>
+                            <small>{order.latestTransfer.status === 'IN_TRANSIT' ? 'Urządzenie jest w drodze.' : order.latestTransfer.status === 'DELIVERED' ? 'Urządzenie zostało dostarczone i czeka na przyjęcie.' : 'Przekazanie oczekuje.'}</small>
+                          </div>
+                        ) : canEditStatus ? (
+                          <div className="transfer-compose">
+                            <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
+                              <option value="">Wybierz serwis docelowy…</option>
+                              {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==order.pointId).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
+                            </select>
+                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
+                            <button className="button secondary small" disabled={orderBusyId===order.id || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
+                          </div>
+                        ) : <div className="service-history-empty">Brak aktywnego przekazania.</div>}
+                        {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
+                          {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
+                        </div>}
+                      </section>
 
                       <section className="service-workspace-card">
                         <div className="service-workspace-title"><IdCard size={15}/><div><strong>Karta klienta</strong><span>Historia widoczna tylko w Twoim zakresie punktów.</span></div></div>
@@ -706,6 +730,41 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               );
             })}
             {!ordersBusy && orders.length === 0 && <div className="service-empty">Brak zleceń w Twoim zakresie.</div>}
+          </div>
+        </section>
+      )}
+
+      {tab === 'TRANSFERS' && (
+        <section className="panel-card service-orders-card service-transfers-board">
+          <div className="panel-heading">
+            <div><span className="eyebrow"><Truck size={13}/> LOGISTYKA SERWISOWA</span><h2>Przekazania między punktami</h2><p>Wysłane urządzenia, dostawy oczekujące na przyjęcie i zakończone przekazania.</p></div>
+            <button className="button small secondary" onClick={()=>void loadTransfers()}><RefreshCw size={14}/> Odśwież</button>
+          </div>
+          <div className="transfer-board-list">
+            {transfers.map((transfer)=>{
+              const canActDestination=pointOptions.some((point)=>point.id===transfer.toPointId);
+              const canActSource=pointOptions.some((point)=>point.id===transfer.fromPointId);
+              return <article key={transfer.id} className={`transfer-board-row transfer-${transfer.status.toLowerCase()}`}>
+                <div className="transfer-board-icon">{transfer.status==='ACCEPTED'?<PackageCheck size={18}/>:<Truck size={18}/>}</div>
+                <div className="transfer-board-main">
+                  <strong>#{transfer.orderNumber} · {transfer.customerName}</strong>
+                  <span>{transfer.device}</span>
+                  <small>{transfer.fromPointName} → {transfer.toPointName}</small>
+                  {transfer.note && <p>{transfer.note}</p>}
+                </div>
+                <div className="transfer-board-status">
+                  <strong>{transfer.status==='IN_TRANSIT'?'W drodze':transfer.status==='DELIVERED'?'Dostarczono':transfer.status==='ACCEPTED'?'Przyjęte':transfer.status==='REJECTED'?'Odrzucone':transfer.status==='CANCELLED'?'Anulowane':'Oczekuje'}</strong>
+                  <small>{new Date(transfer.updatedAt).toLocaleString('pl-PL')}</small>
+                </div>
+                <div className="transfer-board-actions">
+                  {transfer.status==='IN_TRANSIT' && canActDestination && <button className="button small primary" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'DELIVERED')}>Dostarczono</button>}
+                  {transfer.status==='IN_TRANSIT' && canActSource && <button className="button small secondary" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'CANCELLED')}>Anuluj</button>}
+                  {transfer.status==='DELIVERED' && canActDestination && <button className="button small primary" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'ACCEPTED')}><PackageCheck size={13}/> Przyjmij</button>}
+                  {transfer.status==='DELIVERED' && canActDestination && <button className="button small danger-soft" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'REJECTED')}>Odrzuć</button>}
+                </div>
+              </article>;
+            })}
+            {transfers.length===0 && <div className="service-empty">Brak przekazań w Twoim zakresie.</div>}
           </div>
         </section>
       )}
