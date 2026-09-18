@@ -27,8 +27,11 @@ const sendState = (state: UpdateState) => {
 export const getUpdateState = () => currentState;
 
 export const configureUpdater = () => {
-  autoUpdater.autoDownload = false;
+  // Aktualizacja ma działać jak zwykły program desktopowy: sprawdź w tle,
+  // pobierz bez pytania, a instalację zaproponuj użytkownikowi.
+  autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowPrerelease = false;
 
   // Ustawiamy feed jawnie, dzięki czemu konfigurację GitHub zmieniasz w jednym miejscu.
   autoUpdater.setFeedURL({
@@ -109,4 +112,22 @@ export const downloadUpdate = async () => {
 export const installUpdate = () => {
   if (!app.isPackaged) return;
   autoUpdater.quitAndInstall(false, true);
+};
+
+let updateTimer: NodeJS.Timeout | null = null;
+
+export const startAutomaticUpdateChecks = () => {
+  if (!app.isPackaged || updateTimer) return;
+
+  // Pierwsze sprawdzenie robi main.ts po starcie. Później ponawiamy je co 4h,
+  // żeby użytkownik nie musiał zamykać aplikacji, by zobaczyć nowe wydanie.
+  updateTimer = setInterval(() => {
+    void checkForUpdates().catch(() => undefined);
+  }, 4 * 60 * 60 * 1000);
+};
+
+export const stopAutomaticUpdateChecks = () => {
+  if (!updateTimer) return;
+  clearInterval(updateTimer);
+  updateTimer = null;
 };
