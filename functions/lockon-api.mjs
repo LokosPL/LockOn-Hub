@@ -917,8 +917,30 @@ const route = async (request) => {
       const oid=makeId('srv');const order=(await client.query("INSERT INTO service_orders(id,point_id,customer_id,device_id,order_type,issue_description,status,created_by_user_id) VALUES($1,$2,$3,$4,$5,$6,'RECEIVED',$7) RETURNING *",[oid,pointId,customer.id,did,orderType,issue,u.id])).rows[0];
       await client.query("INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,changed_by_user_id) VALUES($1,$2,NULL,'RECEIVED',$3)",[makeId('hst'),oid,u.id]);
       await client.query('COMMIT');
-      await audit(u.id,'SERVICE_ORDER_CREATED','service_order',oid,pointId,{orderType});
-      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,issueDescription:issue,status:'RECEIVED',receivedAt:order.received_at},reusedCustomer:reused},201);
+
+      let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
+      const settingsResult=await q(
+        "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
+        [pointId]
+      );
+      const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
+      if(!customer.email){
+        notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
+      }else if(settings.automatic_email_enabled!==true){
+        notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
+      }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes('RECEIVED')){
+        notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
+      }else{
+        const nid=makeId('ntf');
+        await q(
+          "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",
+          [nid,u.id,customer.id,oid,customer.email,JSON.stringify({from:null,to:'RECEIVED',note:null})]
+        );
+        notification={queued:true,...(await processNotification(nid))};
+      }
+
+      await audit(u.id,'SERVICE_ORDER_CREATED','service_order',oid,pointId,{orderType,notification});
+      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,issueDescription:issue,status:'RECEIVED',receivedAt:order.received_at},reusedCustomer:reused,notification},201);
     }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
   }
 
@@ -946,7 +968,7 @@ const route = async (request) => {
       "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
       [found.point_id]
     );
-    const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
+    const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
     let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
 
     if(!customer?.email){
