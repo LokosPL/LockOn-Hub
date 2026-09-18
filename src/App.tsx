@@ -4,6 +4,7 @@ import { SplashScreen } from './components/SplashScreen';
 import { TitleBar } from './components/TitleBar';
 import { Sidebar, type NavigationKey } from './components/Sidebar';
 import { HelpChat } from './components/HelpChat';
+import { UpdatePrompt } from './components/UpdatePrompt';
 import { Dashboard } from './pages/Dashboard';
 import { BrowserPage } from './pages/BrowserPage';
 import { LoginScreen } from './pages/LoginScreen';
@@ -52,6 +53,7 @@ export default function App() {
       <div className="app-shell">
         <TitleBar pointName="LockOn ServiceOS" />
         <div className="boot-loading"><span className="boot-spinner" /> Przywracam sesję…</div>
+        <UpdatePrompt />
       </div>
     );
   }
@@ -61,6 +63,7 @@ export default function App() {
       <div className="app-shell auth-shell">
         <TitleBar pointName="Logowanie" />
         <LoginScreen auth={auth} onAuthenticated={setAuth} />
+        <UpdatePrompt />
       </div>
     );
   }
@@ -78,6 +81,7 @@ export default function App() {
       <div className="app-shell auth-shell">
         <TitleBar pointName="Weryfikacja konta" />
         <PendingAccessPage auth={auth} onAuthChange={setAuth} onLogout={doLogout} />
+        <UpdatePrompt />
       </div>
     );
   }
@@ -134,6 +138,7 @@ export default function App() {
         </main>
 
         <HelpChat open={helpOpen} onClose={() => setHelpOpen(false)} auth={auth} effectiveRole={effectiveRole!} />
+        <UpdatePrompt />
       </div>
     </div>
   );
