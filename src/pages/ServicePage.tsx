@@ -136,6 +136,15 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     try {
       const created = await window.lockOn.service.createOrder({ ...form, pointId });
       setResult(created);
+      if (created.notification?.sent) {
+        setNotice('Zlecenie utworzone. Potwierdzenie przyjęcia urządzenia zostało wysłane do klienta.');
+      } else if (created.notification?.queued) {
+        setNotice('Zlecenie utworzone. Potwierdzenie e-mail trafiło do kolejki i zostanie ponowione automatycznie w razie błędu.');
+      } else if (created.notification?.reason === 'NO_CUSTOMER_EMAIL') {
+        setNotice('Zlecenie utworzone. Klient nie ma adresu e-mail, więc potwierdzenie nie zostało wysłane.');
+      } else if (created.notification?.reason === 'AUTOMATIC_EMAIL_DISABLED' || created.notification?.reason === 'STATUS_NOT_ENABLED') {
+        setNotice('Zlecenie utworzone. Automatyczne potwierdzenie przyjęcia jest wyłączone w ustawieniach punktu.');
+      }
       setForm(emptyForm);
       setMatches([]);
       setQuery('');
