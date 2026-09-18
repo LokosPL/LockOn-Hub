@@ -38,7 +38,19 @@ export interface BackendLoginPayload extends BackendAuthPayload {
   token: string;
 }
 
-const endpoint = (path: string) => `${APP_CONFIG.backend.apiBaseUrl.replace(/\/$/, '')}${path}`;
+let activeApiBaseUrl = APP_CONFIG.backend.apiBaseUrl.replace(/\/$/, '');
+
+export const setBackendApiBaseUrl = (value: string) => {
+  const parsed = new URL(value);
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('Nieprawidłowy adres LockOn API.');
+  }
+  activeApiBaseUrl = parsed.toString().replace(/\/$/, '');
+};
+
+export const getBackendApiBaseUrl = () => activeApiBaseUrl;
+
+const endpoint = (path: string) => `${activeApiBaseUrl}${path}`;
 
 export async function backendRequest<T>(
   path: string,
@@ -60,8 +72,8 @@ export async function backendRequest<T>(
     });
   } catch {
     throw new Error(
-      `Nie można połączyć się z LockOn API (${APP_CONFIG.backend.apiBaseUrl}). ` +
-      'W development uruchom projekt przez npm run dev.'
+      `Nie można połączyć się z LockOn API (${activeApiBaseUrl}). ` +
+      'Uruchom ponownie ServiceOS. Jeśli problem wróci, zgłoś go w Pomocy.'
     );
   }
 
