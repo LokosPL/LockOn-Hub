@@ -415,6 +415,15 @@ const localOrderView = (order) => {
   };
 };
 
+const localOrderViewForUser = (order, user) => {
+  const view = localOrderView(order);
+  if (user.role === 'SUPPORT') {
+    view.estimatedCost = null;
+    view.finalCost = null;
+  }
+  return view;
+};
+
 const revenueVisibleTo = (user, entry) => {
   if (GLOBAL_ROLES.has(user.role)) return true;
   if (user.role === 'TECHNICIAN') return entry.userId === user.id;
@@ -623,7 +632,7 @@ const handle = async (req, res) => {
   if (method === 'GET' && url.pathname === '/service/technicians') {
     const user = requireActive(req, res);
     if (!user) return;
-    if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    if (!SERVICE_MANAGE_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
     const pointId = cleanText(url.searchParams.get('pointId'), 80);
     if (!pointId || !canSeePoint(user, pointId)) return json(res, 403, { error: 'POINT' });
     const technicians = db.users
@@ -648,7 +657,7 @@ const handle = async (req, res) => {
       .filter((order) => order.customerId === customer.id && canSeePoint(user, order.pointId))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
       .slice(0, 100)
-      .map(localOrderView);
+      .map((order) => localOrderViewForUser(order, user));
     if (!GLOBAL_ROLES.has(user.role) && orders.length === 0) return json(res, 404, { error: 'NOT_FOUND' });
     const devices = [...new Map(orders.map((order) => [order.deviceId, {
       id: order.deviceId,
@@ -846,7 +855,7 @@ const handle = async (req, res) => {
     if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do zleceń.' });
     const orders = db.serviceOrders
       .filter((order) => canSeePoint(user, order.pointId))
-      .map(localOrderView);
+      .map((order) => localOrderViewForUser(order, user));
     return json(res, 200, orders);
   }
 
