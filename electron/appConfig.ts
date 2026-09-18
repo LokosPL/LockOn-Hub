@@ -1,4 +1,3 @@
-import { GOOGLE_CLIENT_SECRET } from './generatedSecrets';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -33,9 +32,13 @@ export const APP_CONFIG = {
     name: 'Punkt Nowogard'
   },
   backend: {
-    // Development: lokalny serwer z katalogu /server uruchamiany przez npm run dev.
-    // Produkcja: ustaw LOCKON_API_URL na publiczny adres wdrożonego API.
-    apiBaseUrl: process.env.LOCKON_API_URL || 'http://127.0.0.1:8787'
+    // Development zachowuje lokalny backend jako szybki fallback.
+    // Pakietowana aplikacja domyślnie korzysta z centralnego API w Neon.
+    apiBaseUrl:
+      process.env.LOCKON_API_URL ||
+      (process.env.VITE_DEV_SERVER_URL
+        ? 'http://127.0.0.1:8787'
+        : 'https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech')
   },
   updateRepository: {
     owner: 'LokosPL',
@@ -45,10 +48,6 @@ export const APP_CONFIG = {
     googleClientId:
       '996585439932-e10mu53j95s6u13vrua841tm4oco38so.apps.googleusercontent.com',
 
-    // Google wydaje credential również dla klienta typu Desktop. W aplikacji instalowanej
-    // nie traktujemy go jako tajemnicy bezpieczeństwa — ochronę przepływu daje PKCE + state.
-    // Release pobiera wartość z GitHub Actions Secret, żeby nie commitować jej do repo.
-    googleClientSecret: process.env.LOCKON_GOOGLE_CLIENT_SECRET || GOOGLE_CLIENT_SECRET,
 
     // Tylko development; backend /auth/dev-owner działa, gdy LOCKON_ALLOW_DEV_LOGIN=1.
     allowLocalStarterLogin: true
