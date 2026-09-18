@@ -92,3 +92,8 @@ Po akceptacji przez SignPath Foundation workflow zostanie rozszerzony o podpisyw
 LockOn ServiceOS jest udostępniany na licencji [MIT](LICENSE).
 
 Zasady współpracy: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+
+## Aktualna wersja
+
+**0.6.5**
