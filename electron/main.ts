@@ -38,7 +38,9 @@ import {
   configureUpdater,
   downloadUpdate,
   getUpdateState,
-  installUpdate
+  installUpdate,
+  startAutomaticUpdateChecks,
+  stopAutomaticUpdateChecks
 } from './updater';
 
 app.enableSandbox();
@@ -373,18 +375,11 @@ const registerIpc = () => {
   secureHandle('browser:openExternal', () => withMainWindow(browserOpenExternal));
 
   secureHandle('update:getState', () => getUpdateState());
-  secureHandle('update:check', async () => {
-    await requireOwner();
-    return checkForUpdates();
-  });
-  secureHandle('update:download', async () => {
-    await requireOwner();
-    return downloadUpdate();
-  });
-  secureHandle('update:install', async () => {
-    await requireOwner();
-    return installUpdate();
-  });
+  // Aktualizacja aplikacji nie zależy od zalogowanej roli.
+  // Wywołanie nadal jest chronione przez trusted IPC i mechanizm electron-updater.
+  secureHandle('update:check', () => checkForUpdates());
+  secureHandle('update:download', () => downloadUpdate());
+  secureHandle('update:install', () => installUpdate());
 };
 
 app.whenReady().then(async () => {
@@ -396,6 +391,7 @@ app.whenReady().then(async () => {
   await startBundledApi();
   registerIpc();
   configureUpdater();
+  startAutomaticUpdateChecks();
   createSplashWindow();
   createMainWindow();
   await delay(380);
@@ -410,6 +406,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  stopAutomaticUpdateChecks();
   if (localApiProcess && !localApiProcess.killed) localApiProcess.kill();
 });
 
