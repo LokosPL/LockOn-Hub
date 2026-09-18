@@ -606,6 +606,15 @@ const handle = async (req, res) => {
     if (!firstName || !lastName || !brand || !model || !issueDescription) {
       return json(res, 400, { error: 'VALIDATION', message: 'Uzupełnij klienta, markę, model i opis usterki.' });
     }
+    if (!email && !phoneNormalized) {
+      return json(res, 400, { error: 'CONTACT_REQUIRED', message: 'Podaj adres e-mail lub numer telefonu klienta.' });
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return json(res, 400, { error: 'EMAIL', message: 'Adres e-mail klienta jest nieprawidłowy.' });
+    }
+    if (phone && phoneNormalized.length < 7) {
+      return json(res, 400, { error: 'PHONE', message: 'Numer telefonu klienta jest zbyt krótki.' });
+    }
     if (!['REPAIR', 'COMPLAINT'].includes(orderType)) {
       return json(res, 400, { error: 'ORDER_TYPE', message: 'Nieprawidłowy typ zlecenia.' });
     }
