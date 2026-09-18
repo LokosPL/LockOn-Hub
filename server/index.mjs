@@ -417,7 +417,7 @@ const localOrderView = (order) => {
 
 const localOrderViewForUser = (order, user) => {
   const view = localOrderView(order);
-  if (user.role === 'SUPPORT') {
+  if (!SERVICE_MANAGE_ROLES.has(user.role)) {
     view.estimatedCost = null;
     view.finalCost = null;
   }
