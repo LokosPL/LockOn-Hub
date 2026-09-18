@@ -17,3 +17,14 @@ LockOn ServiceOS 0.10.0
 - Istniejący telefon jest ponownie używany po IMEI lub zgodnym numerze seryjnym zamiast tworzenia kolejnej karty urządzenia.
 - PostgreSQL wymusza unikalność niepustego IMEI.
 - SUPPORT nie otrzymuje kosztów zlecenia z centralnego API.
+- Nowy mobilny panel WWW: tworzenie zleceń, lista napraw, zmiana statusu, notatki i przekazania z telefonu.
+- Nowy portal ServiceOS pod app.serviceos.pl z logowaniem kodem z aplikacji w prawym górnym rogu.
+- Panel WWW działa jako PWA i może być dodany do ekranu głównego telefonu.
+- Punkty mogą być oznaczone jako posiadające serwis i przyjmujące naprawy z innych lokalizacji.
+- Przekazania zleceń między punktami mają osobny stan logistyczny: w drodze, dostarczono, przyjęte, odrzucone, anulowane.
+- Klient może dostać osobne e-maile o wysłaniu do serwisu, dostarczeniu i przyjęciu przez serwisanta.
+- OWNER może blokować i odblokowywać konta, natychmiast unieważniać sesje użytkownika oraz wylogować wszystkie urządzenia poza własną sesją.
+- Panel OWNER pokazuje aktywne sesje WWW/desktop, punkty serwisowe, otwarte przekazania i ostatni audyt.
+- Zablokowane konto jest odcinane po stronie backendu także od już istniejących sesji.
+- Google OAuth desktop i Gmail preferują server-side Authorization Code + PKCE; zachowany jest bezpieczny fallback przejściowy.
+- CORS centralnego API dopuszcza wyłącznie portal app.serviceos.pl, dotychczasowy GitHub Pages i lokalne środowisko developerskie.
