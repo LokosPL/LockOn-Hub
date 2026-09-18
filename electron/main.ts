@@ -150,7 +150,7 @@ const startBundledApi = async () => {
   if (!shouldStartBundledApi() || localApiProcess) return;
 
   const dataFile = path.join(app.getPath('userData'), 'database.json');
-  const serverScript = path.join(process.resourcesPath, 'app.asar.unpacked', 'server', 'index.mjs');
+  const serverScript = path.join(process.resourcesPath, 'app.asar.unpacked', 'dist-server', 'index.cjs');
   const logFile = path.join(app.getPath('userData'), 'backend.log');
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
 
@@ -345,7 +345,7 @@ const safeId = (value: unknown, prefix: 'usr' | 'rev') => {
 const registerIpc = () => {
   secureHandle('app:getInfo', () => ({
     name: APP_CONFIG.name,
-    author: `${APP_CONFIG.author} - ${APP_CONFIG.defaultPoint.name}`,
+    author: APP_CONFIG.author,
     version: app.getVersion(),
     platform: process.platform,
     packaged: app.isPackaged,
