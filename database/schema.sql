@@ -355,3 +355,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS customers_phone_unique_idx
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-18-central-v6','Prevent duplicate customers by normalized email or phone')
 ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-18 central-v7: richer service order workspace.
+ALTER TABLE service_orders
+  ADD COLUMN IF NOT EXISTS estimated_completion_at timestamptz;
+
+CREATE TABLE IF NOT EXISTS service_order_notes (
+  id text PRIMARY KEY,
+  service_order_id text NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+  author_user_id text NOT NULL REFERENCES users(id),
+  body text NOT NULL CHECK (char_length(btrim(body)) BETWEEN 1 AND 2000),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS service_order_notes_order_idx
+  ON service_order_notes(service_order_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS devices_imei_idx
+  ON devices(imei) WHERE imei IS NOT NULL AND btrim(imei)<>'';
+
+CREATE INDEX IF NOT EXISTS devices_serial_idx
+  ON devices(serial_number) WHERE serial_number IS NOT NULL AND btrim(serial_number)<>'';
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-18-central-v7','Service order ETA, internal notes and device lookup indexes')
+ON CONFLICT (version) DO NOTHING;
