@@ -276,12 +276,6 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
   if (!hasGoogleClientId()) return emptyState(development, 'Najpierw skonfiguruj Google OAuth Client ID.');
 
   const clientSecret = resolveGoogleClientSecret();
-  if (!clientSecret) {
-    return emptyState(
-      development,
-      'Brak konfiguracji Google OAuth dla tej kompilacji.'
-    );
-  }
 
   const { verifier, challenge } = createPkce();
   const stateToken = base64Url(crypto.randomBytes(24));
@@ -319,7 +313,7 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
           redirect: 'error',
           body: new URLSearchParams({
             client_id: APP_CONFIG.auth.googleClientId,
-            client_secret: clientSecret,
+            ...(clientSecret ? { client_secret: clientSecret } : {}),
             code,
             code_verifier: verifier,
             grant_type: 'authorization_code',
