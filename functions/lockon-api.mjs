@@ -1677,8 +1677,103 @@ const route = async (request) => {
     }
     if(status){
       params.push(status);
-      where += ' AND t.status=
-    const session=await requireActive(request),pointId=cleanText(url.searchParams.get('pointId'),80);await requirePoint(session.user,pointId);
+      where += ' AND t.status=' + '$' + String(params.length);
+    }
+    const {rows}=await q(
+      "SELECT t.*,fp.name AS from_point_name,fp.city AS from_point_city,tp.name AS to_point_name,tp.city AS to_point_city,su.name AS sent_by_name,su.email AS sent_by_email,au.name AS accepted_by_name,au.email AS accepted_by_email,s.order_number,c.first_name,c.last_name,d.brand,d.model FROM service_order_transfers t JOIN points fp ON fp.id=t.from_point_id JOIN points tp ON tp.id=t.to_point_id JOIN users su ON su.id=t.sent_by_user_id LEFT JOIN users au ON au.id=t.accepted_by_user_id JOIN service_orders s ON s.id=t.service_order_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id" + where + " ORDER BY t.requested_at DESC LIMIT 150",
+      params
+    );
+    return json(request,rows.map((row)=>({
+      ...transferView(row),
+      orderNumber:Number(row.order_number),
+      customerName:[row.first_name,row.last_name].filter(Boolean).join(' '),
+      device:[row.brand,row.model].filter(Boolean).join(' ')
+    })));
+  }
+
+  const createTransferMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/transfer$/);
+  if(method==='POST'&&createTransferMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przekazywania zleceń.'),{status:403});
+    const order=(await q('SELECT id,point_id,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[createTransferMatch[1]])).rows[0];
+    if(!order)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,order.id);
+
+    const body=await readJson(request),toPointId=cleanText(body.toPointId,80),note=cleanText(body.note,500);
+    const acceptedTransfer=(await q("SELECT to_point_id FROM service_order_transfers WHERE service_order_id=$1 AND status='ACCEPTED' ORDER BY accepted_at DESC NULLS LAST,requested_at DESC LIMIT 1",[order.id])).rows[0];
+    const fromPointId=acceptedTransfer?.to_point_id||order.point_id;
+    await requirePoint(u,fromPointId);
+    if(!toPointId||toPointId===fromPointId)return json(request,{error:'DESTINATION',message:'Wybierz inny punkt serwisowy.'},400);
+
+    const destination=(await q("SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE id=$1 AND active=true AND service_enabled=true AND accepts_external_repairs=true LIMIT 1",[toPointId])).rows[0];
+    if(!destination)return json(request,{error:'SERVICE_UNAVAILABLE',message:'Wybrany punkt nie przyjmuje przekazań serwisowych.'},400);
+
+    const open=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') LIMIT 1",[order.id])).rows[0];
+    if(open)return json(request,{error:'TRANSFER_OPEN',message:'To zlecenie ma już aktywne przekazanie.'},409);
+
+    const transferId=makeId('trf');
+    const row=(await q(
+      "INSERT INTO service_order_transfers(id,service_order_id,from_point_id,to_point_id,status,note,sent_by_user_id,shipped_at) VALUES($1,$2,$3,$4,'IN_TRANSIT',NULLIF($5,''),$6,now()) RETURNING *",
+      [transferId,order.id,fromPointId,toPointId,note,u.id]
+    )).rows[0];
+    await q('UPDATE service_orders SET assigned_technician_id=NULL,updated_at=now() WHERE id=$1',[order.id]);
+
+    const notification=await queueTransferNotification(u,order.id,row,'IN_TRANSIT',note);
+    await audit(u.id,'SERVICE_TRANSFER_SENT','service_order',order.id,fromPointId,{transferId,toPointId,notification});
+    const enriched=(await loadTransfersForOrders([order.id])).get(order.id)?.find((item)=>item.id===transferId);
+    return json(request,{transfer:enriched||transferView({...row,from_point_name:'',to_point_name:destination.name}),notification},201);
+  }
+
+  const transferStatusMatch=url.pathname.match(/^\/service\/transfers\/([^/]+)\/status$/);
+  if(method==='POST'&&transferStatusMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do obsługi przekazania.'),{status:403});
+    const transfer=(await q('SELECT * FROM service_order_transfers WHERE id=$1 LIMIT 1',[transferStatusMatch[1]])).rows[0];
+    if(!transfer)return json(request,{error:'NOT_FOUND'},404);
+
+    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500);
+    const transitions={
+      REQUESTED:new Set(['IN_TRANSIT','CANCELLED']),
+      IN_TRANSIT:new Set(['DELIVERED','CANCELLED']),
+      DELIVERED:new Set(['ACCEPTED','REJECTED']),
+      ACCEPTED:new Set(),
+      REJECTED:new Set(),
+      CANCELLED:new Set()
+    };
+    if(!transitions[transfer.status]?.has(next))return json(request,{error:'TRANSFER_STATUS',message:'Niedozwolona zmiana etapu przekazania.'},400);
+
+    const sourceAction=['IN_TRANSIT','CANCELLED'].includes(next);
+    await requirePoint(u,sourceAction?transfer.from_point_id:transfer.to_point_id);
+
+    let acceptedBy=null;
+    if(next==='ACCEPTED'){
+      if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))throw Object.assign(new Error('Brak uprawnień do przyjęcia naprawy.'),{status:403});
+      acceptedBy=u.id;
+    }
+
+    const updated=(await q(
+      "UPDATE service_order_transfers SET status=$1,note=CASE WHEN NULLIF($2,'') IS NULL THEN note ELSE $2 END,accepted_by_user_id=CASE WHEN $1='ACCEPTED' THEN $3 ELSE accepted_by_user_id END,shipped_at=CASE WHEN $1='IN_TRANSIT' THEN COALESCE(shipped_at,now()) ELSE shipped_at END,delivered_at=CASE WHEN $1='DELIVERED' THEN now() ELSE delivered_at END,accepted_at=CASE WHEN $1='ACCEPTED' THEN now() ELSE accepted_at END,updated_at=now() WHERE id=$4 RETURNING *",
+      [next,note,acceptedBy,transfer.id]
+    )).rows[0];
+
+    if(next==='ACCEPTED'&&u.role_code==='TECHNICIAN'){
+      await q('UPDATE service_orders SET assigned_technician_id=$1,updated_at=now() WHERE id=$2',[u.id,transfer.service_order_id]);
+    }else{
+      await q('UPDATE service_orders SET updated_at=now() WHERE id=$1',[transfer.service_order_id]);
+    }
+
+    const notification=['DELIVERED','ACCEPTED','REJECTED','CANCELLED'].includes(next)
+      ? await queueTransferNotification(u,transfer.service_order_id,updated,next,note)
+      : {queued:false,sent:false,reason:'EVENT_NOT_EMAILED'};
+
+    await audit(u.id,'SERVICE_TRANSFER_'+next,'service_order',transfer.service_order_id,sourceAction?transfer.from_point_id:transfer.to_point_id,{transferId:transfer.id,notification});
+    const full=(await loadTransfersForOrders([transfer.service_order_id])).get(transfer.service_order_id)?.find((item)=>item.id===transfer.id);
+    return json(request,{transfer:full||transferView(updated),notification});
+  }
+
+  if(method==='GET'&&url.pathname==='/integrations/gmail'){
+    const session=await requireActive(request),pointId=cleanText(url.searchParams.get('pointId'),80);
+    await requirePoint(session.user,pointId);
     const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
     const row=rows[0];
     if(!row)return json(request,{connected:false,pointId,needsReconnect:false});
