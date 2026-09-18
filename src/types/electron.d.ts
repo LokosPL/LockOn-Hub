@@ -31,10 +31,20 @@ export interface FinancePayload { entries: RevenueEntry[]; summary: { approvedRe
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; issueDescription:string; status:string; receivedAt:string; }
-export interface ServiceOrderSummary extends ServiceOrder { pointName:string; customerName:string; customerEmail?:string|null; customerPhone?:string|null; brand:string; model:string; statusLabel:string; assignedTechnicianId?:string|null; completedAt?:string|null; }
-export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; notification?:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; }
+export interface ServiceOrderSummary extends ServiceOrder {
+  pointName:string; customerName:string; customerEmail?:string|null; customerPhone?:string|null;
+  brand:string; model:string; imei?:string|null; serialNumber?:string|null; deviceNotes?:string|null;
+  statusLabel:string; assignedTechnicianId?:string|null; assignedTechnicianName?:string|null; assignedTechnicianEmail?:string|null;
+  estimatedCost?:number|null; finalCost?:number|null; currency?:string; estimatedCompletionAt?:string|null;
+  completedAt?:string|null; createdAt?:string;
+}
+export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; reusedDevice?:boolean; notification?:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; }
 export interface ServiceStatusResult { order:ServiceOrderSummary; notification:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; }
 export interface ServiceStatusHistoryItem { id:string; fromStatus?:string|null; fromLabel?:string|null; toStatus:string; toLabel:string; note?:string|null; changedAt:string; changedByUserId?:string|null; changedByName:string; }
+export interface ServiceTechnician { id:string; name:string; email:string; }
+export interface ServiceOrderNote { id:string; body:string; createdAt:string; authorUserId:string; authorName:string; }
+export interface ServiceCustomerDevice { id:string; brand:string; model:string; imei?:string|null; serialNumber?:string|null; notes?:string|null; }
+export interface ServiceCustomerDetail { customer:ServiceCustomer & {createdAt?:string;updatedAt?:string}; devices:ServiceCustomerDevice[]; orders:ServiceOrderSummary[]; totalVisibleOrders:number; }
 export interface GmailConnectionStatus { connected:boolean; needsReconnect?:boolean; pointId:string; email?:string; status?:string; lastError?:string|null; connectedAt?:string; recoveredNotifications?:number; }
 export interface NotificationSettings { pointId:string; automaticEmailEnabled:boolean; notifyStatuses:string[]; senderDisplayName:string; footerText:string; updatedAt?:string; }
 export interface NotificationHistoryItem { id:string; orderId?:string|null; orderNumber?:number|null; recipient:string; status:'PENDING'|'PROCESSING'|'SENT'|'FAILED'|'CANCELLED'; attempts:number; subject?:string|null; providerMessageId?:string|null; lastError?:string|null; availableAt:string; sentAt?:string|null; createdAt:string; updatedAt:string; customerName?:string|null; device?:string|null; }
@@ -68,9 +78,14 @@ declare global {
       data: { getDashboard: () => Promise<DashboardData>; };
       service: {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
-        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT'}) => Promise<ServiceCreateOrderResult>;
+        getCustomer: (customerId:string) => Promise<ServiceCustomerDetail>;
+        listTechnicians: (pointId:string) => Promise<ServiceTechnician[]>;
+        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string}) => Promise<ServiceCreateOrderResult>;
         listOrders: () => Promise<ServiceOrderSummary[]>;
         getHistory: (orderId:string) => Promise<ServiceStatusHistoryItem[]>;
+        getNotes: (orderId:string) => Promise<ServiceOrderNote[]>;
+        addNote: (orderId:string,body:string) => Promise<ServiceOrderNote>;
+        updateDetails: (orderId:string,payload:{imei?:string;serialNumber?:string;deviceNotes?:string;assignedTechnicianId?:string|null;estimatedCost?:number|string|null;finalCost?:number|string|null;estimatedCompletionAt?:string|null}) => Promise<ServiceOrderSummary>;
         updateStatus: (orderId:string,status:string,note?:string) => Promise<ServiceStatusResult>;
       };
       gmail: {
