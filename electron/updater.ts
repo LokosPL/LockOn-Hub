@@ -1,4 +1,5 @@
 import { BrowserWindow, app } from 'electron';
+import path from 'node:path';
 import { autoUpdater } from 'electron-updater';
 import { APP_CONFIG } from './appConfig';
 
@@ -32,6 +33,13 @@ export const configureUpdater = () => {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.allowPrerelease = false;
+
+  // Na Windowsie aktualizacja ma wrócić dokładnie do katalogu, z którego działa
+  // aktualna instalacja (również gdy użytkownik wybrał własny dysk/folder).
+  if (process.platform === 'win32' && app.isPackaged) {
+    (autoUpdater as typeof autoUpdater & { installDirectory?: string }).installDirectory =
+      path.dirname(process.execPath);
+  }
 
   // Ustawiamy feed jawnie, dzięki czemu konfigurację GitHub zmieniasz w jednym miejscu.
   autoUpdater.setFeedURL({
@@ -111,7 +119,11 @@ export const downloadUpdate = async () => {
 
 export const installUpdate = () => {
   if (!app.isPackaged) return;
-  autoUpdater.quitAndInstall(false, true);
+
+  // isSilent=true dodaje /S do instalatora NSIS, więc użytkownik nie widzi
+  // kreatora "dla kogo zainstalować" ani wyboru katalogu podczas aktualizacji.
+  // isForceRunAfter=true uruchamia ServiceOS ponownie po zakończeniu.
+  autoUpdater.quitAndInstall(true, true);
 };
 
 let updateTimer: NodeJS.Timeout | null = null;
