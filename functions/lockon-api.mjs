@@ -128,7 +128,7 @@ const loadPointsForUser = async (user) => {
     return rows.map(pointView);
   }
   const { rows } = await q(
-    'SELECT p.id,p.name,p.city,p.active FROM points p JOIN user_point_access a ON a.point_id=p.id WHERE a.user_id=$1 AND p.active=true ORDER BY p.name',
+    'SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.service_note FROM points p JOIN user_point_access a ON a.point_id=p.id WHERE a.user_id=$1 AND p.active=true ORDER BY p.name',
     [user.id]
   );
   return rows.map(pointView);
