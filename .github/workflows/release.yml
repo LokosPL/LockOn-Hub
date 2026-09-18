@@ -31,24 +31,6 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Check desktop Google OAuth credential
-        shell: pwsh
-        env:
-          GOOGLE_CLIENT_SECRET: ${{ secrets.LOCKON_GOOGLE_CLIENT_SECRET }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:GOOGLE_CLIENT_SECRET)) {
-            Write-Error "Brak GitHub Actions Secret LOCKON_GOOGLE_CLIENT_SECRET."
-            exit 1
-          }
-
-      - name: Inject desktop Google OAuth credential
-        shell: pwsh
-        env:
-          GOOGLE_CLIENT_SECRET: ${{ secrets.LOCKON_GOOGLE_CLIENT_SECRET }}
-        run: |
-          $escaped = $env:GOOGLE_CLIENT_SECRET.Replace("'", "\\'")
-          "export const GOOGLE_CLIENT_SECRET = '$escaped';" | Set-Content -Path electron/generatedSecrets.ts -Encoding utf8
-
       - name: Install locked dependencies
         run: npm ci
 
