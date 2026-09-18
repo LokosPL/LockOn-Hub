@@ -19,7 +19,11 @@ Każde wydanie zawiera również metadane aktualizatora, SHA-256 i GitHub Artifa
 
 ## Aktualizacje
 
-Aplikacja korzysta z `electron-updater` oraz GitHub Releases.
+Aplikacja korzysta z `electron-updater` oraz GitHub Releases. Od wersji 0.6.7 sprawdza nowe wydania podczas pracy, pobiera je w tle i po jednym potwierdzeniu samodzielnie wykonuje restart potrzebny do podmiany wersji.
+
+## Motywy osobiste
+
+Każda rola ma dostęp do osobistych ustawień wyglądu: Grafit, Carbon lub Midnight oraz skalę Auto / Kompakt / Wygodny / Duży. Tryb Auto zwiększa czytelność na QHD i 4K.
 
 Od wersji 0.6.4 aktualizacja:
 - jest sprawdzana automatycznie,
@@ -96,4 +100,4 @@ Zasady współpracy: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Aktualna wersja
 
-**0.6.6**
+**0.6.7**
