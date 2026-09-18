@@ -8,10 +8,12 @@ import {
   type IpcMainInvokeEvent
 } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { APP_CONFIG } from './appConfig';
-import { backendRequest } from './backendApi';
+import { backendRequest, getBackendApiBaseUrl, setBackendApiBaseUrl } from './backendApi';
 import {
   attachBrowser,
   browserBack,
@@ -87,9 +89,51 @@ const protectLocalWindow = (window: BrowserWindow) => {
 const windowSize = () => {
   const { width: workWidth, height: workHeight } = screen.getPrimaryDisplay().workAreaSize;
   return {
-    width: Math.min(1540, Math.max(1040, Math.floor(workWidth * 0.86))),
-    height: Math.min(960, Math.max(680, Math.floor(workHeight * 0.86)))
+    width: Math.min(1840, Math.max(1040, Math.floor(workWidth * 0.88))),
+    height: Math.min(1120, Math.max(680, Math.floor(workHeight * 0.88)))
   };
+};
+
+const uiZoomFactor = () => {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  if (width >= 3000 || height >= 1800) return 1.24;
+  if (width >= 2400 || height >= 1400) return 1.12;
+  return 1;
+};
+
+const reserveLoopbackPort = () => new Promise<number>((resolve, reject) => {
+  const probe = net.createServer();
+  probe.unref();
+  probe.once('error', reject);
+  probe.listen(0, '127.0.0.1', () => {
+    const address = probe.address();
+    if (!address || typeof address === 'string') {
+      probe.close();
+      reject(new Error('Nie udało się wybrać portu dla lokalnego API.'));
+      return;
+    }
+    const port = address.port;
+    probe.close((error) => error ? reject(error) : resolve(port));
+  });
+});
+
+const waitForApi = async (baseUrl: string, timeoutMs = 7000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${baseUrl}/health`, {
+        method: 'GET',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(900)
+      });
+      if (response.ok) {
+        const payload = await response.json() as { ok?: boolean };
+        if (payload.ok === true) return true;
+      }
+    } catch {}
+    await delay(220);
+  }
+  return false;
 };
 
 const shouldStartBundledApi = () => {
@@ -107,33 +151,68 @@ const startBundledApi = async () => {
 
   const dataFile = path.join(app.getPath('userData'), 'database.json');
   const serverScript = path.join(process.resourcesPath, 'app.asar.unpacked', 'server', 'index.mjs');
+  const logFile = path.join(app.getPath('userData'), 'backend.log');
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
 
-  const childEnv: NodeJS.ProcessEnv = {
-    ELECTRON_RUN_AS_NODE: '1',
-    LOCKON_API_HOST: '127.0.0.1',
-    LOCKON_API_PORT: '8787',
-    LOCKON_DATA_FILE: dataFile,
-    LOCKON_OWNER_EMAIL: 'nowogar@gmail.com',
-    LOCKON_GOOGLE_CLIENT_ID: APP_CONFIG.auth.googleClientId,
-    PATH: process.env.PATH,
-    SystemRoot: process.env.SystemRoot,
-    TEMP: process.env.TEMP,
-    TMP: process.env.TMP,
-    USERPROFILE: process.env.USERPROFILE,
-    HOME: process.env.HOME
-  };
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const port = await reserveLoopbackPort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    setBackendApiBaseUrl(baseUrl);
 
-  localApiProcess = spawn(process.execPath, [serverScript], {
-    env: childEnv,
-    windowsHide: true,
-    stdio: 'ignore'
-  });
+    const childEnv: NodeJS.ProcessEnv = {
+      ELECTRON_RUN_AS_NODE: '1',
+      LOCKON_API_HOST: '127.0.0.1',
+      LOCKON_API_PORT: String(port),
+      LOCKON_DATA_FILE: dataFile,
+      LOCKON_OWNER_EMAIL: 'nowogar@gmail.com',
+      LOCKON_GOOGLE_CLIENT_ID: APP_CONFIG.auth.googleClientId,
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      TEMP: process.env.TEMP,
+      TMP: process.env.TMP,
+      USERPROFILE: process.env.USERPROFILE,
+      HOME: process.env.HOME,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      APPDATA: process.env.APPDATA,
+      ComSpec: process.env.ComSpec
+    };
 
-  localApiProcess.once('exit', () => {
-    localApiProcess = null;
-  });
+    const child = spawn(process.execPath, [serverScript], {
+      env: childEnv,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    localApiProcess = child;
 
-  await delay(350);
+    const appendLog = (prefix: string, chunk: unknown) => {
+      try {
+        fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${prefix} ${String(chunk)}\n`, 'utf8');
+      } catch {}
+    };
+
+    child.stdout?.on('data', (chunk) => appendLog('OUT', chunk));
+    child.stderr?.on('data', (chunk) => appendLog('ERR', chunk));
+    child.once('error', (error) => {
+      appendLog('SPAWN', error instanceof Error ? error.stack ?? error.message : error);
+      if (localApiProcess === child) localApiProcess = null;
+    });
+    child.once('exit', (code, signal) => {
+      appendLog('EXIT', `code=${code ?? 'null'} signal=${signal ?? 'null'}`);
+      if (localApiProcess === child) localApiProcess = null;
+    });
+
+    if (await waitForApi(baseUrl)) {
+      appendLog('READY', `LockOn API gotowe: ${baseUrl}`);
+      return;
+    }
+
+    appendLog('RETRY', `API nie wystartowało, próba ${attempt}/3`);
+    if (!child.killed) child.kill();
+    if (localApiProcess === child) localApiProcess = null;
+    await delay(250);
+  }
+
+  throw new Error(`Lokalne LockOn API nie uruchomiło się. Szczegóły: ${logFile}`);
 };
 
 const secureWebPreferences = {
@@ -184,6 +263,7 @@ const createMainWindow = () => {
   });
 
   protectLocalWindow(mainWindow);
+  mainWindow.webContents.setZoomFactor(uiZoomFactor());
   attachBrowser(mainWindow);
   mainReady = new Promise((resolve) => mainWindow?.once('ready-to-show', () => resolve()));
   void mainWindow.loadURL(rendererUrl());
@@ -269,7 +349,7 @@ const registerIpc = () => {
     version: app.getVersion(),
     platform: process.platform,
     packaged: app.isPackaged,
-    apiBaseUrl: APP_CONFIG.backend.apiBaseUrl
+    apiBaseUrl: getBackendApiBaseUrl()
   }));
 
   secureHandle('window:minimize', () => mainWindow?.minimize());
@@ -388,7 +468,11 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
 
-  await startBundledApi();
+  try {
+    await startBundledApi();
+  } catch (error) {
+    console.error('[LockOn API startup]', error);
+  }
   registerIpc();
   configureUpdater();
   startAutomaticUpdateChecks();
