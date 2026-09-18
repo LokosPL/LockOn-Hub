@@ -1,0 +1,7 @@
+LockOn ServiceOS 0.8.1
+
+- Hotfix logowania Google Desktop: przywrócono credential wymagany przez aktualną konfigurację klienta OAuth podczas wymiany authorization code na token.
+- Credential jest wstrzykiwany wyłącznie z GitHub Actions Secret podczas release i nie jest commitowany do repozytorium.
+- PKCE + state pozostają aktywne.
+- Ten sam hotfix zastosowano do połączenia Gmail i odświeżania tokenu po stronie centralnego backendu.
+- Refresh token Gmail oraz wymagany credential OAuth są przechowywane po stronie centralnego backendu w postaci zaszyfrowanej.
