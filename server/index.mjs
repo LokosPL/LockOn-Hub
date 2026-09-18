@@ -714,6 +714,47 @@ const handle = async (req, res) => {
     return json(res, 200, orders);
   }
 
+  const serviceHistoryMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/history$/);
+  if (method === 'GET' && serviceHistoryMatch) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!SERVICE_READ_ROLES.has(user.role)) {
+      return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do historii zlecenia.' });
+    }
+    const order = db.serviceOrders.find((item) => item.id === serviceHistoryMatch[1]);
+    if (!order) return json(res, 404, { error: 'NOT_FOUND' });
+    if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
+
+    const labels = {
+      RECEIVED: 'Przyjęto urządzenie',
+      DIAGNOSIS: 'Diagnoza',
+      WAITING_PARTS: 'Oczekiwanie na części',
+      IN_REPAIR: 'W naprawie',
+      READY: 'Gotowe do odbioru',
+      COMPLETED: 'Zakończone',
+      CANCELLED: 'Anulowane',
+      REJECTED: 'Odrzucone'
+    };
+    const history = db.serviceOrderStatusHistory
+      .filter((item) => item.serviceOrderId === order.id)
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+      .map((item) => {
+        const changedBy = db.users.find((candidate) => candidate.id === item.changedByUserId);
+        return {
+          id: item.id,
+          fromStatus: item.fromStatus || null,
+          fromLabel: item.fromStatus ? (labels[item.fromStatus] || item.fromStatus) : null,
+          toStatus: item.toStatus,
+          toLabel: labels[item.toStatus] || item.toStatus,
+          note: item.note || null,
+          changedAt: item.createdAt,
+          changedByUserId: item.changedByUserId || null,
+          changedByName: changedBy?.name || changedBy?.email || 'System'
+        };
+      });
+    return json(res, 200, history);
+  }
+
   const serviceStatusMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/status$/);
   if (method === 'POST' && serviceStatusMatch) {
     const user = requireActive(req, res);
