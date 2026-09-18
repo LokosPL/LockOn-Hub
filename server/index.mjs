@@ -620,6 +620,52 @@ const handle = async (req, res) => {
     return json(res, 200, matches);
   }
 
+  if (method === 'GET' && url.pathname === '/service/technicians') {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const pointId = cleanText(url.searchParams.get('pointId'), 80);
+    if (!pointId || !canSeePoint(user, pointId)) return json(res, 403, { error: 'POINT' });
+    const technicians = db.users
+      .filter((candidate) =>
+        candidate.role === 'TECHNICIAN' &&
+        candidate.status === 'ACTIVE' &&
+        (candidate.pointIds || []).includes(pointId)
+      )
+      .map((candidate) => ({ id: candidate.id, name: candidate.name, email: candidate.email }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'pl'));
+    return json(res, 200, technicians);
+  }
+
+  const localCustomerDetail = url.pathname.match(/^\/service\/customers\/([^/]+)$/);
+  if (method === 'GET' && localCustomerDetail) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const customer = db.customers.find((item) => item.id === localCustomerDetail[1]);
+    if (!customer) return json(res, 404, { error: 'NOT_FOUND' });
+    const orders = db.serviceOrders
+      .filter((order) => order.customerId === customer.id && canSeePoint(user, order.pointId))
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .slice(0, 100)
+      .map(localOrderView);
+    if (!GLOBAL_ROLES.has(user.role) && orders.length === 0) return json(res, 404, { error: 'NOT_FOUND' });
+    const devices = [...new Map(orders.map((order) => [order.deviceId, {
+      id: order.deviceId,
+      brand: order.brand,
+      model: order.model,
+      imei: order.imei || null,
+      serialNumber: order.serialNumber || null,
+      notes: order.deviceNotes || null
+    }])).values()];
+    return json(res, 200, {
+      customer: { ...customerView(customer), createdAt: customer.createdAt, updatedAt: customer.updatedAt },
+      devices,
+      orders,
+      totalVisibleOrders: orders.length
+    });
+  }
+
   if (method === 'POST' && url.pathname === '/service/orders') {
     const user = requireActive(req, res);
     if (!user) return;
@@ -845,11 +891,109 @@ const handle = async (req, res) => {
     return json(res, 200, history);
   }
 
+  const localNotesMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/notes$/);
+  if (localNotesMatch && (method === 'GET' || method === 'POST')) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!SERVICE_READ_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const order = db.serviceOrders.find((item) => item.id === localNotesMatch[1]);
+    if (!order) return json(res, 404, { error: 'NOT_FOUND' });
+    if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
+
+    if (method === 'GET') {
+      const notes = db.serviceOrderNotes
+        .filter((item) => item.serviceOrderId === order.id)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .map((item) => {
+          const author = findUserById(item.authorUserId);
+          return {
+            id: item.id,
+            body: item.body,
+            createdAt: item.createdAt,
+            authorUserId: item.authorUserId,
+            authorName: author?.name || author?.email || 'Użytkownik'
+          };
+        });
+      return json(res, 200, notes);
+    }
+
+    if (!SERVICE_EDIT_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const body = await readBody(req);
+    const note = cleanText(body.body, 2000);
+    if (!note) return json(res, 400, { error: 'NOTE_REQUIRED', message: 'Notatka nie może być pusta.' });
+    const created = { id: id('not'), serviceOrderId: order.id, authorUserId: user.id, body: note, createdAt: nowIso() };
+    db.serviceOrderNotes.push(created);
+    saveDb();
+    return json(res, 201, { ...created, authorName: user.name || user.email });
+  }
+
+  const localDetailsMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
+  if (method === 'POST' && localDetailsMatch) {
+    const user = requireActive(req, res);
+    if (!user) return;
+    if (!SERVICE_EDIT_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    const order = db.serviceOrders.find((item) => item.id === localDetailsMatch[1]);
+    if (!order) return json(res, 404, { error: 'NOT_FOUND' });
+    if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
+    const device = db.devices.find((item) => item.id === order.deviceId);
+    if (!device) return json(res, 404, { error: 'DEVICE_NOT_FOUND' });
+
+    const body = await readBody(req);
+    const imei = cleanText(body.imei, 32).replace(/\s+/g, '');
+    const serialNumber = cleanText(body.serialNumber, 120);
+    const deviceNotes = cleanText(body.deviceNotes, 1000);
+    if (imei && !/^\d{14,16}$/.test(imei)) return json(res, 400, { error: 'IMEI', message: 'IMEI powinien zawierać 14–16 cyfr.' });
+    const otherDevice = imei ? db.devices.find((item) => item.imei === imei && item.id !== device.id) : null;
+    if (otherDevice) return json(res, 409, { error: 'IMEI_CONFLICT', message: 'Ten IMEI jest już przypisany do innego urządzenia.' });
+
+    const etaText = cleanText(body.estimatedCompletionAt, 64);
+    let estimatedCompletionAt = null;
+    if (etaText) {
+      const eta = new Date(etaText);
+      if (Number.isNaN(eta.getTime())) return json(res, 400, { error: 'ETA', message: 'Nieprawidłowy przewidywany termin.' });
+      estimatedCompletionAt = eta.toISOString();
+    }
+
+    const canManage = SERVICE_MANAGE_ROLES.has(user.role);
+    if (!canManage && ('assignedTechnicianId' in body || 'estimatedCost' in body || 'finalCost' in body)) {
+      return json(res, 403, { error: 'FORBIDDEN', message: 'Tylko kierownictwo punktu może zmieniać technika i koszty.' });
+    }
+
+    if (canManage) {
+      const assignedTechnicianId = cleanText(body.assignedTechnicianId, 80) || null;
+      if (assignedTechnicianId) {
+        const technician = db.users.find((candidate) =>
+          candidate.id === assignedTechnicianId &&
+          candidate.role === 'TECHNICIAN' &&
+          candidate.status === 'ACTIVE' &&
+          (candidate.pointIds || []).includes(order.pointId)
+        );
+        if (!technician) return json(res, 400, { error: 'TECHNICIAN', message: 'Wybrany technik nie ma dostępu do tego punktu.' });
+      }
+      const estimatedCost = body.estimatedCost == null || body.estimatedCost === '' ? null : Number(body.estimatedCost);
+      const finalCost = body.finalCost == null || body.finalCost === '' ? null : Number(body.finalCost);
+      if (estimatedCost != null && (!Number.isFinite(estimatedCost) || estimatedCost < 0)) return json(res, 400, { error: 'ESTIMATED_COST' });
+      if (finalCost != null && (!Number.isFinite(finalCost) || finalCost < 0)) return json(res, 400, { error: 'FINAL_COST' });
+      order.assignedTechnicianId = assignedTechnicianId;
+      order.estimatedCost = estimatedCost;
+      order.finalCost = finalCost;
+    }
+
+    device.imei = imei || null;
+    device.serialNumber = serialNumber || null;
+    device.notes = deviceNotes || null;
+    device.updatedAt = nowIso();
+    order.estimatedCompletionAt = estimatedCompletionAt;
+    order.updatedAt = nowIso();
+    saveDb();
+    return json(res, 200, localOrderView(order));
+  }
+
   const serviceStatusMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/status$/);
   if (method === 'POST' && serviceStatusMatch) {
     const user = requireActive(req, res);
     if (!user) return;
-    if (!SERVICE_CREATE_ROLES.has(user.role)) {
+    if (!SERVICE_EDIT_ROLES.has(user.role)) {
       return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do zmiany statusu.' });
     }
     const order = db.serviceOrders.find((item) => item.id === serviceStatusMatch[1]);
@@ -873,20 +1017,8 @@ const handle = async (req, res) => {
       createdAt: nowIso()
     });
     saveDb();
-    const customer = db.customers.find((item) => item.id === order.customerId);
-    const device = db.devices.find((item) => item.id === order.deviceId);
-    const point = db.points.find((item) => item.id === order.pointId);
     return json(res, 200, {
-      order: {
-        ...order,
-        pointName: point?.name || 'Punkt',
-        customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Klient',
-        customerEmail: customer?.email || null,
-        customerPhone: customer?.phone || null,
-        brand: device?.brand || '',
-        model: device?.model || '',
-        statusLabel: status
-      },
+      order: localOrderView(order),
       notification: { queued: false, sent: false, reason: 'CENTRAL_API_REQUIRED' }
     });
   }
