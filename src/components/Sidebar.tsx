@@ -7,7 +7,8 @@ import {
   Settings,
   ShieldCheck,
   UserRound,
-  UserCog
+  UserCog,
+  Wrench
 } from 'lucide-react';
 import logo from '../assets/logo.svg';
 import type { AuthState } from '../types/electron';
@@ -16,6 +17,7 @@ import { ROLE_DEFINITIONS, ROLE_ORDER, roleCanNavigate, type UserRole } from '..
 export type NavigationKey =
   | 'dashboard'
   | 'administration'
+  | 'service'
   | 'earnings'
   | 'browser'
   | 'support'
@@ -35,6 +37,7 @@ interface SidebarProps {
 const items = [
   { key: 'dashboard', label: 'Start', icon: Gauge },
   { key: 'browser', label: 'Przeglądarka', icon: Globe2 },
+  { key: 'service', label: 'Serwis', icon: Wrench },
   { key: 'earnings', label: 'Rozliczenia', icon: BadgeDollarSign },
   { key: 'administration', label: 'Administracja', icon: UserCog },
   { key: 'support', label: 'Wsparcie', icon: Headphones }
