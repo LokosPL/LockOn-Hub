@@ -925,12 +925,15 @@ const route = async (request) => {
           [pointId]
         );
         const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
+        const senderReady=(await q("SELECT 1 FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL AND oauth_client_secret_ciphertext IS NOT NULL LIMIT 1",[pointId])).rowCount>0;
         if(!customer.email){
           notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
         }else if(settings.automatic_email_enabled!==true){
           notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
         }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes('RECEIVED')){
           notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
+        }else if(!senderReady){
+          notification={queued:false,sent:false,reason:'NO_SENDER'};
         }else{
           const nid=makeId('ntf');
           await q(
@@ -980,6 +983,7 @@ const route = async (request) => {
         [found.point_id]
       );
       const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
+      const senderReady=(await q("SELECT 1 FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL AND oauth_client_secret_ciphertext IS NOT NULL LIMIT 1",[found.point_id])).rowCount>0;
 
       if(!customer?.email){
         notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
@@ -987,6 +991,8 @@ const route = async (request) => {
         notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
       }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes(next)){
         notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
+      }else if(!senderReady){
+        notification={queued:false,sent:false,reason:'NO_SENDER'};
       }else{
         const nid=makeId('ntf');
         await q(
@@ -1032,15 +1038,8 @@ const route = async (request) => {
     const accessToken=await refreshGmailAccess(refreshToken,clientSecret);const profile=await gmailProfile(accessToken);
     await q("INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,status='ACTIVE',last_error=NULL,updated_at=now()",[pointId,u.id,profile.email,encryptSecret(refreshToken),encryptSecret(clientSecret)]);
 
-    const recovered=await q(
-      "UPDATE notification_outbox n SET status='PENDING',available_at=now(),last_error=NULL,updated_at=now() FROM service_orders s WHERE n.service_order_id=s.id AND s.point_id=$1 AND n.status='FAILED' AND n.attempts<5 AND n.last_error LIKE 'Brak aktywnego, kompletnego nadawcy Gmail%' RETURNING n.id",
-      [pointId]
-    );
-    const recoveryResults=[];
-    for(const row of recovered.rows.slice(0,10))recoveryResults.push(await processNotification(row.id));
-
-    await audit(u.id,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,recoveredNotifications:recovered.rowCount});
-    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE',recoveredNotifications:recovered.rowCount,recoveryResults});
+    await audit(u.id,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email});
+    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE'});
   }
 
   if(method==='DELETE'&&url.pathname==='/integrations/gmail'){
