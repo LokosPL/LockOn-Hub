@@ -4,7 +4,7 @@
   "private": true,
   "description": "LockOn ServiceOS — bezpieczny desktopowy panel serwisu z Google OAuth, przeglądarką, rozliczeniami, administracją, pomocą i aktualizacjami GitHub.",
   "author": "Bartłomiej Motłoch - Punkt Nowogard",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "main": "dist-electron/main.js",
   "repository": {
     "type": "git",
