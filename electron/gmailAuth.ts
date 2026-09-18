@@ -149,19 +149,27 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
             redirect_uri: redirectUri
           })
         });
-        const tokenPayload = await tokenResponse.json() as { refresh_token?: string; error?: string; error_description?: string };
+        const tokenPayload = await tokenResponse.json() as { refresh_token?: string; id_token?: string; error?: string; error_description?: string };
         if (!tokenResponse.ok) {
           throw new Error(tokenPayload.error_description || tokenPayload.error || 'Google odrzucił połączenie Gmail.');
         }
         if (!tokenPayload.refresh_token) {
           throw new Error('Google nie zwrócił refresh tokena. Odłącz dostęp ServiceOS w koncie Google i spróbuj ponownie.');
         }
+        if (!tokenPayload.id_token) {
+          throw new Error('Google nie zwrócił tokena tożsamości dla połączonego konta.');
+        }
 
         const status = await backendRequest<GmailConnectionStatus>(
           '/integrations/gmail/connect',
           {
             method: 'POST',
-            body: JSON.stringify({ pointId, refreshToken: tokenPayload.refresh_token, clientSecret })
+            body: JSON.stringify({
+              pointId,
+              refreshToken: tokenPayload.refresh_token,
+              idToken: tokenPayload.id_token,
+              clientSecret
+            })
           },
           apiToken
         );
