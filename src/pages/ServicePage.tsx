@@ -190,7 +190,9 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     try {
       const status = await window.lockOn.gmail.connect(pointId);
       setGmail(status);
-      setNotice('Gmail został bezpiecznie połączony z tym punktem.');
+      setNotice(status.recoveredNotifications
+        ? 'Gmail został połączony. ServiceOS odblokował ' + status.recoveredNotifications + ' wcześniejsze wiadomości i rozpoczął ich ponowną wysyłkę.'
+        : 'Gmail został bezpiecznie połączony z tym punktem.');
       await loadMailData(pointId);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się połączyć Gmail.');
@@ -284,17 +286,19 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
             <div className="service-mail-icon">{gmail?.connected ? <MailCheck size={20}/> : <Mail size={20}/>}</div>
             <div>
               <span>Gmail punktu · {pointOptions.find((p) => p.id === pointId)?.name ?? 'punkt'}</span>
-              <strong>{gmail?.connected ? gmail.email : 'Gmail niepołączony'}</strong>
+              <strong>{gmail?.connected ? gmail.email : gmail?.needsReconnect ? (gmail.email || 'Gmail wymaga ponownego połączenia') : 'Gmail niepołączony'}</strong>
               <small>{gmail?.connected
                 ? (gmail.lastError ? 'Ostatni błąd: ' + gmail.lastError : 'Połączenie aktywne. ServiceOS ma wyłącznie zakres gmail.send.')
-                : 'Połącz konto nadawcy, aby automatycznie informować klientów o statusie naprawy.'}</small>
+                : gmail?.needsReconnect
+                  ? 'To połączenie pochodzi ze starszej wersji. Połącz Gmail ponownie, aby uzupełnić bezpieczne dane OAuth i odblokować kolejkę.'
+                  : 'Połącz konto nadawcy, aby automatycznie informować klientów o statusie naprawy.'}</small>
             </div>
           </div>
           <div className="service-mail-actions">
             {gmail?.connected && <button className="button secondary" disabled={gmailBusy} onClick={() => void testGmail()}><Send size={14}/> Wyślij test</button>}
             {gmail?.connected
               ? <button className="button secondary" disabled={gmailBusy} onClick={() => void disconnectGmail()}>Odłącz Gmail</button>
-              : <button className="button primary" disabled={gmailBusy || !pointId} onClick={() => void connectGmail()}>{gmailBusy ? 'Łączenie…' : 'Połącz Gmail'}</button>}
+              : <button className="button primary" disabled={gmailBusy || !pointId} onClick={() => void connectGmail()}>{gmailBusy ? 'Łączenie…' : gmail?.needsReconnect ? 'Połącz Gmail ponownie' : 'Połącz Gmail'}</button>}
           </div>
         </section>
       )}
