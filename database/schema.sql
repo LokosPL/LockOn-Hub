@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
   picture_url text,
   role_code text REFERENCES roles(code),
   technician_split_percent numeric(5,2) CHECK (technician_split_percent IS NULL OR (technician_split_percent >= 0 AND technician_split_percent <= 100)),
+  support_enabled boolean NOT NULL DEFAULT false,
   status text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACTIVE','REJECTED')),
   first_login_at timestamptz NOT NULL DEFAULT now(),
   last_login_at timestamptz NOT NULL DEFAULT now(),
@@ -182,11 +183,14 @@ CREATE TABLE IF NOT EXISTS support_conversations (
   subject text,
   status text NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','CLOSED')),
   taken_at timestamptz,
+  consultant_requested_at timestamptz,
+  consultant_joined_at timestamptz,
   closed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS support_conversations_point_status_idx ON support_conversations(point_id,status,updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_support_conversations_consultant_waiting ON support_conversations(consultant_requested_at,updated_at DESC) WHERE consultant_requested_at IS NOT NULL AND status='OPEN';
 
 CREATE TABLE IF NOT EXISTS support_messages (
   id text PRIMARY KEY,
@@ -194,6 +198,7 @@ CREATE TABLE IF NOT EXISTS support_messages (
   sender_user_id text REFERENCES users(id),
   sender_kind text NOT NULL CHECK (sender_kind IN ('USER','SUPPORT','SYSTEM','ASSISTANT')),
   body text NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
