@@ -44,6 +44,14 @@ jobs:
             --format=esm \
             --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" \
             --outfile=central-api-dist/index.mjs
+      - name: Emit controlled Neon deployment bundle
+        shell: bash
+        run: |
+          (cd central-api-dist && zip -q -9 ../neon-function.zip index.mjs)
+          base64 -w0 neon-function.zip | fold -w 40000 | while IFS= read -r part || [ -n "$part" ]; do
+            printf 'DEPLOY_PART:%s\n' "$part"
+          done
+
       - name: Upload Neon function bundle
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
