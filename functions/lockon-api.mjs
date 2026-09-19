@@ -1415,7 +1415,7 @@ const route = async (request) => {
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
     const [points, users, loginEvents, pendingRevenue, sessions, recentAudit, transferSummary] = await Promise.all([
       q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=p.id AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL) t ON true ORDER BY p.name"),
-      q("SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
+      q("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
       q("SELECT a.id,a.actor_user_id AS user_id,u.email,u.name,u.role_code AS role,u.status,a.created_at FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id WHERE a.action LIKE 'LOGIN_%' ORDER BY a.created_at DESC LIMIT 100"),
       q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC"),
       q("SELECT client_type,count(*)::int AS count FROM auth_sessions WHERE revoked_at IS NULL AND expires_at>now() AND absolute_expires_at>now() GROUP BY client_type"),
@@ -1426,7 +1426,7 @@ const route = async (request) => {
     for (const user of users.rows) mappedUsers.push(await publicUser(user));
     const revenues = pendingRevenue.rows.map((r) => ({
       id:r.id,userId:r.user_id,pointId:r.point_id,amount:Number(r.amount),workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,
-      splitTechnicianPercent:50,splitBossPercent:50,technicianShare:0,bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,
+      splitTechnicianPercent:Number(r.technician_percent ?? 50),splitBossPercent:100-Number(r.technician_percent ?? 50),technicianShare:0,bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,
       technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}
     }));
     const sessionCounts=Object.fromEntries(sessions.rows.map((row)=>[row.client_type,Number(row.count)]));
@@ -1487,8 +1487,11 @@ const route = async (request) => {
     const role=String(body.role||'USER').toUpperCase();
     if(!REQUESTABLE_ROLES.has(role)) return json(request,{error:'ROLE'},400);
     let pointIds=Array.isArray(body.pointIds)?body.pointIds.map(String):[];
+    const req=await loadRequestedPoint(target.id);
+    const technicianSplitPercent = role==='TECHNICIAN' && req?.requestedRole==='TECHNICIAN'
+      ? req.technicianSplitPercent
+      : (target.technician_split_percent == null ? null : Number(target.technician_split_percent));
     if(body.createRequestedPoint===true){
-      const req=await loadRequestedPoint(target.id);
       if(req){
         let found=await q('SELECT id FROM points WHERE lower(name)=lower($1) AND lower(city)=lower($2) LIMIT 1',[req.pointName,req.city]);
         let pointId=found.rows[0]?.id;
@@ -1500,7 +1503,10 @@ const route = async (request) => {
     const client=await pool.connect();
     try{
       await client.query('BEGIN');
-      await client.query("UPDATE users SET role_code=$1,status='ACTIVE',updated_at=now() WHERE id=$2",[role,target.id]);
+      await client.query(
+        "UPDATE users SET role_code=$1,technician_split_percent=CASE WHEN $1='TECHNICIAN' THEN $2 ELSE technician_split_percent END,status='ACTIVE',updated_at=now() WHERE id=$3",
+        [role,technicianSplitPercent,target.id]
+      );
       await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);
       if(!GLOBAL_ROLES.has(role)) for(const pointId of pointIds) await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);
       await client.query("UPDATE access_requests SET status='APPROVED',resolved_at=now(),resolved_by_user_id=$2 WHERE user_id=$1 AND status='PENDING'",[target.id,session.user.id]);
@@ -1509,7 +1515,7 @@ const route = async (request) => {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
     } finally{client.release();}
-    await audit(session.user.id,'USER_APPROVED','user',target.id,null,{role,pointIds});
+    await audit(session.user.id,'USER_APPROVED','user',target.id,null,{role,pointIds,technicianSplitPercent});
     return json(request, await authPayload(await loadUser(target.id)));
   }
 
