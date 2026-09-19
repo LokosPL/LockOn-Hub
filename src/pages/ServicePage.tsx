@@ -418,11 +418,13 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
         imei: cleanImei,
         serialNumber: draft.serialNumber,
         deviceNotes: draft.deviceNotes,
-        estimatedCompletionAt: draft.estimatedCompletionAt ? new Date(draft.estimatedCompletionAt).toISOString() : null,
-        ...(canManageOrderMeta ? {
+        estimatedCompletionAt: order.handlingMode === 'TRANSFER_ONLY'
+          ? null
+          : (draft.estimatedCompletionAt ? new Date(draft.estimatedCompletionAt).toISOString() : null),
+        ...(order.handlingMode === 'STANDARD' && canManageOrderMeta ? {
           assignedTechnicianId: draft.assignedTechnicianId || null
         } : {}),
-        ...(canEditCosts ? {
+        ...(order.handlingMode === 'STANDARD' && canEditCosts ? {
           estimatedCost: draft.estimatedCost === '' ? null : Number(draft.estimatedCost),
           finalCost: draft.finalCost === '' ? null : Number(draft.finalCost)
         } : {})
