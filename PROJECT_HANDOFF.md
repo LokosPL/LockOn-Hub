@@ -491,6 +491,17 @@ Dla każdego priorytetu:
 8. Po wdrożeniu aktualizować ten plik i przechodzić od razu do kolejnego priorytetu, bez pytania użytkownika o zgodę na zwykłe prace developerskie.
 9. Jawne potwierdzenie użytkownika jest nadal wymagane, jeśli narzędzie wymaga go dla destrukcyjnej/produkcyjnej migracji lub innej nieodwracalnej operacji.
 
+## Stan realizacji aktualnego backlogu 1–5 — 2026-09-19
+
+- Priorytet 1: kod desktop/API i PWA scalony; regresje USER poprawione. Produkcja nie ma konta USER, więc nie tworzono sztucznego konta/danych tylko do testu roli.
+- Priorytet 2: scalone czytelne karty zleceń desktop/PWA oraz deterministyczne kolejkowanie e-mail po przyjęciu; wysyłka jest uznawana za SENT dopiero po provider message id, a błędy pozostają retryable w outbox.
+- Priorytet 3: scalone responsywne wiadomości klienta i spójna, privacy-safe publiczna karta śledzenia.
+- Priorytet 4: scalony punktowy workflow konsultanta; produkcyjny schemat ma point_id, assigned_support_user_id, taken_at i closed_at w support_conversations.
+- Priorytet 5: scalone PR Hub #37 i PWA #14; czytelne karty kont, jawne „Edytuj konto”, role/punkty/blokada/parametr rozliczenia technika; blokada nadal unieważnia sesje, OWNER chroniony.
+- P5 checks: Verify Neon API bundle #5 SUCCESS, Verify ServiceOS #444 SUCCESS, CodeQL #228 SUCCESS; PWA Verify #109 SUCCESS.
+- Zweryfikowany bundle API dla P1–P5: artifact lockon-central-api z run 35447335266, SHA-256 artifact digest 1f5f35c76a20e4039c9adec14b77393e08a0e72dcd89826457c8dc05b3101c91.
+- UWAGA wdrożeniowa: aktywny Neon lockonapi pozostaje v24 do czasu przesłania zweryfikowanego ZIP-a do deploy_function. Nie oznaczać backendowej części P1–P5 jako produkcyjnie zamkniętej przed nowym deploymentem i smoke.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
