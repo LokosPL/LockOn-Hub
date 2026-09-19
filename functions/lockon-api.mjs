@@ -2249,9 +2249,25 @@ const route = async (request) => {
     const session=await requireActive(request),pointId=cleanText(url.searchParams.get('pointId'),80);
     await requirePoint(session.user,pointId);
     const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,refresh_token_ciphertext,oauth_client_secret_ciphertext,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
-    const row=rows[0];
+    let row=rows[0]||null;
+    let inherited=false;
     const checkedAt=nowIso();
-    if(!row)return json(request,{connected:false,pointId,needsReconnect:false,connectionState:'NOT_CONNECTED',checkedAt});
+    if(!row){
+      const fallback=await loadActiveMailSender(pointId);
+      if(!fallback)return json(request,{connected:false,pointId,needsReconnect:false,connectionState:'NOT_CONNECTED',checkedAt});
+      row={
+        point_id:fallback.sender_point_id,
+        sender_email:fallback.sender_email,
+        status:fallback.status,
+        last_error:null,
+        connected_at:fallback.connected_at,
+        refresh_token_ciphertext:fallback.refresh_token_ciphertext,
+        oauth_client_secret_ciphertext:fallback.oauth_client_secret_ciphertext,
+        refresh_complete:Boolean(fallback.refresh_token_ciphertext),
+        legacy_secret_complete:Boolean(fallback.oauth_client_secret_ciphertext)
+      };
+      inherited=true;
+    }
 
     const credentialsComplete=row.refresh_complete===true&&Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||row.legacy_secret_complete);
     if(!credentialsComplete){
@@ -2259,7 +2275,9 @@ const route = async (request) => {
         connected:false,
         needsReconnect:true,
         connectionState:'REAUTH_REQUIRED',
-        pointId:row.point_id,
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
         email:row.sender_email,
         status:row.status,
         lastError:'Połączenie Gmail jest niekompletne i wymaga ponownej autoryzacji.',
@@ -2272,7 +2290,9 @@ const route = async (request) => {
         connected:false,
         needsReconnect:true,
         connectionState:'REAUTH_REQUIRED',
-        pointId:row.point_id,
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
         email:row.sender_email,
         status:row.status,
         lastError:row.last_error||'Zgoda Google dla Gmail wygasła albo została cofnięta.',
@@ -2286,13 +2306,15 @@ const route = async (request) => {
       const legacyClientSecret=row.oauth_client_secret_ciphertext?decryptSecret(row.oauth_client_secret_ciphertext):'';
       await refreshGmailAccess(refreshToken,legacyClientSecret);
       if(row.status!=='ACTIVE'||row.last_error){
-        await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1",[pointId]);
+        await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1",[row.point_id]);
       }
       return json(request,{
         connected:true,
         needsReconnect:false,
         connectionState:'CONNECTED',
-        pointId:row.point_id,
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
         email:row.sender_email,
         status:'ACTIVE',
         lastError:null,
@@ -2308,7 +2330,9 @@ const route = async (request) => {
           connected:false,
           needsReconnect:true,
           connectionState:'REAUTH_REQUIRED',
-          pointId:row.point_id,
+          pointId,
+        senderPointId:row.point_id,
+        inherited,
           email:row.sender_email,
           status:'REVOKED',
           lastError:message,
@@ -2320,7 +2344,9 @@ const route = async (request) => {
         connected:false,
         needsReconnect:false,
         connectionState:'TEMPORARY_ERROR',
-        pointId:row.point_id,
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
         email:row.sender_email,
         status:row.status,
         lastError:'Nie udało się teraz potwierdzić połączenia Gmail. ServiceOS spróbuje ponownie automatycznie.',
