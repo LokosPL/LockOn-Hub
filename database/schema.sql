@@ -173,11 +173,16 @@ CREATE TABLE IF NOT EXISTS settlements (
 CREATE TABLE IF NOT EXISTS support_conversations (
   id text PRIMARY KEY,
   user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  point_id text REFERENCES points(id) ON DELETE SET NULL,
+  assigned_support_user_id text REFERENCES users(id) ON DELETE SET NULL,
   subject text,
   status text NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','CLOSED')),
+  taken_at timestamptz,
+  closed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS support_conversations_point_status_idx ON support_conversations(point_id,status,updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS support_messages (
   id text PRIMARY KEY,

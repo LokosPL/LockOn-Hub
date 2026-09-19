@@ -88,6 +88,8 @@ export interface HelpConversation { id:string; status:string; messages:HelpMessa
 export interface AssistantReply { userMessage:HelpMessage; assistantMessage:HelpMessage; action?:{type:string;code?:string;expiresAt?:string}|null; }
 export interface WebsiteAuthCode { code:string; expiresAt:string; }
 
+export interface SupportTicket { id:string; userId:string; userName:string; userEmail:string; pointId:string|null; pointName:string; status:'OPEN'|'CLOSED'; assignedSupportUserId:string|null; assignedSupportName:string|null; createdAt:string; updatedAt:string; messages:HelpMessage[]; }
+
 declare global {
   interface Window {
     lockOn: {
@@ -148,6 +150,13 @@ declare global {
       assistant: {
         getConversation: () => Promise<HelpConversation>;
         send: (message:string) => Promise<AssistantReply>;
+      };
+      support: {
+        request: (pointId?:string,message?:string) => Promise<{ok:true;conversationId:string;pointId:string}>;
+        listTickets: () => Promise<SupportTicket[]>;
+        take: (ticketId:string) => Promise<{ok:true}>;
+        reply: (ticketId:string,message:string) => Promise<{ok:true}>;
+        close: (ticketId:string) => Promise<{ok:true}>;
       };
       website: { createAuthCode: () => Promise<WebsiteAuthCode>; };
       browser: {
