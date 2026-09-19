@@ -1982,13 +1982,61 @@ const route = async (request) => {
   if(method==='GET'&&url.pathname==='/finance/revenues'){
     const session=await requireActive(request);const u=session.user;
     if(u.role_code==='USER')throw Object.assign(new Error('Brak uprawnień do rozliczeń.'),{status:403});
+    const baseSelect="SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active,so.order_number FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id LEFT JOIN service_orders so ON so.id=r.service_order_id ";
     let rows;
-    if(GLOBAL_ROLES.has(u.role_code)) rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id ORDER BY r.occurred_at DESC")).rows;
-    else if(u.role_code==='TECHNICIAN') rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
-    else rows=(await q("SELECT DISTINCT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id JOIN user_point_access a ON a.point_id=r.point_id AND a.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
-    const entries=rows.map((r)=>{const amount=Number(r.amount);const approved=r.status==='APPROVED'||r.status==='SETTLED';const split=splitRevenueAmount(amount,r.technician_percent);return{id:r.id,userId:r.user_id,pointId:r.point_id,serviceOrderId:r.service_order_id||null,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}}});
-    const approved=entries.filter((e)=>e.status==='APPROVED'||e.status==='SETTLED'),pending=entries.filter((e)=>e.status==='PENDING');
-    return json(request,{entries,summary:{approvedRevenue:approved.reduce((s,e)=>s+e.amount,0),technicianShare:approved.reduce((s,e)=>s+e.technicianShare,0),bossShare:approved.reduce((s,e)=>s+e.bossShare,0),pendingRevenue:pending.reduce((s,e)=>s+e.amount,0)}});
+    if(GLOBAL_ROLES.has(u.role_code)) rows=(await q(baseSelect+"ORDER BY r.occurred_at DESC,r.created_at DESC")).rows;
+    else if(u.role_code==='TECHNICIAN') rows=(await q(baseSelect+"WHERE r.user_id=$1 ORDER BY r.occurred_at DESC,r.created_at DESC",[u.id])).rows;
+    else rows=(await q(baseSelect+"JOIN user_point_access a ON a.point_id=r.point_id AND a.user_id=$1 ORDER BY r.occurred_at DESC,r.created_at DESC",[u.id])).rows;
+    const entries=rows.map((r)=>{
+      const amount=Number(r.amount);
+      const approved=r.status==='APPROVED'||r.status==='SETTLED';
+      const split=splitRevenueAmount(amount,r.technician_percent);
+      return{
+        id:r.id,userId:r.user_id,pointId:r.point_id,serviceOrderId:r.service_order_id||null,
+        orderNumber:r.order_number==null?null:Number(r.order_number),
+        amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,
+        splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,
+        technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,
+        submittedAt:r.created_at,reviewedAt:r.approved_at||null,
+        technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},
+        point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}
+      };
+    });
+    const approved=entries.filter((e)=>e.status==='APPROVED'||e.status==='SETTLED');
+    const pending=entries.filter((e)=>e.status==='PENDING');
+    const pointMap=new Map();
+    for(const entry of entries){
+      let bucket=pointMap.get(entry.pointId);
+      if(!bucket){
+        bucket={pointId:entry.pointId,pointName:entry.point?.name||'Punkt',pointCity:entry.point?.city||'',approvedRevenue:0,technicianShare:0,bossShare:0,pendingRevenue:0,entries:[]};
+        pointMap.set(entry.pointId,bucket);
+      }
+      bucket.entries.push(entry);
+      if(entry.status==='APPROVED'||entry.status==='SETTLED'){
+        bucket.approvedRevenue+=entry.amount;
+        bucket.technicianShare+=entry.technicianShare;
+        bucket.bossShare+=entry.bossShare;
+      }else if(entry.status==='PENDING'){
+        bucket.pendingRevenue+=entry.amount;
+      }
+    }
+    const points=[...pointMap.values()].map((point)=>({
+      ...point,
+      approvedRevenue:Math.round(point.approvedRevenue*100)/100,
+      technicianShare:Math.round(point.technicianShare*100)/100,
+      bossShare:Math.round(point.bossShare*100)/100,
+      pendingRevenue:Math.round(point.pendingRevenue*100)/100
+    })).sort((a,b)=>a.pointName.localeCompare(b.pointName,'pl'));
+    return json(request,{
+      entries,
+      points,
+      summary:{
+        approvedRevenue:approved.reduce((s,e)=>s+e.amount,0),
+        technicianShare:approved.reduce((s,e)=>s+e.technicianShare,0),
+        bossShare:approved.reduce((s,e)=>s+e.bossShare,0),
+        pendingRevenue:pending.reduce((s,e)=>s+e.amount,0)
+      }
+    });
   }
 
   if(method==='POST'&&url.pathname==='/finance/revenues'){
@@ -2002,7 +2050,7 @@ const route = async (request) => {
     const split=splitRevenueAmount(rounded,technicianPercent);
     const id=makeId('rev');
     const row=(await q("INSERT INTO revenue_entries(id,point_id,user_id,amount,currency,category,technician_percent,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,'PLN','SERVICE',$5,'APPROVED',$6,$7,$3,now()) RETURNING created_at,approved_at",[id,pointId,session.user.id,rounded,technicianPercent,note,new Date(workDate+'T12:00:00Z')])).rows[0];
-    await audit(session,'REVENUE_AUTO_APPROVED','revenue',id,pointId,{amount:rounded,manual:true,technicianPercent});
+    await audit(session,'REVENUE_AUTO_APPROVED','revenue',id,pointId,{amount:rounded,manual:true,technicianPercent,settlementStatus:'APPROVED'});
     return json(request,{id,userId:session.user.id,pointId,serviceOrderId:null,amount:rounded,workDate,note,status:'APPROVED',splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:split.technicianShare,bossShare:split.bossShare,submittedAt:row.created_at,reviewedAt:row.approved_at},201);
   }
 
@@ -2013,7 +2061,8 @@ const route = async (request) => {
     const result=await q("UPDATE revenue_entries SET status=$1,approved_by_user_id=$2,approved_at=now() WHERE id=$3 RETURNING *",[action==='APPROVE'?'APPROVED':'REJECTED',session.user.id,review[1]]);
     if(!result.rows[0])return json(request,{error:'NOT_FOUND'},404);
     const r=result.rows[0],amount=Number(r.amount),approved=r.status==='APPROVED';const split=splitRevenueAmount(amount,r.technician_percent);
-    return json(request,{id:r.id,userId:r.user_id,pointId:r.point_id,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at});
+    await audit(session,'REVENUE_REVIEWED','revenue',r.id,r.point_id,{after:r.status,amount,technicianPercent:split.technicianPercent,settlementStatus:r.status});
+    return json(request,{id:r.id,userId:r.user_id,pointId:r.point_id,serviceOrderId:r.service_order_id||null,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at});
   }
 
   if(method==='GET'&&url.pathname==='/dashboard'){
@@ -2502,7 +2551,7 @@ const route = async (request) => {
     }
 
     try{
-      await audit(session,'SERVICE_STATUS_CHANGED','service_order',found.id,found.point_id,{from:found.status,to:next,notification});
+      await audit(session,'SERVICE_STATUS_CHANGED','service_order',found.id,found.point_id,{from:found.status,to:next,notification,settlementStatus:settlement?.status||null,settlementId:settlement?.id||null});
     }catch(auditError){
       console.error('[service status audit]',auditError);
     }
