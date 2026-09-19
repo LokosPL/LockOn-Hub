@@ -30,6 +30,7 @@ const emptyForm = {
   firstName: '', lastName: '', email: '', phone: '',
   brand: '', model: '', imei: '', serialNumber: '', deviceNotes: '',
   issueDescription: '', orderType: 'REPAIR' as 'REPAIR' | 'COMPLAINT',
+  handlingMode: 'STANDARD' as 'STANDARD' | 'TRANSFER_ONLY',
   assignedTechnicianId: '', estimatedCost: '', estimatedCompletionAt: ''
 };
 
@@ -336,9 +337,9 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
         ...form,
         imei: cleanImei,
         pointId,
-        estimatedCost: canEditCosts && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
-        assignedTechnicianId: canManageOrderMeta ? form.assignedTechnicianId || undefined : undefined,
-        estimatedCompletionAt: form.estimatedCompletionAt ? new Date(form.estimatedCompletionAt).toISOString() : undefined
+        estimatedCost: canEditCosts && form.handlingMode === 'STANDARD' && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
+        assignedTechnicianId: canManageOrderMeta && form.handlingMode === 'STANDARD' ? form.assignedTechnicianId || undefined : undefined,
+        estimatedCompletionAt: form.handlingMode === 'STANDARD' && form.estimatedCompletionAt ? new Date(form.estimatedCompletionAt).toISOString() : undefined
       });
       setResult(created);
       if (created.reusedDevice) {
@@ -472,7 +473,12 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     if (!draft.toPointId) { setError('Wybierz docelowy punkt serwisowy.'); return; }
     setOrderBusyId(order.id); setError(''); setNotice('');
     try {
-      const result = await window.lockOn.service.transferOrder(order.id, {...draft,kind:'OUTBOUND_SERVICE'});
+      const currentPointId = order.currentPointId || order.homePointId || order.pointId;
+      const homePointId = order.homePointId || order.pointId;
+      const kind = order.handlingMode === 'TRANSFER_ONLY' && currentPointId !== homePointId && draft.toPointId === homePointId
+        ? 'RETURN_HOME'
+        : 'OUTBOUND_SERVICE';
+      const result = await window.lockOn.service.transferOrder(order.id, {...draft,kind});
       setNotice(result.notification?.sent
         ? 'Zlecenie wysłano do serwisu i klient otrzymał wiadomość.'
         : 'Zlecenie wysłano do serwisu.');
@@ -669,9 +675,11 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               <label><span>Numer seryjny</span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Opcjonalnie"/></label>
               <label className="full"><span>Punkt</span><select value={pointId} onChange={(e)=>{setPointId(e.target.value);update('assignedTechnicianId','');}}>{pointOptions.map((p)=><option key={p.id} value={p.id}>{p.name}{p.city ? ' — ' + p.city : ''}</option>)}</select></label>
               <label><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Nowe zlecenie</option><option value="COMPLAINT">Zlecenie reklamacyjne</option></select></label>
-              <label><span>Przewidywany termin</span><input type="datetime-local" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>
-              {canManageOrderMeta && <label><span>Technik</span><select value={form.assignedTechnicianId} onChange={(e)=>update('assignedTechnicianId',e.target.value)}><option value="">Nieprzypisany</option>{technicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
-              {canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>}
+              <label className="full"><span>Sposób obsługi</span><select value={form.handlingMode} onChange={(e)=>update('handlingMode', e.target.value as 'STANDARD' | 'TRANSFER_ONLY')}><option value="STANDARD">Normalny serwis — statusy, diagnoza i naprawa</option><option value="TRANSFER_ONLY">Tylko przekazanie — logistyka bez zmiany statusów naprawy</option></select></label>
+              {form.handlingMode === 'TRANSFER_ONLY' && <div className="service-mode-note full"><Truck size={16}/><div><strong>Tylko przekazanie</strong><span>To zlecenie służy wyłącznie do przekazywania urządzenia między punktami. Status naprawy pozostaje zablokowany; dostępne jest jedynie anulowanie zlecenia.</span></div></div>}
+              {form.handlingMode === 'STANDARD' && <label><span>Przewidywany termin</span><input type="datetime-local" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>}
+              {form.handlingMode === 'STANDARD' && canManageOrderMeta && <label><span>Technik</span><select value={form.assignedTechnicianId} onChange={(e)=>update('assignedTechnicianId',e.target.value)}><option value="">Nieprzypisany</option>{technicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+              {form.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>}
               <label className="full"><span>Uwagi do urządzenia</span><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Stan obudowy, hasło serwisowe przekazane osobno, akcesoria…"/></label>
               <label className="full"><span>Opis usterki</span><textarea rows={6} value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} /></label>
             </div>
@@ -708,7 +716,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                     <div className="service-order-main">
                       <strong>{order.customerName}</strong>
                       <span>{order.brand} {order.model} · {order.pointName}</span>
-                      <small>{order.orderType === 'COMPLAINT' ? 'Reklamacja' : 'Naprawa'} · {order.customerEmail || order.customerPhone || 'brak kontaktu'}</small>
+                      <small>{order.handlingMode === 'TRANSFER_ONLY' ? 'Tylko przekazanie' : (order.orderType === 'COMPLAINT' ? 'Reklamacja' : 'Naprawa')} · {order.customerEmail || order.customerPhone || 'brak kontaktu'}</small>
                       {order.workflow && <div className="service-workflow-summary">
                         <div className="service-workflow-stage">
                           <span>Etap {order.workflow.stageNumber}/{order.workflow.stageTotal}</span>
@@ -726,16 +734,19 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                         </div>
                       </div>}
                       <div className="service-order-quick-meta">
-                        <span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span>
-                        <span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleString('pl-PL') : 'Brak terminu'}</span>
+                        {order.handlingMode === 'TRANSFER_ONLY'
+                          ? <span className="transfer-only-chip"><Truck size={11}/>Tylko przekazanie</span>
+                          : <><span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span><span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleString('pl-PL') : 'Brak terminu'}</span></>}
                         <span><MapPin size={11}/>Macierzysty: {order.homePointName || order.pointName}</span>
                         <span><Truck size={11}/>Lokalizacja: {order.currentLocationLabel || order.currentPointName || order.pointName}</span>
-                        {canEditCosts && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
+                        {canEditCosts && order.handlingMode === 'STANDARD' && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
                       </div>
                     </div>
                     <div className="service-order-actions">
                       <div className="service-order-status">
-                        {canEditStatus ? (
+                        {canEditStatus && order.handlingMode === 'TRANSFER_ONLY' ? (
+                          <div className="transfer-only-status"><span className="status-badge">Tylko przekazanie</span>{order.status !== 'CANCELLED' && <button className="button small danger-soft" onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button>}</div>
+                        ) : canEditStatus ? (
                           <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
                             {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && order.canMarkReady===false) || (value==='COMPLETED' && (order.canMarkReady===false || order.status!=='READY'))}>{label}</option>)}
                           </select>
@@ -759,10 +770,10 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                           <div className="service-details-grid">
                             <label><span>IMEI</span><input disabled={!canEditStatus} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
                             <label><span>Numer seryjny</span><input disabled={!canEditStatus} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
-                            <label><span>Przewidywany termin</span><input disabled={!canEditStatus} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>
-                            {canManageOrderMeta && <label><span>Technik</span><select value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
-                            {canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
-                            {canEditCosts && <label><span>Cena końcowa (PLN)</span><input type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
+                            {order.handlingMode === 'STANDARD' && <label><span>Przewidywany termin</span><input disabled={!canEditStatus} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>}
+                            {order.handlingMode === 'STANDARD' && canManageOrderMeta && <label><span>Technik</span><select value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
+                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
                             <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditStatus} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
                           </div>
                           {canEditStatus && <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
@@ -780,6 +791,18 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                             <div><Truck size={15}/><span>{order.openTransfer.fromPointName}</span><b>→</b><strong>{order.openTransfer.toPointName}</strong></div>
                             <small>{order.openTransfer.kind==='RETURN_HOME' ? 'Obowiązkowy zwrot do punktu macierzystego' : 'Wysłanie do zewnętrznego serwisu'} · {order.openTransfer.status==='IN_TRANSIT'?'w drodze':order.openTransfer.status==='DELIVERED'?'dostarczono, czeka na przyjęcie':'oczekuje'}</small>
                           </div>
+                        ) : order.handlingMode === 'TRANSFER_ONLY' ? (
+                          canEditStatus && canOperateCurrentPoint ? (
+                            <div className="transfer-compose">
+                              <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
+                                <option value="">Wybierz punkt docelowy…</option>
+                                {currentServicePointId !== (order.homePointId || order.pointId) && <option value={order.homePointId || order.pointId}>{order.homePointName || order.pointName} — punkt macierzysty</option>}
+                                {servicePoints.filter((point)=>point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
+                              </select>
+                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do protokołu przekazania (opcjonalnie)"/>
+                              <button className="button primary small" disabled={orderBusyId===order.id || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Przekaż urządzenie dalej</button>
+                            </div>
+                          ) : <div className="service-history-empty">Przekazanie może rozpocząć użytkownik obsługujący aktualny punkt urządzenia.</div>
                         ) : order.returnRequired ? (
                           canEditStatus && canOperateCurrentPoint && order.status==='REPAIR_DONE' ? (
                             <div className="transfer-compose">
