@@ -17,6 +17,7 @@ const SITE_ORIGINS = new Set(
   ].filter(Boolean)
 );
 const GMAIL_TOKEN_KEY = String(process.env.LOCKON_GMAIL_TOKEN_KEY || '');
+const PUBLIC_PORTAL_URL = String(process.env.LOCKON_SITE_ORIGIN || 'https://app.serviceos.pl').trim().replace(/\/$/,'') || 'https://app.serviceos.pl';
 const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
@@ -796,6 +797,32 @@ const decryptSecret = (packed) => {
   return Buffer.concat([decipher.update(Buffer.from(parts[1], 'base64')), decipher.final()]).toString('utf8');
 };
 
+const ensureTrackingToken = async (orderId) => {
+  let row=(await q("SELECT tracking_token_hash,tracking_token_ciphertext FROM service_orders WHERE id=$1 LIMIT 1",[orderId])).rows[0];
+  if(!row)throw Object.assign(new Error('Nie znaleziono zlecenia.'),{status:404});
+  if(row.tracking_token_ciphertext){
+    return decryptSecret(row.tracking_token_ciphertext);
+  }
+  for(let attempt=0;attempt<3;attempt+=1){
+    const token=crypto.randomBytes(32).toString('base64url');
+    const hash=tokenHash(token);
+    const packed=encryptSecret(token);
+    const updated=(await q(
+      "UPDATE service_orders SET tracking_token_hash=$2,tracking_token_ciphertext=$3,tracking_created_at=COALESCE(tracking_created_at,now()),updated_at=now() WHERE id=$1 AND tracking_token_ciphertext IS NULL RETURNING tracking_token_ciphertext",
+      [orderId,hash,packed]
+    )).rows[0];
+    if(updated?.tracking_token_ciphertext)return token;
+    row=(await q("SELECT tracking_token_ciphertext FROM service_orders WHERE id=$1 LIMIT 1",[orderId])).rows[0];
+    if(row?.tracking_token_ciphertext)return decryptSecret(row.tracking_token_ciphertext);
+  }
+  throw new Error('Nie udało się utworzyć bezpiecznego linku śledzenia.');
+};
+
+const trackingUrlForOrder = async (orderId) => {
+  const token=await ensureTrackingToken(orderId);
+  return PUBLIC_PORTAL_URL + '/track.html?t=' + encodeURIComponent(token);
+};
+
 const refreshGmailAccess = async (refreshToken, legacyClientSecret = '') => {
   const clientSecret = GOOGLE_DESKTOP_CLIENT_SECRET || legacyClientSecret;
   if (!clientSecret) {
@@ -940,6 +967,7 @@ const renderStatusEmail = (item) => {
     '',
     'Urządzenie: ' + item.brand + ' ' + item.model,
     'Punkt prowadzący: ' + item.point_name,
+    item.tracking_url ? 'Śledź zlecenie: ' + item.tracking_url : '',
     '',
     footer,
     '',
@@ -965,6 +993,7 @@ const renderStatusEmail = (item) => {
             '<strong style="color:#e8ebef">' + escapeHtml(item.brand) + ' ' + escapeHtml(item.model) + '</strong><br>' +
             'Punkt prowadzący: ' + escapeHtml(item.point_name) +
           '</div>' +
+          (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:inline-block;margin-top:18px;padding:12px 16px;border-radius:10px;background:#ff7445;color:#fff;text-decoration:none;font-size:13px;font-weight:800">Śledź naprawę i historię urządzenia</a>' : '') +
           '<p style="margin:20px 0 0;font-size:12px;color:#818b97;line-height:1.5">' + escapeHtml(footer) + '</p>' +
         '</div>' +
       '</div>' +
@@ -1030,6 +1059,13 @@ const processNotification = async (notificationId) => {
       [notificationId, attempt, error, nextAttemptAt]
     );
     return { sent: false, reason: 'NO_SENDER', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
+  }
+
+  try{
+    item.tracking_url=await trackingUrlForOrder(item.service_order_id);
+  }catch(error){
+    console.error('[tracking link]',error);
+    item.tracking_url='';
   }
 
   const rendered = renderStatusEmail(item);
@@ -1313,6 +1349,62 @@ const route = async (request) => {
   }
 
   if (method === 'OPTIONS') return new Response(null, { status: 204, headers: secureHeaders(request) });
+
+  if(method==='GET'&&url.pathname==='/public/service-track'){
+    const token=String(url.searchParams.get('token')||'').trim();
+    if(!/^[A-Za-z0-9_-]{43}$/.test(token))return json(request,{error:'TRACKING_TOKEN',message:'Link śledzenia jest nieprawidłowy albo niepełny.'},404);
+    const hash=tokenHash(token);
+    const order=(await q(
+      "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_cost,s.final_cost,s.currency,s.estimated_completion_at,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,p.name AS point_name,hp.name AS home_point_name,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.tracking_token_hash=$1 LIMIT 1",
+      [hash]
+    )).rows[0];
+    if(!order)return json(request,{error:'TRACKING_NOT_FOUND',message:'Link śledzenia wygasł albo nie istnieje.'},404);
+    const [historyResult,transferResult]=await Promise.all([
+      q("SELECT from_status,to_status,created_at FROM service_order_status_history WHERE service_order_id=$1 ORDER BY created_at ASC,id ASC",[order.id]),
+      q("SELECT t.kind,t.status,t.requested_at,t.shipped_at,t.delivered_at,t.accepted_at,t.updated_at,fp.name AS from_point_name,tp.name AS to_point_name FROM service_order_transfers t JOIN points fp ON fp.id=t.from_point_id JOIN points tp ON tp.id=t.to_point_id WHERE t.service_order_id=$1 ORDER BY t.requested_at ASC,t.id ASC",[order.id])
+    ]);
+    return json(request,{
+      order:{
+        orderNumber:Number(order.order_number),
+        orderType:order.order_type,
+        handlingMode:order.handling_mode||'STANDARD',
+        issueDescription:order.issue_description,
+        status:order.status,
+        statusLabel:STATUS_LABELS[order.status]||order.status,
+        device:{brand:order.brand,model:order.model},
+        pointName:order.point_name,
+        homePointName:order.home_point_name||order.point_name,
+        currentPointName:order.current_point_name||null,
+        estimatedCost:order.estimated_cost==null?null:Number(order.estimated_cost),
+        finalCost:order.final_cost==null?null:Number(order.final_cost),
+        currency:String(order.currency||'PLN').trim(),
+        estimatedCompletionAt:order.estimated_completion_at||null,
+        receivedAt:order.received_at,
+        completedAt:order.completed_at||null,
+        createdAt:order.created_at,
+        updatedAt:order.updated_at
+      },
+      statusHistory:historyResult.rows.map(row=>({
+        fromStatus:row.from_status||null,
+        fromLabel:row.from_status?(STATUS_LABELS[row.from_status]||row.from_status):null,
+        toStatus:row.to_status,
+        toLabel:STATUS_LABELS[row.to_status]||row.to_status,
+        changedAt:row.created_at
+      })),
+      transfers:transferResult.rows.map(row=>({
+        kind:row.kind||'OUTBOUND_SERVICE',
+        status:row.status,
+        fromPointName:row.from_point_name,
+        toPointName:row.to_point_name,
+        requestedAt:row.requested_at,
+        shippedAt:row.shipped_at||null,
+        deliveredAt:row.delivered_at||null,
+        acceptedAt:row.accepted_at||null,
+        updatedAt:row.updated_at
+      }))
+    });
+  }
+
   if (method === 'GET' && url.pathname === '/health') return json(request, { ok: true, service: 'LockOn ServiceOS Central API', time: nowIso() });
 
   if (method === 'POST' && url.pathname === '/auth/google-code') {
