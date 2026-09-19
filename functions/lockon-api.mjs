@@ -1623,6 +1623,84 @@ const route = async (request) => {
     });
   }
 
+  if (method === 'POST' && url.pathname === '/public/customer-portal/login') {
+    const body = await readJson(request);
+    const code = normalizeCustomerPortalCode(body.customerId || body.code);
+    if (!code) return json(request,{error:'CUSTOMER_ID',message:'Identyfikator klienta jest nieprawidłowy.'},400);
+    const customer = (await q("SELECT id FROM customers WHERE portal_code_hash=$1 LIMIT 1",[tokenHash(code)])).rows[0];
+    if (!customer) return json(request,{error:'CUSTOMER_ID',message:'Nie znaleziono klienta dla tego identyfikatora.'},401);
+    const session = await createCustomerPortalSession(customer.id);
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_PORTAL_LOGIN','customer',$2,$3::jsonb)",[makeId('aud'),customer.id,JSON.stringify({clientType:'CUSTOMER_PORTAL'})]);
+    return json(request,{sessionToken:session.token,expiresAt:session.expiresAt,...(await loadCustomerPortalPayload(customer.id))});
+  }
+
+  if (method === 'GET' && url.pathname === '/public/customer-portal/me') {
+    const customerSession = await requireCustomerPortal(request);
+    return json(request,await loadCustomerPortalPayload(customerSession.customer_id));
+  }
+
+  if (method === 'POST' && url.pathname === '/public/customer-portal/quotes') {
+    const customerSession = await requireCustomerPortal(request);
+    const body = await readJson(request);
+    let requestedPointId = cleanText(body.requestedPointId,80);
+    const serviceOrderId = cleanText(body.serviceOrderId,80) || null;
+    let deviceDescription = cleanText(body.deviceDescription,180);
+    const issueDescription = cleanText(body.issueDescription,2000);
+    if (!issueDescription) return json(request,{error:'ISSUE_REQUIRED',message:'Opisz urządzenie i problem, który mamy wycenić.'},400);
+
+    let linkedOrder = null;
+    if (serviceOrderId) {
+      linkedOrder = (await q(
+        "SELECT s.id,s.point_id,d.brand,d.model FROM service_orders s JOIN devices d ON d.id=s.device_id WHERE s.id=$1 AND s.customer_id=$2 LIMIT 1",
+        [serviceOrderId,customerSession.customer_id]
+      )).rows[0];
+      if (!linkedOrder) return json(request,{error:'ORDER_NOT_FOUND',message:'To zlecenie nie należy do Twojej historii.'},404);
+      if (!deviceDescription) deviceDescription=[linkedOrder.brand,linkedOrder.model].filter(Boolean).join(' ');
+      if (!requestedPointId) requestedPointId=linkedOrder.point_id;
+    }
+    if (!deviceDescription) return json(request,{error:'DEVICE_REQUIRED',message:'Podaj urządzenie, którego dotyczy wycena.'},400);
+
+    const requestedPoint = (await q("SELECT id,name,city FROM points WHERE id=$1 AND active=true LIMIT 1",[requestedPointId])).rows[0];
+    if (!requestedPoint) return json(request,{error:'POINT_NOT_FOUND',message:'Wybrany punkt jest niedostępny.'},400);
+    const routing = await routeCustomerQuote(requestedPoint.id);
+    const routedPoint = (await q("SELECT id,name,city FROM points WHERE id=$1 LIMIT 1",[routing.routedPointId])).rows[0] || requestedPoint;
+    const requestId = makeId('cqr');
+    await q(
+      "INSERT INTO customer_quote_requests(id,customer_id,requested_point_id,routed_point_id,assigned_technician_id,service_order_id,device_description,issue_description,routing_reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      [requestId,customerSession.customer_id,requestedPoint.id,routing.routedPointId,routing.technicianId,serviceOrderId,deviceDescription,issueDescription,routing.routingReason]
+    );
+    await q(
+      "INSERT INTO customer_quote_messages(id,request_id,sender_kind,body) VALUES($1,$2,'CUSTOMER',$3)",
+      [makeId('cqm'),requestId,issueDescription]
+    );
+    if (routing.routedPointId !== requestedPoint.id) {
+      await q(
+        "INSERT INTO customer_quote_messages(id,request_id,sender_kind,body) VALUES($1,$2,'SYSTEM',$3)",
+        [makeId('cqm'),requestId,'Zapytanie zostało automatycznie przekazane z punktu '+requestedPoint.name+' do serwisu '+routedPoint.name+'.']
+      );
+    }
+    await q(
+      "INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,point_id,metadata) VALUES($1,NULL,'CUSTOMER_QUOTE_CREATED','customer_quote_request',$2,$3,$4::jsonb)",
+      [makeId('aud'),requestId,requestedPoint.id,JSON.stringify({customerId:customerSession.customer_id,routedPointId:routing.routedPointId,assignedTechnicianId:routing.technicianId||null,routingReason:routing.routingReason,clientType:'CUSTOMER_PORTAL'})]
+    );
+    return json(request,{ok:true,requestId,routedPointName:routedPoint.name,...(await loadCustomerPortalPayload(customerSession.customer_id))},201);
+  }
+
+  const customerQuoteMessageMatch=url.pathname.match(/^\/public\/customer-portal\/quotes\/([^/]+)\/messages$/);
+  if(method==='POST'&&customerQuoteMessageMatch){
+    const customerSession=await requireCustomerPortal(request);
+    const body=await readJson(request);
+    const message=cleanText(body.message,1000);
+    if(!message)return json(request,{error:'MESSAGE_REQUIRED',message:'Wpisz wiadomość.'},400);
+    const quote=(await q("SELECT id,status,requested_point_id FROM customer_quote_requests WHERE id=$1 AND customer_id=$2 LIMIT 1",[customerQuoteMessageMatch[1],customerSession.customer_id])).rows[0];
+    if(!quote)return json(request,{error:'NOT_FOUND',message:'Nie znaleziono tego zapytania.'},404);
+    if(['CLOSED','CANCELLED'].includes(quote.status))return json(request,{error:'QUOTE_CLOSED',message:'To zapytanie jest już zamknięte.'},409);
+    await q("INSERT INTO customer_quote_messages(id,request_id,sender_kind,body) VALUES($1,$2,'CUSTOMER',$3)",[makeId('cqm'),quote.id,message]);
+    await q("UPDATE customer_quote_requests SET status='OPEN',updated_at=now() WHERE id=$1",[quote.id]);
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,point_id,metadata) VALUES($1,NULL,'CUSTOMER_QUOTE_MESSAGE','customer_quote_request',$2,$3,$4::jsonb)",[makeId('aud'),quote.id,quote.requested_point_id,JSON.stringify({clientType:'CUSTOMER_PORTAL'})]);
+    return json(request,{ok:true,...(await loadCustomerPortalPayload(customerSession.customer_id))});
+  }
+
   if (method === 'GET' && url.pathname === '/health') return json(request, { ok: true, service: 'LockOn ServiceOS Central API', time: nowIso() });
 
   if (method === 'POST' && url.pathname === '/auth/google-code') {
