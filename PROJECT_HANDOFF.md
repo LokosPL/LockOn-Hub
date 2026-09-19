@@ -502,6 +502,16 @@ Dla każdego priorytetu:
 - Zweryfikowany bundle API dla P1–P5: artifact lockon-central-api z run 35447335266, SHA-256 artifact digest 1f5f35c76a20e4039c9adec14b77393e08a0e72dcd89826457c8dc05b3101c91.
 - UWAGA wdrożeniowa: aktywny Neon lockonapi pozostaje v24 do czasu przesłania zweryfikowanego ZIP-a do deploy_function. Nie oznaczać backendowej części P1–P5 jako produkcyjnie zamkniętej przed nowym deploymentem i smoke.
 
+## Priorytet 6 — ZROBIONE produkcyjnie (2026-09-19)
+
+- Hub PR #38 i PWA PR #15 scalone.
+- OWNER ma filterowalny audyt po użytkowniku, punkcie, typie zdarzenia, numerze zlecenia i zakresie dat.
+- Widok pokazuje aktora, rolę, punkt, obiekt/id, stary→nowy stan, numer zlecenia, bezpieczny skrót klienta/urządzenia, status e-mail/transfer/rozliczenie, czas i typ klienta WEB/Desktop, gdy jest dostępny.
+- JSON pozostaje opcjonalnym rozwijanym widokiem technicznym.
+- Verify ServiceOS #453 SUCCESS, Verify Neon API bundle #7 SUCCESS, CodeQL #232 SUCCESS, PWA Verify #115 SUCCESS.
+- Neon lockonapi wdrożony jako v26 z artifact digest SHA-256 b4e896d7dd489b9434255d46cce23924dd5707cfd5345e4ed185bad155b45fb9.
+- Bez zmian schematu DB; produkcja ma istniejące zdarzenia audytu, a nowy endpoint czyta je bez destrukcyjnych testów.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
