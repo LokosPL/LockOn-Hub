@@ -2838,6 +2838,67 @@ const route = async (request) => {
     const session=await requireActive(request);return json(request,await conversationPayload(session.user.id));
   }
 
+  if(method==='POST'&&url.pathname==='/support/request'){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    const requestedPointId=cleanText(body.pointId,80);
+    const pointIds=await visiblePointIds(u);
+    const pointId=requestedPointId&&pointIds.includes(requestedPointId)?requestedPointId:(pointIds[0]||null);
+    if(!pointId)return json(request,{error:'POINT_REQUIRED',message:'Konto nie ma przypisanego punktu do zgłoszenia.'},409);
+    let conversation=(await q("SELECT id,user_id,subject,status,point_id,assigned_support_user_id,taken_at,closed_at,created_at,updated_at FROM support_conversations WHERE user_id=$1 AND status='OPEN' ORDER BY updated_at DESC LIMIT 1",[u.id])).rows[0];
+    if(!conversation){
+      const id=makeId('sup');
+      conversation=(await q("INSERT INTO support_conversations(id,user_id,subject,status,point_id) VALUES($1,$2,'Pomoc konsultanta','OPEN',$3) RETURNING *",[id,u.id,pointId])).rows[0];
+    }else if(!conversation.point_id){
+      conversation=(await q("UPDATE support_conversations SET point_id=$2,updated_at=now() WHERE id=$1 RETURNING *",[conversation.id,pointId])).rows[0];
+    }
+    const note=cleanText(body.message,1500);
+    if(note)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'USER',$4)",[makeId('msg'),conversation.id,u.id,note]);
+    await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,NULL,'SYSTEM',$3)",[makeId('msg'),conversation.id,'Poproszono konsultanta o pomoc.']);
+    await q("UPDATE support_conversations SET updated_at=now() WHERE id=$1",[conversation.id]);
+    await audit(u.id,'SUPPORT_REQUESTED','support_conversation',conversation.id,pointId,{});
+    return json(request,{ok:true,conversationId:conversation.id,pointId},201);
+  }
+
+  if(method==='GET'&&url.pathname==='/support/tickets'){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='SUPPORT'&&!GLOBAL_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zgłoszeń wsparcia.'),{status:403});
+    const ids=await visiblePointIds(u);
+    const {rows}=GLOBAL_ROLES.has(u.role_code)
+      ? await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200")
+      : await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.point_id=ANY($1::text[]) ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[ids]);
+    const tickets=[];
+    for(const row of rows){
+      const messages=(await q("SELECT id,sender_user_id,sender_kind,body,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 200",[row.id])).rows;
+      tickets.push({id:row.id,userId:row.user_id,userName:row.user_name,userEmail:row.user_email,pointId:row.point_id,pointName:row.point_name||'Brak punktu',status:row.status,assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_name||null,createdAt:row.created_at,updatedAt:row.updated_at,messages:messages.map(m=>({id:m.id,author:m.sender_kind.toLowerCase(),text:m.body,createdAt:m.created_at}))});
+    }
+    return json(request,tickets);
+  }
+
+  const supportTicketAction=url.pathname.match(/^\/support\/tickets\/([^/]+)\/(take|reply|close)$/);
+  if(method==='POST'&&supportTicketAction){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='SUPPORT'&&!GLOBAL_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zgłoszeń wsparcia.'),{status:403});
+    const ticket=(await q("SELECT * FROM support_conversations WHERE id=$1 LIMIT 1",[supportTicketAction[1]])).rows[0];
+    if(!ticket)return json(request,{error:'NOT_FOUND'},404);
+    if(ticket.point_id)await requirePoint(u,ticket.point_id);
+    const action=supportTicketAction[2],body=await readJson(request);
+    if(action==='take'){
+      await q("UPDATE support_conversations SET assigned_support_user_id=$2,taken_at=COALESCE(taken_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
+      await audit(u.id,'SUPPORT_TAKEN','support_conversation',ticket.id,ticket.point_id,{});
+    }else if(action==='reply'){
+      const message=cleanText(body.message,2000);if(!message)return json(request,{error:'MESSAGE_REQUIRED'},400);
+      if(ticket.status!=='OPEN')return json(request,{error:'TICKET_CLOSED',message:'Zgłoszenie jest zamknięte.'},409);
+      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SUPPORT',$4)",[makeId('msg'),ticket.id,u.id,message]);
+      await q("UPDATE support_conversations SET assigned_support_user_id=COALESCE(assigned_support_user_id,$2),taken_at=COALESCE(taken_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
+      await audit(u.id,'SUPPORT_REPLIED','support_conversation',ticket.id,ticket.point_id,{length:message.length});
+    }else{
+      await q("UPDATE support_conversations SET status='CLOSED',closed_at=now(),assigned_support_user_id=COALESCE(assigned_support_user_id,$2),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
+      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SYSTEM','Konsultant zamknął zgłoszenie.')",[makeId('msg'),ticket.id,u.id]);
+      await audit(u.id,'SUPPORT_CLOSED','support_conversation',ticket.id,ticket.point_id,{});
+    }
+    return json(request,{ok:true});
+  }
+
   if(method==='POST'&&url.pathname==='/assistant/chat'){
     const session=await requireActive(request),body=await readJson(request),message=cleanText(body.message,1500);if(!message)return json(request,{error:'MESSAGE'},400);
     const conv=await getOrCreateConversation(session.user.id);
