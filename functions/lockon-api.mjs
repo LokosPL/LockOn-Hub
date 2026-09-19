@@ -2175,21 +2175,31 @@ const route = async (request) => {
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
 
+    const homePointId=found.home_point_id||found.point_id;
+    const openTransfer=(await q("SELECT id,kind,status,from_point_id,to_point_id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') ORDER BY requested_at DESC LIMIT 1",[found.id])).rows[0]||null;
+    if(openTransfer&&next!==found.status){
+      return json(request,{error:'DEVICE_IN_TRANSFER',message:'Status zlecenia jest zablokowany podczas aktywnego przekazania. Najpierw zakończ logistykę urządzenia.'},409);
+    }
+    const effectiveCurrentPointId=found.current_point_id||(!openTransfer?homePointId:null);
+    if(next!==found.status){
+      if(!effectiveCurrentPointId){
+        return json(request,{error:'DEVICE_LOCATION_UNKNOWN',message:'Nie można zmienić statusu, dopóki lokalizacja urządzenia nie jest potwierdzona.'},409);
+      }
+      await requirePoint(u,effectiveCurrentPointId);
+    }
+
     if(found.handling_mode==='TRANSFER_ONLY'&&next!==found.status&&next!=='CANCELLED'){
       return json(request,{error:'TRANSFER_ONLY_STATUS_LOCKED',message:'To zlecenie działa w trybie „Tylko przekazanie”. Możesz obsługiwać logistykę urządzenia albo anulować zlecenie, ale nie zmieniać etapów naprawy.'},409);
     }
 
     if(['READY','COMPLETED'].includes(next)){
-      const homePointId=found.home_point_id||found.point_id;
-      const openTransfer=(await q("SELECT id,kind,status FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') ORDER BY requested_at DESC LIMIT 1",[found.id])).rows[0];
-      if(openTransfer){
-        return json(request,{error:'RETURN_REQUIRED',message:'Urządzenie ma aktywny transport. Status gotowości do odbioru można ustawić dopiero po fizycznym powrocie i przyjęciu w punkcie macierzystym.'},409);
-      }
-      const effectiveCurrentPointId=found.current_point_id||(!openTransfer?homePointId:null);
       if(effectiveCurrentPointId!==homePointId){
         return json(request,{error:'RETURN_REQUIRED',message:'Urządzenie znajduje się poza punktem macierzystym. Najpierw odeślij je do punktu macierzystego i potwierdź przyjęcie zwrotu.'},409);
       }
       await requirePoint(u,homePointId);
+      if(next==='READY'&&found.status!=='REPAIR_DONE'){
+        return json(request,{error:'REPAIR_DONE_REQUIRED',message:'Status „Gotowe do odbioru” można ustawić dopiero po zakończeniu naprawy.'},409);
+      }
       if(next==='COMPLETED'&&found.status!=='READY'){
         return json(request,{error:'READY_REQUIRED',message:'Zlecenie można zakończyć dopiero po oznaczeniu urządzenia jako gotowego do odbioru w punkcie macierzystym.'},409);
       }
