@@ -106,6 +106,7 @@ declare global {
         blockUser: (userId:string,blocked:boolean,reason?:string) => Promise<AdminUser>;
         logoutUserSessions: (userId:string) => Promise<{ok:true;revoked:number}>;
         logoutAllSessions: (exceptCurrent?:boolean) => Promise<{ok:true;revoked:number;exceptCurrent:boolean}>;
+        factoryResetPreview: () => Promise<{ok:true;counts:Record<string,number>}>;
         factoryReset: (payload:{phrase:string;confirmed:boolean;reason?:string}) => Promise<{ok:true;resetId:string;reloginRequired:true;deleted:Record<string,number>}>;
       };
       finance: {
@@ -130,7 +131,7 @@ declare global {
         getNotes: (orderId:string) => Promise<ServiceOrderNote[]>;
         addNote: (orderId:string,body:string) => Promise<ServiceOrderNote>;
         updateDetails: (orderId:string,payload:{imei?:string;serialNumber?:string;deviceNotes?:string;assignedTechnicianId?:string|null;estimatedCost?:number|string|null;finalCost?:number|string|null;estimatedCompletionAt?:string|null}) => Promise<ServiceOrderSummary>;
-        updateStatus: (orderId:string,status:string,note?:string) => Promise<ServiceStatusResult>;
+        updateStatus: (orderId:string,status:string,note?:string,actingPointId?:string) => Promise<ServiceStatusResult>;
       };
       gmail: {
         getStatus: (pointId:string) => Promise<GmailConnectionStatus>;
