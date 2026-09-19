@@ -14,7 +14,22 @@
 - Neon Function slug: `lockonapi`
 - API: `https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech`
 
-### Aktualny stan produkcyjny — 2026-09-19 / v0.17.0
+### Aktualny stan produkcyjny — 2026-09-20 / v0.20.1 + WWW code-only
+
+- aplikacja / backend source `main` po PR #52: `aa668840f642bd30bb2b5f7f9deec908cd67b59f` (commit handoffu jest późniejszy)
+- publiczny release Windows: **v0.20.1**; v0.20.0 jest wydaniem pośrednim i nie jest aktualną bazą
+- instalator `LockOn-ServiceOS-Setup.exe`: SHA-256 `cf7c4f500a2cb9015cfab5bcb28965452fcbf80f103503d7bdcd23d1c591a30e`
+- strona / panel WWW `main` po Site PR #26: `2356678eb9a57c72559083a914ac041a1addda07`
+- GitHub Pages: deploy **#94 SUCCESS**; Site Verify po merge **#190 SUCCESS**
+- aktywny Neon `lockonapi`: deployment **v33**, completed
+- pracownik w WWW/PWA może uzyskać sesję **wyłącznie przez jednorazowy kod z aplikacji Windows**; `POST /auth/google-web` jest backendowo wyłączony i zwraca `404 WEB_CODE_ONLY`
+- jedyną ścieżką utworzenia sesji WEB pracownika jest `POST /website/redeem` z kodem wygenerowanym przez aktywną sesję desktopową
+- publiczny WWW nie ładuje Google Identity, nie publikuje `googleClientId`; cache PWA: `serviceos-shell-v21`
+- backend PR #52: Verify Neon API #22 SUCCESS, CodeQL #280 SUCCESS; po merge Build central API #148 SUCCESS i CodeQL #281 SUCCESS
+- produkcyjny smoke v33: `/health` 200; `/auth/google-web` 404 `WEB_CODE_ONLY`; niepełny `/website/redeem` 400 `CODE`; bez tworzenia fikcyjnych danych i bez testów destrukcyjnych
+- testowa gałąź Neon `verify-web-code-only-20260920` / `br-rapid-mountain-b1lkmpt3` pozostaje zachowana i nie została usunięta
+
+### Historyczny stan produkcyjny — 2026-09-19 / v0.17.0
 
 - aplikacja `main`: `267196fcf77b41da085973c29345636d0b29c279`
 - publiczny release Windows: `v0.17.0`
@@ -715,11 +730,23 @@ Dla każdego priorytetu:
 - Cache PWA podniesiony do `serviceos-shell-v20` i zawiera `assets/web-polish.css`.
 - Brak zmian backendu, schematu DB, ról, uprawnień i endpointów. Produkcyjny Neon nadal ma aktywny `lockonapi` deployment v32, publiczny desktop nadal v0.20.1.
 
+## Backend v33 + pełne domknięcie WWW code-only — 2026-09-20
+
+- Site PR #26 scalony do `lockon-serviceos-site/main`: `2356678eb9a57c72559083a914ac041a1addda07`; Verify PR #189 SUCCESS, Verify main #190 SUCCESS, Pages deploy #94 SUCCESS.
+- Z publicznej konfiguracji strony usunięto ostatni nieużywany `googleClientId`; `assets/google-config.js` zawiera wyłącznie `apiBaseUrl`. PWA cache: `serviceos-shell-v21`.
+- Hub PR #52 scalony do `main`: `aa668840f642bd30bb2b5f7f9deec908cd67b59f`.
+- Centralny backend wymusza code-only również niezależnie od UI: `POST /auth/google-web` nie loguje i zwraca `404 WEB_CODE_ONLY`; `POST /website/redeem` pozostaje jedyną ścieżką utworzenia pracowniczej sesji `WEB`.
+- Produkcyjny Neon `lockonapi` jest aktywny jako deployment **v33**.
+- Przed produkcją dokładnie ten bundle wdrożono na zachowanej gałęzi Neon `br-rapid-mountain-b1lkmpt3`; temp smoke SUCCESS: health 200, Google WWW 404 `WEB_CODE_ONLY`, wadliwy kod redeem 400.
+- Produkcyjny smoke po v33 również SUCCESS z tym samym bezpiecznym zestawem; nie tworzono fikcyjnych rekordów i nie wykonywano destrukcyjnych operacji.
+- Backend checks: Verify Neon API #22 SUCCESS, CodeQL #280 SUCCESS przed merge; Build central API #148 SUCCESS i CodeQL #281 SUCCESS po merge.
+- Desktop pozostaje **v0.20.1**; ta zmiana nie wymaga nowego instalatora.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
 2. Sprawdź aktualny `main`, latest release, otwarte PR-y i wszystkie aktywne workflow w obu repozytoriach.
 3. Sprawdź Neon: projekt `wandering-field-13057181`, produkcyjną gałąź `br-steep-bonus-b1f1qh8u`, bazę `lockon`, aktywny deployment `lockonapi` oraz schemat.
-4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to **v0.20.1**, produkcyjny backend to **lockonapi v32**, a strona/PWA jest po Site PR #22 / Pages #90. Nie rozpoczynaj historycznych priorytetów ponownie.
+4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to **v0.20.1**, produkcyjny backend to **lockonapi v33**, a strona/PWA jest po **Site PR #26 / Pages #94** z code-only logowaniem pracownika i cache `serviceos-shell-v21`. Nie rozpoczynaj historycznych priorytetów ponownie.
 5. Przy kolejnej pracy najpierw sprawdź nowe wymagania użytkownika, aktualny main/release/Neon i dopiero utwórz następny backlog lub poprawkę.
 6. Pracuj samodzielnie przez GitHub i Neon; nie proś użytkownika o informacje, które można sprawdzić narzędziami.
