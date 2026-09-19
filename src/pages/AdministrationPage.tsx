@@ -206,25 +206,24 @@ export function AdministrationPage() {
   };
 
   const factoryReset = async () => {
-    if (!window.confirm('Factory reset usunie WSZYSTKIE dane biznesowe, punkty, klientów, zlecenia, użytkowników i sesje. Schemat, migracje i konfiguracja systemowa pozostaną. Kontynuować do ponownego logowania Google?')) return;
+    if (!window.confirm('Factory reset usunie WSZYSTKIE dane biznesowe: punkty, serwisy, klientów, zlecenia, przekazania, rozliczenia, użytkowników i wszystkie sesje. Schemat i historia wykonanych resetów pozostaną. Kontynuować?')) return;
     setBusy(true); setNotice('');
     try {
-      const auth = await window.lockOn.auth.loginGoogle();
-      if (!auth.authenticated || auth.role !== 'OWNER') throw new Error('Ponowne logowanie OWNER nie zostało potwierdzone.');
       const phrase = window.prompt('Wpisz dokładnie frazę:\n\nUSUŃ WSZYSTKIE DANE');
       if (phrase === null) return;
       if (phrase !== 'USUŃ WSZYSTKIE DANE') {
         setNotice('Reset anulowany: fraza potwierdzająca nie jest identyczna.');
         return;
       }
-      if (!window.confirm('OSTATECZNE POTWIERDZENIE\n\nPo kliknięciu OK dane zostaną nieodwracalnie wyczyszczone. Zostaniesz wylogowany i OWNER będzie musiał zalogować się ponownie.')) return;
+      if (!window.confirm('OSTATECZNE POTWIERDZENIE\n\nPo kliknięciu OK wszystkie punkty, serwisy, zlecenia, konta i sesje zostaną nieodwracalnie usunięte.')) return;
       const result = await window.lockOn.admin.factoryReset({
         phrase,
         confirmed:true,
-        reason:'Factory reset uruchomiony przez OWNER z aplikacji desktop'
+        reason:'Pełny factory reset uruchomiony przez OWNER z aplikacji desktop'
       });
-      setNotice(`Factory reset zakończony. Id: ${result.resetId}. Aplikacja zostanie przeładowana.`);
-      window.setTimeout(() => window.location.reload(), 900);
+      setNotice(`Factory reset zakończony. Usunięto wszystkie dane operacyjne. Id: ${result.resetId}.`);
+      await window.lockOn.auth.logout().catch(() => undefined);
+      window.setTimeout(() => window.location.reload(), 450);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Factory reset nie został wykonany.');
     } finally {
