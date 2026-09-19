@@ -22,6 +22,8 @@ const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 90;
+const WEB_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 90;
+const WEB_SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 5;
 const WEBSITE_CODE_TTL_MS = 1000 * 60 * 5;
 const BODY_LIMIT = 64 * 1024;
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
@@ -199,9 +201,12 @@ const authPayload = async (user) => ({
 const createSession = async (userId, clientType) => {
   const token = crypto.randomBytes(32).toString('base64url');
   const now = Date.now();
+  const webSession = clientType === 'WEB';
+  const ttl = webSession ? WEB_SESSION_TTL_MS : SESSION_TTL_MS;
+  const absoluteTtl = webSession ? WEB_SESSION_ABSOLUTE_TTL_MS : SESSION_ABSOLUTE_TTL_MS;
   await q(
     'INSERT INTO auth_sessions(id,user_id,token_hash,client_type,created_at,last_seen_at,expires_at,absolute_expires_at) VALUES($1,$2,$3,$4,now(),now(),$5,$6)',
-    [makeId('ses'), userId, tokenHash(token), clientType, new Date(now + SESSION_TTL_MS), new Date(now + SESSION_ABSOLUTE_TTL_MS)]
+    [makeId('ses'), userId, tokenHash(token), clientType, new Date(now + ttl), new Date(now + absoluteTtl)]
   );
   return token;
 };
@@ -218,7 +223,14 @@ const currentSession = async (request) => {
   );
   const row = rows[0];
   if (!row) return null;
-  await q('UPDATE auth_sessions SET last_seen_at=now() WHERE id=$1', [row.session_id]);
+  if (row.client_type === 'WEB') {
+    await q(
+      "UPDATE auth_sessions SET last_seen_at=now(),expires_at=LEAST(absolute_expires_at,now()+interval '90 days') WHERE id=$1",
+      [row.session_id]
+    );
+  } else {
+    await q('UPDATE auth_sessions SET last_seen_at=now() WHERE id=$1', [row.session_id]);
+  }
   return {
     sessionId: row.session_id,
     clientType: row.client_type,
@@ -937,13 +949,12 @@ const renderStatusEmail = (item) => {
   const defaultContactText = contactPoint
     ? (
         isTransfer && transferStatus === 'IN_TRANSIT'
-          ? 'W razie pytań skontaktuj się z punktem docelowym przekazania: ' + contactPoint + '.'
-          : isTransfer && ['DELIVERED','ACCEPTED'].includes(transferStatus)
-            ? 'W razie pytań skontaktuj się z punktem, do którego dostarczono urządzenie: ' + contactPoint + '.'
-            : 'W razie pytań skontaktuj się z punktem, w którym aktualnie znajduje się urządzenie: ' + contactPoint + '.'
+          ? 'W razie pytań skontaktuj się z punktem, do którego przekazywane jest urządzenie: ' + contactPoint + '.'
+          : 'W razie pytań skontaktuj się z punktem, w którym znajduje się urządzenie: ' + contactPoint + '.'
       )
     : 'W razie pytań skontaktuj się z punktem prowadzącym zlecenie.';
-  const footer = cleanText(item.footer_text || defaultContactText, 500);
+  const customFooter = cleanText(item.footer_text || '', 500);
+  const footer = cleanText(defaultContactText + (customFooter ? ' ' + customFooter : ''), 500);
 
   const subject = 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
   const intro = isTransfer
@@ -1740,6 +1751,25 @@ const route = async (request) => {
     return json(request,{ok:true,revoked:Number(result.rowCount||0),exceptCurrent});
   }
 
+
+  if(method==='GET'&&url.pathname==='/admin/factory-reset/preview'){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Tylko OWNER może sprawdzić factory reset.'),{status:403,code:'OWNER_ONLY'});
+    const counts=(await q(
+      "SELECT jsonb_build_object(" +
+      "'points',(SELECT count(*) FROM points)," +
+      "'users',(SELECT count(*) FROM users)," +
+      "'serviceOrders',(SELECT count(*) FROM service_orders)," +
+      "'transfers',(SELECT count(*) FROM service_order_transfers)," +
+      "'customers',(SELECT count(*) FROM customers)," +
+      "'devices',(SELECT count(*) FROM devices)," +
+      "'revenues',(SELECT count(*) FROM revenue_entries)," +
+      "'sessions',(SELECT count(*) FROM auth_sessions)," +
+      "'notifications',(SELECT count(*) FROM notification_outbox)" +
+      ") AS counts"
+    )).rows[0]?.counts||{};
+    return json(request,{ok:true,counts});
+  }
 
   if(method==='POST'&&url.pathname==='/admin/factory-reset'){
     const session=await requireActive(request);
