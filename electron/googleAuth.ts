@@ -196,15 +196,15 @@ const createPkce = () => {
   return { verifier, challenge };
 };
 
-const oauthHtmlHeaders = {
+const oauthHtmlHeaders = (nonce?: string) => ({
   'Content-Type': 'text/html; charset=utf-8',
   'Cache-Control': 'no-store, max-age=0',
   'Pragma': 'no-cache',
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
-  'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
-};
+  'Content-Security-Policy': `default-src 'none'; style-src 'unsafe-inline'; script-src ${nonce ? `'nonce-${nonce}'` : "'none'"}; base-uri 'none'; frame-ancestors 'none'`
+});
 
 const escapeHtml = (value: string) =>
   value.replace(/[&<>"']/g, (char) => ({
@@ -242,7 +242,7 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
       try {
         const callbackUrl = new URL(request.url || '/', 'http://127.0.0.1');
         if (callbackUrl.pathname !== '/oauth2/callback') {
-          response.writeHead(404, oauthHtmlHeaders).end('Not found');
+          response.writeHead(404, oauthHtmlHeaders()).end('Nie znaleziono.');
           return;
         }
 
@@ -317,18 +317,33 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         const state = toAuthState(payload, development);
 
         const statusText = payload.user.status === 'ACTIVE'
-          ? `Dostęp aktywny: <b>${escapeHtml(String(payload.user.role ?? ''))}</b>.`
-          : 'Konto zostało zapisane i czeka na akceptację właściciela.';
+          ? 'Dostęp do ServiceOS jest aktywny.'
+          : 'Konto zostało zapisane i czeka na akceptację przez osobę uprawnioną.';
+        const pageNonce = base64Url(crypto.randomBytes(18));
+        const returnToAppUrl = 'lockon-serviceos://login-complete';
 
-        response.writeHead(200, oauthHtmlHeaders);
+        response.writeHead(200, oauthHtmlHeaders(pageNonce));
         response.end(`
           <!doctype html>
-          <html lang="pl"><head><meta charset="utf-8"><title>LockOn ServiceOS</title></head>
-          <body style="font-family:Arial;background:#111;color:#fff;padding:40px">
-            <h2>LockOn ServiceOS</h2>
-            <p>Zalogowano jako <b>${escapeHtml(payload.user.email)}</b>.</p>
-            <p>${statusText}</p>
-            <p>Możesz zamknąć tę kartę i wrócić do aplikacji.</p>
+          <html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Logowanie zakończone · ServiceOS</title></head>
+          <body style="font-family:Arial,sans-serif;background:#111;color:#fff;padding:40px;max-width:620px;margin:0 auto;line-height:1.5">
+            <h1 style="font-size:28px;margin:0 0 16px">Logowanie zakończone.</h1>
+            <p style="font-size:18px">Wracamy do ServiceOS.</p>
+            <p style="color:#c3c8cf">Zalogowano jako <b>${escapeHtml(payload.user.email)}</b>. ${statusText}</p>
+            <p style="color:#8f98a3">Ta karta spróbuje zamknąć się automatycznie za kilka sekund.</p>
+            <p><a id="returnToApp" href="${returnToAppUrl}" style="display:inline-block;background:#fff;color:#111;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:10px">Wróć do aplikacji</a></p>
+            <script nonce="${pageNonce}">
+              (() => {
+                const target = '${returnToAppUrl}';
+                const openApp = () => { window.location.href = target; };
+                document.getElementById('returnToApp')?.addEventListener('click', (event) => {
+                  event.preventDefault();
+                  openApp();
+                });
+                window.setTimeout(openApp, 180);
+                window.setTimeout(() => window.close(), 5000);
+              })();
+            </script>
           </body></html>
         `);
 
@@ -338,14 +353,28 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Logowanie nie powiodło się.';
-        response.writeHead(400, oauthHtmlHeaders);
+        const pageNonce = base64Url(crypto.randomBytes(18));
+        const returnToAppUrl = 'lockon-serviceos://login-complete';
+        response.writeHead(400, oauthHtmlHeaders(pageNonce));
         response.end(`
           <!doctype html>
-          <html lang="pl"><head><meta charset="utf-8"><title>LockOn ServiceOS</title></head>
-          <body style="font-family:Arial;background:#111;color:#fff;padding:40px">
-            <h2>Logowanie nie powiodło się</h2>
+          <html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nie udało się zalogować · ServiceOS</title></head>
+          <body style="font-family:Arial,sans-serif;background:#111;color:#fff;padding:40px;max-width:620px;margin:0 auto;line-height:1.5">
+            <h1 style="font-size:28px;margin:0 0 16px">Nie udało się zakończyć logowania.</h1>
             <p style="color:#c3c8cf">${escapeHtml(message)}</p>
-            <p style="color:#777">Możesz zamknąć tę kartę i wrócić do aplikacji.</p>
+            <p style="color:#8f98a3">Wróć do ServiceOS i spróbuj ponownie. Ta karta spróbuje zamknąć się automatycznie.</p>
+            <p><a id="returnToApp" href="${returnToAppUrl}" style="display:inline-block;background:#fff;color:#111;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:10px">Wróć do aplikacji</a></p>
+            <script nonce="${pageNonce}">
+              (() => {
+                const target = '${returnToAppUrl}';
+                const openApp = () => { window.location.href = target; };
+                document.getElementById('returnToApp')?.addEventListener('click', (event) => {
+                  event.preventDefault();
+                  openApp();
+                });
+                window.setTimeout(() => window.close(), 5000);
+              })();
+            </script>
           </body></html>
         `);
         finish(() => {
