@@ -3520,7 +3520,7 @@ const route = async (request) => {
     const pointIds=await visiblePointIds(u);
     const pointId=requestedPointId&&pointIds.includes(requestedPointId)?requestedPointId:(pointIds[0]||null);
     if(!pointId)return json(request,{error:'POINT_REQUIRED',message:'Konto nie ma przypisanego punktu do zgłoszenia.'},409);
-    let conversation=(await q("SELECT id,user_id,subject,status,point_id,assigned_support_user_id,taken_at,closed_at,created_at,updated_at FROM support_conversations WHERE user_id=$1 AND status='OPEN' ORDER BY updated_at DESC LIMIT 1",[u.id])).rows[0];
+    let conversation=(await q("SELECT id,user_id,subject,status,point_id,assigned_support_user_id,taken_at,consultant_requested_at,consultant_joined_at,closed_at,created_at,updated_at FROM support_conversations WHERE user_id=$1 AND status='OPEN' ORDER BY updated_at DESC LIMIT 1",[u.id])).rows[0];
     if(!conversation){
       const id=makeId('sup');
       conversation=(await q("INSERT INTO support_conversations(id,user_id,subject,status,point_id) VALUES($1,$2,'Pomoc konsultanta','OPEN',$3) RETURNING *",[id,u.id,pointId])).rows[0];
