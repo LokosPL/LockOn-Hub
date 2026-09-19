@@ -27,7 +27,7 @@ const WEB_SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 5;
 const WEBSITE_CODE_TTL_MS = 1000 * 60 * 5;
 const BODY_LIMIT = 64 * 1024;
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
-const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
+const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
 const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
@@ -162,7 +162,7 @@ const loadRequestedPoint = async (userId) => {
 
 const loadUser = async (userId) => {
   const { rows } = await q(
-    'SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 LIMIT 1',
+    'SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,support_enabled,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 LIMIT 1',
     [userId]
   );
   return rows[0] || null;
@@ -187,6 +187,7 @@ const publicUser = async (user) => ({
   picture: user.picture_url || null,
   role: user.role_code || null,
   technicianSplitPercent: user.technician_split_percent == null ? null : Number(user.technician_split_percent),
+  supportEnabled: user.support_enabled === true || user.role_code === 'SUPPORT',
   status: user.status,
   blocked: Boolean(user.blocked_at),
   blockedAt: user.blocked_at || null,
@@ -222,7 +223,7 @@ const currentSession = async (request) => {
   if (!token) return null;
   const hash = tokenHash(token);
   const { rows } = await q(
-    "SELECT s.id AS session_id,s.user_id,s.client_type,s.created_at AS session_created_at,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.technician_split_percent,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
+    "SELECT s.id AS session_id,s.user_id,s.client_type,s.created_at AS session_created_at,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.technician_split_percent,u.support_enabled,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
     [hash]
   );
   const row = rows[0];
@@ -247,6 +248,7 @@ const currentSession = async (request) => {
       picture_url: row.picture_url,
       role_code: row.role_code,
       technician_split_percent: row.technician_split_percent,
+      support_enabled: row.support_enabled === true,
       status: row.status,
       blocked_at: row.blocked_at,
       blocked_reason: row.blocked_reason,
@@ -276,6 +278,13 @@ const canSeePoint = async (user, pointId) => {
 
 const requirePoint = async (user, pointId) => {
   if (!(await canSeePoint(user, pointId))) throw Object.assign(new Error('Brak dostępu do wybranego punktu.'), { status: 403, code: 'POINT_FORBIDDEN' });
+};
+
+const hasSupportAccess = (user) =>
+  user?.role_code === 'OWNER' || user?.role_code === 'SUPPORT' || user?.support_enabled === true;
+
+const requireSupportAccess = (user) => {
+  if (!hasSupportAccess(user)) throw Object.assign(new Error('Brak uprawnienia Wsparcie LockOn.'), { status: 403, code: 'SUPPORT_FORBIDDEN' });
 };
 
 const audit = async (actor, action, entityType, entityId = null, pointId = null, metadata = {}) => {
@@ -357,7 +366,7 @@ const exchangeDesktopAuthorizationCode = async (body, expectedPath) => {
 
 const loginProfile = async (profile, clientType, allowCreate) => {
   let result = await q(
-    'SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE google_sub=$1 OR lower(email)=lower($2) ORDER BY CASE WHEN google_sub=$1 THEN 0 ELSE 1 END LIMIT 1',
+    'SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,support_enabled,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE google_sub=$1 OR lower(email)=lower($2) ORDER BY CASE WHEN google_sub=$1 THEN 0 ELSE 1 END LIMIT 1',
     [profile.sub, profile.email]
   );
   let user = result.rows[0] || null;
@@ -1035,6 +1044,7 @@ const routeCustomerQuote = async (requestedPointId) => {
 
 const loadCustomerPortalPayload = async (customerId) => {
   const customer = (await q("SELECT id,first_name,last_name,email,phone,created_at FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
+  const portalIdentity = customer ? await ensureCustomerPortalCode(customerId) : null;
   const [ordersResult,quotesResult,pointsResult] = await Promise.all([
     q(
       "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_completion_at,s.estimated_cost,s.final_cost,s.currency,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,d.imei,d.serial_number,p.id AS point_id,p.name AS point_name,hp.id AS home_point_id,hp.name AS home_point_name,cp.id AS current_point_id,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.customer_id=$1 ORDER BY s.received_at DESC,s.order_number DESC",
@@ -1063,6 +1073,8 @@ const loadCustomerPortalPayload = async (customerId) => {
   }
 
   return {
+    customerPortalCode:portalIdentity?.code || null,
+    customerPortalUrl:PUBLIC_PORTAL_URL + '/klient.html',
     customer:{id:customer.id,firstName:customer.first_name,lastName:customer.last_name,email:customer.email||null,phone:customer.phone||null,customerSince:customer.created_at},
     orders:ordersResult.rows.map((row)=>({
       id:row.id,orderNumber:Number(row.order_number),orderType:row.order_type,handlingMode:row.handling_mode||'STANDARD',
@@ -1284,17 +1296,11 @@ const processNotification = async (notificationId) => {
     console.error('[tracking link]',error);
     item.tracking_url='';
   }
-  if (
-    item.template_key === 'SERVICE_STATUS_CHANGED' &&
-    String(item.payload?.to || '').toUpperCase() === 'RECEIVED' &&
-    !item.payload?.from
-  ) {
+  if (item.customer_id) {
     try {
       const portalIdentity = await ensureCustomerPortalCode(item.customer_id);
-      if (portalIdentity.created) {
-        item.customer_portal_code = portalIdentity.code;
-        item.customer_portal_url = PUBLIC_PORTAL_URL + '/klient.html';
-      }
+      item.customer_portal_code = portalIdentity.code;
+      item.customer_portal_url = PUBLIC_PORTAL_URL + '/klient.html';
     } catch (error) {
       console.error('[customer portal code]', error);
       item.customer_portal_code = '';
@@ -1392,18 +1398,27 @@ const getOrCreateConversation = async (userId) => {
 };
 
 const conversationPayload = async (userId) => {
-  const conversation = await getOrCreateConversation(userId);
+  const conversation = (await q(
+    "SELECT sc.*,ass.name AS assigned_support_name FROM support_conversations sc LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.user_id=$1 AND sc.status='OPEN' ORDER BY sc.updated_at DESC LIMIT 1",
+    [userId]
+  )).rows[0] || await getOrCreateConversation(userId);
   const { rows } = await q(
-    'SELECT id,sender_user_id,sender_kind,body,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 200',
+    'SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 200',
     [conversation.id]
   );
   return {
     id: conversation.id,
     status: conversation.status,
+    consultantRequestedAt: conversation.consultant_requested_at || null,
+    consultantJoinedAt: conversation.consultant_joined_at || conversation.taken_at || null,
+    assignedSupportUserId: conversation.assigned_support_user_id || null,
+    assignedSupportName: conversation.assigned_support_name || null,
+    consultantState: conversation.assigned_support_user_id ? 'JOINED' : conversation.consultant_requested_at ? 'WAITING' : 'BOT',
     messages: rows.map((row) => ({
       id: row.id,
       author: row.sender_kind.toLowerCase(),
       text: row.body,
+      action: row.metadata?.action || null,
       createdAt: row.created_at
     }))
   };
@@ -1787,7 +1802,7 @@ const route = async (request) => {
         await client.query('ROLLBACK');
         return json(request, { error: 'CODE_EXPIRED', message: 'Kod jest nieprawidłowy, wykorzystany albo wygasł.' }, 401);
       }
-      const userResult = await client.query("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 AND status='ACTIVE'", [result.rows[0].user_id]);
+      const userResult = await client.query("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,support_enabled,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 AND status='ACTIVE'", [result.rows[0].user_id]);
       if (!userResult.rows[0]) {
         await client.query('ROLLBACK');
         return json(request, { error: 'ACCOUNT_NOT_ACTIVE', message: 'Konto nie jest aktywne.' }, 403);
@@ -1836,7 +1851,7 @@ const route = async (request) => {
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
     const [points, users, loginEvents, pendingRevenue, sessions, recentAudit, transferSummary] = await Promise.all([
       q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=p.id AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL) t ON true ORDER BY p.name"),
-      q("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
+      q("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,support_enabled,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
       q("SELECT a.id,a.actor_user_id AS user_id,u.email,u.name,u.role_code AS role,u.status,a.created_at FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id WHERE a.action LIKE 'LOGIN_%' ORDER BY a.created_at DESC LIMIT 100"),
       q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC"),
       q("SELECT client_type,count(*)::int AS count FROM auth_sessions WHERE revoked_at IS NULL AND expires_at>now() AND absolute_expires_at>now() GROUP BY client_type"),
@@ -1996,6 +2011,7 @@ const route = async (request) => {
     if(!target) return json(request,{error:'NOT_FOUND'},404);
     const body=await readJson(request);
     const role=String(body.role||'USER').toUpperCase();
+    const supportEnabled=body.supportEnabled===true;
     if(!REQUESTABLE_ROLES.has(role)) return json(request,{error:'ROLE'},400);
     let pointIds=Array.isArray(body.pointIds)?body.pointIds.map(String):[];
     const req=await loadRequestedPoint(target.id);
@@ -2015,8 +2031,8 @@ const route = async (request) => {
     try{
       await client.query('BEGIN');
       await client.query(
-        "UPDATE users SET role_code=$1,technician_split_percent=CASE WHEN $1='TECHNICIAN' THEN $2 ELSE technician_split_percent END,status='ACTIVE',updated_at=now() WHERE id=$3",
-        [role,technicianSplitPercent,target.id]
+        "UPDATE users SET role_code=$1,technician_split_percent=CASE WHEN $1='TECHNICIAN' THEN $2 ELSE technician_split_percent END,support_enabled=$3,status='ACTIVE',updated_at=now() WHERE id=$4",
+        [role,technicianSplitPercent,supportEnabled,target.id]
       );
       await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);
       if(!GLOBAL_ROLES.has(role)) for(const pointId of pointIds) await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);
@@ -2026,7 +2042,7 @@ const route = async (request) => {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
     } finally{client.release();}
-    await audit(session,'USER_APPROVED','user',target.id,null,{role,pointIds,technicianSplitPercent});
+    await audit(session,'USER_APPROVED','user',target.id,null,{role,pointIds,technicianSplitPercent,supportEnabled});
     return json(request, await authPayload(await loadUser(target.id)));
   }
 
@@ -2045,10 +2061,10 @@ const route = async (request) => {
   if(method==='POST'&&access){
     const session=await requireActive(request);if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
     const target=await loadUser(access[1]);if(!target)return json(request,{error:'NOT_FOUND'},404);if(target.role_code==='OWNER')return json(request,{error:'OWNER_PROTECTED'},400);
-    const body=await readJson(request);const role=String(body.role||target.role_code||'USER').toUpperCase();const pointIds=Array.isArray(body.pointIds)?body.pointIds.map(String):[];const technicianSplitPercent=role==='TECHNICIAN'?normalizeTechnicianPercent(body.technicianSplitPercent):null;
+    const body=await readJson(request);const role=String(body.role||target.role_code||'USER').toUpperCase();const pointIds=Array.isArray(body.pointIds)?body.pointIds.map(String):[];const technicianSplitPercent=role==='TECHNICIAN'?normalizeTechnicianPercent(body.technicianSplitPercent):null;const supportEnabled=body.supportEnabled===true;
     if(!REQUESTABLE_ROLES.has(role))return json(request,{error:'ROLE'},400);if(!GLOBAL_ROLES.has(role)&&pointIds.length===0)return json(request,{error:'POINT_REQUIRED'},400);if(role==='TECHNICIAN'&&technicianSplitPercent===null)return json(request,{error:'TECHNICIAN_SPLIT',message:'Ustaw procent rozliczenia serwisanta od 0 do 100%.'},400);
-    const client=await pool.connect();try{await client.query('BEGIN');await client.query("UPDATE users SET role_code=$1,technician_split_percent=CASE WHEN $1='TECHNICIAN' THEN $3 ELSE technician_split_percent END,status='ACTIVE',updated_at=now() WHERE id=$2",[role,target.id,technicianSplitPercent]);await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);if(!GLOBAL_ROLES.has(role))for(const pointId of pointIds)await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK').catch(()=>undefined);throw error;}finally{client.release();}
-    await audit(session,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent});
+    const client=await pool.connect();try{await client.query('BEGIN');await client.query("UPDATE users SET role_code=$1,technician_split_percent=CASE WHEN $1='TECHNICIAN' THEN $3 ELSE technician_split_percent END,support_enabled=$4,status='ACTIVE',updated_at=now() WHERE id=$2",[role,target.id,technicianSplitPercent,supportEnabled]);await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);if(!GLOBAL_ROLES.has(role))for(const pointId of pointIds)await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK').catch(()=>undefined);throw error;}finally{client.release();}
+    await audit(session,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent,supportEnabled});
     return json(request,await authPayload(await loadUser(target.id)));
   }
 
@@ -3371,23 +3387,45 @@ const route = async (request) => {
     }
     const note=cleanText(body.message,1500);
     if(note)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'USER',$4)",[makeId('msg'),conversation.id,u.id,note]);
-    await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,NULL,'SYSTEM',$3)",[makeId('msg'),conversation.id,'Poproszono konsultanta o pomoc.']);
-    await q("UPDATE support_conversations SET updated_at=now() WHERE id=$1",[conversation.id]);
-    await audit(session,'SUPPORT_REQUESTED','support_conversation',conversation.id,pointId,{});
-    return json(request,{ok:true,conversationId:conversation.id,pointId},201);
+    const firstRequest=!conversation.consultant_requested_at;
+    if(firstRequest){
+      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,NULL,'SYSTEM',$3)",[makeId('msg'),conversation.id,'Poproszono konsultanta o pomoc. Do czasu dołączenia konsultanta możesz nadal korzystać z bota.']);
+    }
+    await q("UPDATE support_conversations SET consultant_requested_at=COALESCE(consultant_requested_at,now()),updated_at=now() WHERE id=$1",[conversation.id]);
+    await audit(session,'SUPPORT_REQUESTED','support_conversation',conversation.id,pointId,{firstRequest});
+    return json(request,{ok:true,conversationId:conversation.id,pointId,consultantState:'WAITING'},201);
+  }
+
+  if(method==='GET'&&url.pathname==='/support/presence'){
+    const session=await requireActive(request),u=session.user;
+    requireSupportAccess(u);
+    const ids=await visiblePointIds(u);
+    const global=u.role_code==='OWNER'||GLOBAL_ROLES.has(u.role_code);
+    const sql=global
+      ? "SELECT usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,max(s.last_seen_at) AS last_seen_at,array_agg(DISTINCT s.client_type) AS client_types,sc.id AS conversation_id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name AS assigned_support_name,sc.updated_at AS conversation_updated_at FROM users usr JOIN auth_sessions s ON s.user_id=usr.id AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() LEFT JOIN LATERAL (SELECT x.* FROM support_conversations x WHERE x.user_id=usr.id AND x.status='OPEN' ORDER BY x.updated_at DESC LIMIT 1) sc ON true LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE usr.status='ACTIVE' AND usr.blocked_at IS NULL AND usr.id<>$1 AND s.last_seen_at>now()-interval '10 minutes' GROUP BY usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,sc.id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name,sc.updated_at ORDER BY max(s.last_seen_at) DESC"
+      : "SELECT usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,max(s.last_seen_at) AS last_seen_at,array_agg(DISTINCT s.client_type) AS client_types,sc.id AS conversation_id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name AS assigned_support_name,sc.updated_at AS conversation_updated_at FROM users usr JOIN auth_sessions s ON s.user_id=usr.id AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() LEFT JOIN LATERAL (SELECT x.* FROM support_conversations x WHERE x.user_id=usr.id AND x.status='OPEN' ORDER BY x.updated_at DESC LIMIT 1) sc ON true LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE usr.status='ACTIVE' AND usr.blocked_at IS NULL AND usr.id<>$1 AND s.last_seen_at>now()-interval '10 minutes' AND EXISTS(SELECT 1 FROM user_point_access target_access WHERE target_access.user_id=usr.id AND target_access.point_id=ANY($2::text[])) GROUP BY usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,sc.id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name,sc.updated_at ORDER BY max(s.last_seen_at) DESC";
+    const rows=global?(await q(sql,[u.id])).rows:(await q(sql,[u.id,ids])).rows;
+    return json(request,rows.map(row=>({
+      userId:row.id,name:row.name,email:row.email,role:row.role_code||null,supportEnabled:row.support_enabled===true,
+      online:true,lastSeenAt:row.last_seen_at,clientTypes:row.client_types||[],
+      conversationId:row.consultant_requested_at?row.conversation_id:null,
+      consultantState:row.assigned_support_user_id?'JOINED':row.consultant_requested_at?'WAITING':'BOT',
+      assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_support_name||null,
+      conversationUpdatedAt:row.consultant_requested_at?row.conversation_updated_at:null
+    })));
   }
 
   if(method==='GET'&&url.pathname==='/support/tickets'){
     const session=await requireActive(request),u=session.user;
-    if(u.role_code!=='SUPPORT'&&!GLOBAL_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zgłoszeń wsparcia.'),{status:403});
+    requireSupportAccess(u);
     const ids=await visiblePointIds(u);
     const {rows}=GLOBAL_ROLES.has(u.role_code)
-      ? await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200")
-      : await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.point_id=ANY($1::text[]) ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[ids]);
+      ? await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200")
+      : await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL AND sc.point_id=ANY($1::text[]) ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[ids]);
     const tickets=[];
     for(const row of rows){
-      const messages=(await q("SELECT id,sender_user_id,sender_kind,body,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 200",[row.id])).rows;
-      tickets.push({id:row.id,userId:row.user_id,userName:row.user_name,userEmail:row.user_email,pointId:row.point_id,pointName:row.point_name||'Brak punktu',status:row.status,assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_name||null,createdAt:row.created_at,updatedAt:row.updated_at,messages:messages.map(m=>({id:m.id,author:m.sender_kind.toLowerCase(),text:m.body,createdAt:m.created_at}))});
+      const messages=(await q("SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 200",[row.id])).rows;
+      tickets.push({id:row.id,userId:row.user_id,userName:row.user_name,userEmail:row.user_email,pointId:row.point_id,pointName:row.point_name||'Brak punktu',status:row.status,assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_name||null,consultantRequestedAt:row.consultant_requested_at||null,consultantJoinedAt:row.consultant_joined_at||row.taken_at||null,createdAt:row.created_at,updatedAt:row.updated_at,messages:messages.map(m=>({id:m.id,author:m.sender_kind.toLowerCase(),text:m.body,action:m.metadata?.action||null,createdAt:m.created_at}))});
     }
     return json(request,tickets);
   }
@@ -3395,19 +3433,22 @@ const route = async (request) => {
   const supportTicketAction=url.pathname.match(/^\/support\/tickets\/([^/]+)\/(take|reply|close)$/);
   if(method==='POST'&&supportTicketAction){
     const session=await requireActive(request),u=session.user;
-    if(u.role_code!=='SUPPORT'&&!GLOBAL_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zgłoszeń wsparcia.'),{status:403});
+    requireSupportAccess(u);
     const ticket=(await q("SELECT * FROM support_conversations WHERE id=$1 LIMIT 1",[supportTicketAction[1]])).rows[0];
     if(!ticket)return json(request,{error:'NOT_FOUND'},404);
     if(ticket.point_id)await requirePoint(u,ticket.point_id);
     const action=supportTicketAction[2],body=await readJson(request);
     if(action==='take'){
-      await q("UPDATE support_conversations SET assigned_support_user_id=$2,taken_at=COALESCE(taken_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
-      await audit(session,'SUPPORT_TAKEN','support_conversation',ticket.id,ticket.point_id,{});
+      if(!ticket.consultant_requested_at)return json(request,{error:'CONSULTANT_NOT_REQUESTED',message:'Użytkownik nie poprosił jeszcze konsultanta o dołączenie.'},409);
+      const firstJoin=!ticket.assigned_support_user_id;
+      await q("UPDATE support_conversations SET assigned_support_user_id=$2,taken_at=COALESCE(taken_at,now()),consultant_joined_at=COALESCE(consultant_joined_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
+      if(firstJoin)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SYSTEM',$4)",[makeId('msg'),ticket.id,u.id,(u.name||u.email||'Konsultant')+' dołączył do rozmowy.']);
+      await audit(session,'SUPPORT_TAKEN','support_conversation',ticket.id,ticket.point_id,{firstJoin});
     }else if(action==='reply'){
       const message=cleanText(body.message,2000);if(!message)return json(request,{error:'MESSAGE_REQUIRED'},400);
       if(ticket.status!=='OPEN')return json(request,{error:'TICKET_CLOSED',message:'Zgłoszenie jest zamknięte.'},409);
       await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SUPPORT',$4)",[makeId('msg'),ticket.id,u.id,message]);
-      await q("UPDATE support_conversations SET assigned_support_user_id=COALESCE(assigned_support_user_id,$2),taken_at=COALESCE(taken_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
+      await q("UPDATE support_conversations SET assigned_support_user_id=COALESCE(assigned_support_user_id,$2),taken_at=COALESCE(taken_at,now()),consultant_joined_at=COALESCE(consultant_joined_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
       await audit(session,'SUPPORT_REPLIED','support_conversation',ticket.id,ticket.point_id,{length:message.length});
     }else{
       await q("UPDATE support_conversations SET status='CLOSED',closed_at=now(),assigned_support_user_id=COALESCE(assigned_support_user_id,$2),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
@@ -3420,10 +3461,16 @@ const route = async (request) => {
   if(method==='POST'&&url.pathname==='/assistant/chat'){
     const session=await requireActive(request),body=await readJson(request),message=cleanText(body.message,1500);if(!message)return json(request,{error:'MESSAGE'},400);
     const conv=await getOrCreateConversation(session.user.id);
+    const live=(await q("SELECT assigned_support_user_id,consultant_requested_at FROM support_conversations WHERE id=$1",[conv.id])).rows[0]||{};
     const uid=makeId('msg');await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'USER',$4)",[uid,conv.id,session.user.id,message]);
+    await q('UPDATE support_conversations SET updated_at=now() WHERE id=$1',[conv.id]);
+    if(live.assigned_support_user_id){
+      return json(request,{userMessage:{id:uid,author:'user',text:message,createdAt:nowIso()},assistantMessage:null,action:null,consultantState:'JOINED'});
+    }
     const reply=await assistantReply(session,message);
-    const aid=makeId('msg');await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,NULL,'ASSISTANT',$3)",[aid,conv.id,reply.text]);await q('UPDATE support_conversations SET updated_at=now() WHERE id=$1',[conv.id]);
-    return json(request,{userMessage:{id:uid,author:'user',text:message,createdAt:nowIso()},assistantMessage:{id:aid,author:'assistant',text:reply.text,createdAt:nowIso()},action:reply.action||null});
+    const aid=makeId('msg');
+    await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,NULL,'ASSISTANT',$3,$4::jsonb)",[aid,conv.id,reply.text,JSON.stringify({action:reply.action||null})]);
+    return json(request,{userMessage:{id:uid,author:'user',text:message,createdAt:nowIso()},assistantMessage:{id:aid,author:'assistant',text:reply.text,action:reply.action||null,createdAt:nowIso()},action:reply.action||null,consultantState:live.consultant_requested_at?'WAITING':'BOT'});
   }
 
   return json(request,{error:'NOT_FOUND',message:'Nie znaleziono endpointu.'},404);
