@@ -1016,7 +1016,15 @@ const routeCustomerQuote = async (requestedPointId) => {
       [requestedPointId]
     )).rows[0];
   }
-  if (!destination) return { routedPointId: requestedPointId, technicianId: null, routingReason: 'POINT_QUEUE_NO_TECHNICIAN' };
+  if (!destination) {
+    const fallback = (await q(
+      "SELECT a.point_id AS to_point_id,u.id AS technician_id FROM user_point_access a JOIN users u ON u.id=a.user_id JOIN points p ON p.id=a.point_id WHERE u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL AND p.active=true ORDER BY (SELECT count(*) FROM service_order_transfers t WHERE t.to_point_id=a.point_id AND t.kind='OUTBOUND_SERVICE') DESC,u.last_login_at DESC,p.name,u.id LIMIT 1"
+    )).rows[0];
+    if (fallback) {
+      return { routedPointId: fallback.to_point_id, technicianId: fallback.technician_id, routingReason: 'ACTIVE_TECHNICIAN_FALLBACK' };
+    }
+    return { routedPointId: requestedPointId, technicianId: null, routingReason: 'POINT_QUEUE_NO_TECHNICIAN' };
+  }
 
   const tech = (await q(
     "SELECT u.id,u.name FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=$1 AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL ORDER BY (SELECT count(*) FROM service_order_transfers t WHERE t.from_point_id=$2 AND t.to_point_id=$1 AND t.accepted_by_user_id=u.id)::int DESC,(SELECT count(*) FROM service_orders s WHERE s.assigned_technician_id=u.id)::int DESC,u.last_login_at DESC LIMIT 1",
@@ -1906,21 +1914,26 @@ const route = async (request) => {
     const sql =
       "SELECT a.id,a.actor_user_id,a.action,a.entity_type,a.entity_id,a.point_id,a.metadata,a.created_at," +
       "u.name AS actor_name,u.email AS actor_email,u.role_code AS actor_role,p.name AS point_name," +
-      "COALESCE(s.order_number,sn.order_number,sr.order_number) AS order_number," +
+      "target_u.name AS target_user_name,target_u.email AS target_user_email,target_p.name AS target_point_name," +
+      "COALESCE(s.order_number,sn.order_number,sr.order_number,sq.order_number) AS order_number," +
       "trim(coalesce(c.first_name,'')||' '||coalesce(c.last_name,'')) AS customer_name," +
       "trim(coalesce(d.brand,'')||' '||coalesce(d.model,'')) AS device_name," +
       "n.status AS notification_status,tr.status AS transfer_status,r.status AS settlement_status " +
       "FROM audit_log a " +
       "LEFT JOIN users u ON u.id=a.actor_user_id " +
       "LEFT JOIN points p ON p.id=a.point_id " +
+      "LEFT JOIN users target_u ON a.entity_type='user' AND target_u.id=a.entity_id " +
+      "LEFT JOIN points target_p ON a.entity_type='point' AND target_p.id=a.entity_id " +
       "LEFT JOIN service_orders s ON a.entity_type='service_order' AND s.id=a.entity_id " +
       "LEFT JOIN notification_outbox n ON a.entity_type='notification' AND n.id=a.entity_id " +
       "LEFT JOIN service_orders sn ON sn.id=n.service_order_id " +
       "LEFT JOIN revenue_entries r ON a.entity_type='revenue' AND r.id=a.entity_id " +
       "LEFT JOIN service_orders sr ON sr.id=r.service_order_id " +
+      "LEFT JOIN customer_quote_requests cq ON a.entity_type='customer_quote_request' AND cq.id=a.entity_id " +
+      "LEFT JOIN service_orders sq ON sq.id=cq.service_order_id " +
       "LEFT JOIN service_order_transfers tr ON tr.id=(a.metadata->>'transferId') " +
-      "LEFT JOIN customers c ON c.id=COALESCE(s.customer_id,sn.customer_id,sr.customer_id) " +
-      "LEFT JOIN devices d ON d.id=COALESCE(s.device_id,sn.device_id,sr.device_id) " +
+      "LEFT JOIN customers c ON c.id=COALESCE(s.customer_id,sn.customer_id,sr.customer_id,cq.customer_id) " +
+      "LEFT JOIN devices d ON d.id=COALESCE(s.device_id,sn.device_id,sr.device_id,sq.device_id) " +
       (where.length ? 'WHERE ' + where.join(' AND ') + ' ' : '') +
       "ORDER BY a.created_at DESC LIMIT 300";
     const { rows } = await q(sql, params);
@@ -1940,6 +1953,7 @@ const route = async (request) => {
           pointName: row.point_name || null,
           entityType: row.entity_type,
           entityId: row.entity_id || null,
+          entityName: row.target_user_name || row.target_user_email || row.target_point_name || null,
           action: row.action,
           before: metadata.before ?? metadata.from ?? null,
           after: metadata.after ?? metadata.to ?? null,

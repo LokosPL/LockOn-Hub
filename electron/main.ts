@@ -414,7 +414,7 @@ const secureHandle = (channel: string, listener: SecureHandler) => {
   });
 };
 
-const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf' | 'sup') => {
+const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf' | 'sup' | 'cqr') => {
   const text = String(value ?? '');
   if (!new RegExp(`^${prefix}_[a-f0-9]{20}$`).test(text)) throw new Error('Nieprawidłowy identyfikator.');
   return text;
@@ -680,6 +680,31 @@ const registerIpc = () => {
         actingPointId: String(actingPointId ?? '').trim().slice(0, 80)
       })
     }, token);
+  });
+  secureHandle('service:listCustomerQuotes', async (pointId?: string) => {
+    const token = requireSessionToken();
+    const params = new URLSearchParams();
+    const cleanPointId = String(pointId ?? '').trim().slice(0, 80);
+    if (cleanPointId) params.set('pointId', cleanPointId);
+    return backendRequest('/service/customer-quotes' + (params.size ? '?' + params.toString() : ''), {}, token);
+  });
+  secureHandle('service:replyCustomerQuote', async (requestId: string, message: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/customer-quotes/${encodeURIComponent(safeId(requestId, 'cqr'))}/reply`, {
+      method:'POST',
+      body:JSON.stringify({message:String(message ?? '').trim().slice(0,1000)})
+    }, token);
+  });
+  secureHandle('service:priceCustomerQuote', async (requestId: string, amount: number, note?: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/customer-quotes/${encodeURIComponent(safeId(requestId, 'cqr'))}/quote`, {
+      method:'POST',
+      body:JSON.stringify({amount:Number(amount),note:String(note ?? '').trim().slice(0,1000)})
+    }, token);
+  });
+  secureHandle('service:closeCustomerQuote', async (requestId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/customer-quotes/${encodeURIComponent(safeId(requestId, 'cqr'))}/close`, {method:'POST',body:'{}'}, token);
   });
 
   secureHandle('gmail:getStatus', (pointId: string) =>

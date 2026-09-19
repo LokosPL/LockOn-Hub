@@ -57,7 +57,11 @@ contextBridge.exposeInMainWorld('lockOn', {
     getNotes: (orderId: string) => ipcRenderer.invoke('service:getNotes', orderId),
     addNote: (orderId: string, body: string) => ipcRenderer.invoke('service:addNote', orderId, body),
     updateDetails: (orderId: string, payload: unknown) => ipcRenderer.invoke('service:updateDetails', orderId, payload),
-    updateStatus: (orderId: string, status: string, note?: string, actingPointId?: string) => ipcRenderer.invoke('service:updateStatus', orderId, status, note, actingPointId)
+    updateStatus: (orderId: string, status: string, note?: string, actingPointId?: string) => ipcRenderer.invoke('service:updateStatus', orderId, status, note, actingPointId),
+    listCustomerQuotes: (pointId?: string) => ipcRenderer.invoke('service:listCustomerQuotes', pointId),
+    replyCustomerQuote: (requestId: string, message: string) => ipcRenderer.invoke('service:replyCustomerQuote', requestId, message),
+    priceCustomerQuote: (requestId: string, amount: number, note?: string) => ipcRenderer.invoke('service:priceCustomerQuote', requestId, amount, note),
+    closeCustomerQuote: (requestId: string) => ipcRenderer.invoke('service:closeCustomerQuote', requestId)
   },
   gmail: {
     getStatus: (pointId: string) => ipcRenderer.invoke('gmail:getStatus', pointId),

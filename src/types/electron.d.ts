@@ -32,7 +32,7 @@ export interface AdminPoint {
 }
 export interface LoginEvent { id: string; userId: string; email: string; name: string; role: UserRole | null; status: AccountStatus; pointIds: string[]; createdAt: string; }
 export interface RevenueEntry { id: string; userId: string; pointId: string; serviceOrderId?:string|null; orderNumber?:number|null; amount: number; workDate: string; note: string; status: 'PENDING'|'APPROVED'|'REJECTED'|'SETTLED'; splitTechnicianPercent: number; splitBossPercent: number; technicianShare: number; bossShare: number; submittedAt: string; reviewedAt?: string|null; technician?: {id:string;name:string;email:string}|null; point?: AdminPoint|null; }
-export interface AdminAuditEvent { id:string; action:string; entityType:string; entityId?:string|null; pointId?:string|null; pointName?:string|null; actorUserId?:string|null; actorName:string; actorEmail?:string|null; actorRole?:UserRole|null; before?:unknown; after?:unknown; orderNumber?:number|null; customerSummary?:string|null; deviceSummary?:string|null; notificationStatus?:string|null; transferStatus?:string|null; settlementStatus?:string|null; clientType?:string|null; metadata:Record<string,unknown>; createdAt:string; }
+export interface AdminAuditEvent { id:string; action:string; entityType:string; entityId?:string|null; entityName?:string|null; pointId?:string|null; pointName?:string|null; actorUserId?:string|null; actorName:string; actorEmail?:string|null; actorRole?:UserRole|null; before?:unknown; after?:unknown; orderNumber?:number|null; customerSummary?:string|null; deviceSummary?:string|null; notificationStatus?:string|null; transferStatus?:string|null; settlementStatus?:string|null; clientType?:string|null; metadata:Record<string,unknown>; createdAt:string; }
 export interface AdminAuditFilters { userId?:string; pointId?:string; action?:string; orderNumber?:string; dateFrom?:string; dateTo?:string; }
 export interface AdminSystemSummary { activeSessions:number; desktopSessions:number; webSessions:number; servicePoints:number; openTransfers:number; blockedUsers:number; }
 export interface AdminOverview { points: AdminPoint[]; users: AdminUser[]; pendingUsers: AdminUser[]; blockedUsers?:AdminUser[]; loginEvents: LoginEvent[]; pendingRevenue: RevenueEntry[]; system?:AdminSystemSummary; transferSummary?:Record<string,number>; recentAudit?:AdminAuditEvent[]; }
@@ -91,6 +91,15 @@ export interface AssistantReply { userMessage:HelpMessage; assistantMessage:Help
 export interface WebsiteAuthCode { code:string; expiresAt:string; }
 
 export interface SupportTicket { id:string; userId:string; userName:string; userEmail:string; pointId:string|null; pointName:string; status:'OPEN'|'CLOSED'; assignedSupportUserId:string|null; assignedSupportName:string|null; createdAt:string; updatedAt:string; messages:HelpMessage[]; }
+export interface CustomerQuoteMessage { id:string; senderKind:'CUSTOMER'|'STAFF'|'SYSTEM'; senderName?:string|null; body:string; createdAt:string; }
+export interface CustomerQuoteRequest {
+  id:string; customerId:string; customerName:string; customerEmail?:string|null; customerPhone?:string|null;
+  requestedPointId:string; requestedPointName:string; routedPointId:string; routedPointName:string;
+  assignedTechnicianId?:string|null; assignedTechnicianName?:string|null; serviceOrderId?:string|null; orderNumber?:number|null;
+  deviceDescription:string; issueDescription:string; status:'OPEN'|'QUOTED'|'CLOSED'|'CANCELLED';
+  quoteAmount?:number|null; currency:string; quoteNote?:string|null; routingReason:string;
+  createdAt:string; updatedAt:string; quotedAt?:string|null; closedAt?:string|null; messages:CustomerQuoteMessage[];
+}
 
 declare global {
   interface Window {
@@ -137,6 +146,10 @@ declare global {
         addNote: (orderId:string,body:string) => Promise<ServiceOrderNote>;
         updateDetails: (orderId:string,payload:{imei?:string;serialNumber?:string;deviceNotes?:string;assignedTechnicianId?:string|null;estimatedCost?:number|string|null;finalCost?:number|string|null;estimatedCompletionAt?:string|null}) => Promise<ServiceOrderSummary>;
         updateStatus: (orderId:string,status:string,note?:string,actingPointId?:string) => Promise<ServiceStatusResult>;
+        listCustomerQuotes: (pointId?:string) => Promise<CustomerQuoteRequest[]>;
+        replyCustomerQuote: (requestId:string,message:string) => Promise<{ok:true}>;
+        priceCustomerQuote: (requestId:string,amount:number,note?:string) => Promise<{ok:true;amount:number;currency:string}>;
+        closeCustomerQuote: (requestId:string) => Promise<{ok:true}>;
       };
       gmail: {
         getStatus: (pointId:string) => Promise<GmailConnectionStatus>;

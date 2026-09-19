@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   BadgeDollarSign, BellRing, CalendarClock, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus,
-  Clock3, History, IdCard, Mail, MailCheck, MapPin, PackageCheck, RefreshCw, RotateCcw, Save, Search, Send,
+  Clock3, History, IdCard, Mail, MailCheck, MapPin, MessageSquareText, PackageCheck, RefreshCw, RotateCcw, Save, Search, Send,
   Settings2, Smartphone, StickyNote, Truck, UserCog, UserRound, XCircle
 } from 'lucide-react';
 import type {
   AdminPoint,
   AuthState,
+  CustomerQuoteRequest,
   GmailConnectionStatus,
   NotificationHistoryItem,
   NotificationSettings,
@@ -75,7 +76,7 @@ const deliveryLabel = (status: NotificationHistoryItem['status']) => ({
 }[status]);
 
 export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
-  const [tab, setTab] = useState<'NEW' | 'ORDERS' | 'TRANSFERS' | 'EMAILS'>('NEW');
+  const [tab, setTab] = useState<'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAILS'>('NEW');
   const [form, setForm] = useState(emptyForm);
   const [query, setQuery] = useState('');
   const [orderFilter, setOrderFilter] = useState('ALL');
@@ -105,6 +106,11 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const [servicePoints, setServicePoints] = useState<AdminPoint[]>([]);
   const [transfers, setTransfers] = useState<ServiceTransfer[]>([]);
   const [transferDrafts, setTransferDrafts] = useState<Record<string,{toPointId:string;note:string}>>({});
+  const [customerQuotes, setCustomerQuotes] = useState<CustomerQuoteRequest[]>([]);
+  const [quoteBusyId, setQuoteBusyId] = useState<string | null>(null);
+  const [quoteReplyDrafts, setQuoteReplyDrafts] = useState<Record<string,string>>({});
+  const [quoteAmountDrafts, setQuoteAmountDrafts] = useState<Record<string,string>>({});
+  const [quoteNoteDrafts, setQuoteNoteDrafts] = useState<Record<string,string>>({});
 
   const pointOptions = useMemo(() => auth.points, [auth.points]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
@@ -116,6 +122,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const canEditCosts = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
   const canManageOrderMeta = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
   const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
+  const canHandleCustomerQuotes = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
   const gmailState = gmail?.connectionState ?? (
     gmail?.connected ? 'CONNECTED' :
     gmail?.needsReconnect ? 'REAUTH_REQUIRED' :
@@ -170,6 +177,19 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
       setTransfers(items);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się pobrać przekazań serwisowych.');
+    }
+  };
+
+  const loadCustomerQuotes = async (selectedPointId = pointId) => {
+    if (!canHandleCustomerQuotes) {
+      setCustomerQuotes([]);
+      return;
+    }
+    try {
+      const scopedPointId = ['OWNER','BOSS'].includes(effectiveRole) ? undefined : (selectedPointId || undefined);
+      setCustomerQuotes(await window.lockOn.service.listCustomerQuotes(scopedPointId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać zapytań klientów o wycenę.');
     }
   };
 
@@ -274,7 +294,17 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   useEffect(() => {
     void loadOrders();
     void loadTransfers();
+    if (canHandleCustomerQuotes) void loadCustomerQuotes(pointId);
   }, []);
+
+  useEffect(() => {
+    if (!canHandleCustomerQuotes) return;
+    void loadCustomerQuotes(pointId);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void loadCustomerQuotes(pointId);
+    }, 20_000);
+    return () => window.clearInterval(timer);
+  }, [pointId, effectiveRole]);
 
   useEffect(() => {
     setNotificationSettings(null);
@@ -527,6 +557,59 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     } finally { setOrderBusyId(null); }
   };
 
+  const quoteStatusLabel = (status: CustomerQuoteRequest['status']) => ({
+    OPEN:'Oczekuje na odpowiedź',
+    QUOTED:'Wycena wysłana',
+    CLOSED:'Zamknięte',
+    CANCELLED:'Anulowane'
+  }[status]);
+
+  const replyCustomerQuote = async (requestId: string) => {
+    const message=(quoteReplyDrafts[requestId] || '').trim();
+    if (!message) {
+      setError('Wpisz wiadomość dla klienta.');
+      return;
+    }
+    setQuoteBusyId(requestId); setError(''); setNotice('');
+    try {
+      await window.lockOn.service.replyCustomerQuote(requestId,message);
+      setQuoteReplyDrafts((current)=>({...current,[requestId]:''}));
+      setNotice('Odpowiedź została zapisana w portalu klienta.');
+      await loadCustomerQuotes(pointId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się wysłać odpowiedzi.');
+    } finally { setQuoteBusyId(null); }
+  };
+
+  const priceCustomerQuote = async (requestId: string) => {
+    const amount=Number(quoteAmountDrafts[requestId] ?? customerQuotes.find((item)=>item.id===requestId)?.quoteAmount ?? '');
+    const note=(quoteNoteDrafts[requestId] || '').trim();
+    if (!Number.isFinite(amount) || amount < 0) {
+      setError('Podaj prawidłową kwotę wyceny.');
+      return;
+    }
+    setQuoteBusyId(requestId); setError(''); setNotice('');
+    try {
+      await window.lockOn.service.priceCustomerQuote(requestId,amount,note);
+      setNotice('Wycena została przekazana klientowi i jest widoczna w jego portalu.');
+      await loadCustomerQuotes(pointId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się zapisać wyceny.');
+    } finally { setQuoteBusyId(null); }
+  };
+
+  const closeCustomerQuote = async (requestId: string) => {
+    if (!window.confirm('Zamknąć tę rozmowę o wycenie?')) return;
+    setQuoteBusyId(requestId); setError(''); setNotice('');
+    try {
+      await window.lockOn.service.closeCustomerQuote(requestId);
+      setNotice('Zapytanie klienta zostało zamknięte.');
+      await loadCustomerQuotes(pointId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się zamknąć zapytania.');
+    } finally { setQuoteBusyId(null); }
+  };
+
   const connectGmail = async () => {
     if (!pointId) return;
     setGmailBusy(true); setError(''); setNotice('');
@@ -620,6 +703,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
           <button className={tab === 'NEW' ? 'active' : ''} onClick={() => setTab('NEW')}><ClipboardPlus size={15}/> Nowe zlecenie</button>
           <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia</button>
           <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
+          {canHandleCustomerQuotes && <button className={tab === 'QUOTES' ? 'active' : ''} onClick={() => {setTab('QUOTES');void loadCustomerQuotes(pointId);}}><MessageSquareText size={15}/> Wyceny klientów{customerQuotes.filter((item)=>item.status==='OPEN').length > 0 && <b className="service-tab-count">{customerQuotes.filter((item)=>item.status==='OPEN').length}</b>}</button>}
           {canManageGmail && <button className={tab === 'EMAILS' ? 'active' : ''} onClick={() => { setTab('EMAILS'); void loadMailData(pointId); }}><BellRing size={15}/> Powiadomienia</button>}
         </div>
       </section>
@@ -929,6 +1013,50 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               </article>;
             })}
             {transfers.length===0 && <div className="service-empty">Brak przekazań w Twoim zakresie.</div>}
+          </div>
+        </section>
+      )}
+
+      {tab === 'QUOTES' && canHandleCustomerQuotes && (
+        <section className="panel-card service-quotes-card">
+          <div className="panel-heading">
+            <div><span className="eyebrow"><MessageSquareText size={13}/> PORTAL KLIENTA</span><h2>Wyceny klientów</h2><p>Zapytania z prywatnego portalu klienta. Jeżeli punkt nie ma serwisanta, ServiceOS automatycznie kieruje sprawę do właściwego serwisu.</p></div>
+            <button className="button small secondary" onClick={()=>void loadCustomerQuotes(pointId)}><RefreshCw size={14}/> Odśwież</button>
+          </div>
+          <div className="desktop-quote-list">
+            {customerQuotes.map((item)=>{
+              const closed=['CLOSED','CANCELLED'].includes(item.status);
+              const routeChanged=item.requestedPointId!==item.routedPointId;
+              return <article className="desktop-quote-card" key={item.id}>
+                <div className="desktop-quote-head">
+                  <div><span>{item.orderNumber != null ? `ZLECENIE #${item.orderNumber}` : 'NOWA WYCENA'}</span><strong>{item.customerName} · {item.deviceDescription}</strong><small>{item.customerEmail || item.customerPhone || 'Brak dodatkowego kontaktu'} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>
+                  <em className={item.status.toLowerCase()}>{quoteStatusLabel(item.status)}</em>
+                </div>
+                <div className="desktop-quote-route">
+                  <span>Klient wybrał <strong>{item.requestedPointName}</strong></span>
+                  {routeChanged && <><b>→</b><span>Obsługuje <strong>{item.routedPointName}</strong></span></>}
+                  <span>Serwisant: <strong>{item.assignedTechnicianName || 'do przejęcia przez serwis'}</strong></span>
+                </div>
+                <p className="desktop-quote-issue">{item.issueDescription}</p>
+                {item.quoteAmount != null && <div className="desktop-quote-price"><span>Aktualna wycena</span><strong>{item.quoteAmount.toFixed(2)} {item.currency || 'PLN'}</strong>{item.quoteNote && <small>{item.quoteNote}</small>}</div>}
+                <div className="desktop-quote-thread">
+                  {item.messages.map((message)=><div key={message.id} className={`desktop-quote-message ${message.senderKind.toLowerCase()}`}><div><strong>{message.senderKind==='CUSTOMER'?'Klient':message.senderKind==='STAFF'?(message.senderName || 'Serwis'):'ServiceOS'}</strong><time>{new Date(message.createdAt).toLocaleString('pl-PL')}</time></div><p>{message.body}</p></div>)}
+                </div>
+                {!closed && <div className="desktop-quote-actions">
+                  <div className="desktop-quote-price-form">
+                    <label><span>Kwota wyceny</span><input type="number" min="0" step="0.01" value={quoteAmountDrafts[item.id] ?? (item.quoteAmount == null ? '' : String(item.quoteAmount))} onChange={(e)=>setQuoteAmountDrafts((current)=>({...current,[item.id]:e.target.value}))} placeholder="0,00"/></label>
+                    <label><span>Opis wyceny</span><input maxLength={1000} value={quoteNoteDrafts[item.id] ?? ''} onChange={(e)=>setQuoteNoteDrafts((current)=>({...current,[item.id]:e.target.value}))} placeholder="Co obejmuje cena?"/></label>
+                    <button className="button primary" disabled={quoteBusyId===item.id} onClick={()=>void priceCustomerQuote(item.id)}><BadgeDollarSign size={14}/> Wyślij wycenę</button>
+                  </div>
+                  <div className="desktop-quote-reply-form">
+                    <input maxLength={1000} value={quoteReplyDrafts[item.id] ?? ''} onChange={(e)=>setQuoteReplyDrafts((current)=>({...current,[item.id]:e.target.value}))} onKeyDown={(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void replyCustomerQuote(item.id);}}} placeholder="Napisz wiadomość do klienta"/>
+                    <button className="button secondary" disabled={quoteBusyId===item.id} onClick={()=>void replyCustomerQuote(item.id)}><Send size={14}/> Odpowiedz</button>
+                    <button className="button secondary danger" disabled={quoteBusyId===item.id} onClick={()=>void closeCustomerQuote(item.id)}>Zamknij</button>
+                  </div>
+                </div>}
+              </article>;
+            })}
+            {customerQuotes.length===0 && <div className="service-empty">Brak zapytań o wycenę w Twoim zakresie.</div>}
           </div>
         </section>
       )}
