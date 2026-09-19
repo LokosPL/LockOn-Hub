@@ -27,6 +27,9 @@ export function PendingAccessPage({ auth, onAuthChange, onLogout }: Props) {
   const [pointName, setPointName] = useState(auth.requestedPoint?.pointName ?? '');
   const [city, setCity] = useState(auth.requestedPoint?.city ?? '');
   const [role, setRole] = useState<UserRole>(requestedRole && requestedRole !== 'OWNER' ? requestedRole : 'TECHNICIAN');
+  const [technicianSplit, setTechnicianSplit] = useState(
+    auth.requestedPoint?.technicianSplitPercent == null ? '' : String(auth.requestedPoint.technicianSplitPercent)
+  );
   const [editing, setEditing] = useState(!auth.requestedPoint);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -59,11 +62,17 @@ export function PendingAccessPage({ auth, onAuthChange, onLogout }: Props) {
     if (auth.requestedPoint.requestedRole && auth.requestedPoint.requestedRole !== 'OWNER') {
       setRole(auth.requestedPoint.requestedRole);
     }
+    setTechnicianSplit(auth.requestedPoint.technicianSplitPercent == null ? '' : String(auth.requestedPoint.technicianSplitPercent));
   }, [auth.requestedPoint]);
 
   const submit = async () => {
     if (!pointName.trim() || !city.trim()) {
       setNotice('Wpisz nazwę punktu oraz miasto.');
+      return;
+    }
+    const parsedSplit = technicianSplit === '' ? null : Number(technicianSplit.replace(',','.'));
+    if (role === 'TECHNICIAN' && (parsedSplit === null || !Number.isFinite(parsedSplit) || parsedSplit < 0 || parsedSplit > 100)) {
+      setNotice('Jako serwisant ustaw swój procent rozliczenia od 0 do 100%.');
       return;
     }
     setBusy(true);
@@ -72,7 +81,8 @@ export function PendingAccessPage({ auth, onAuthChange, onLogout }: Props) {
       const next = await window.lockOn.access.requestPoint({
         pointName: pointName.trim(),
         city: city.trim(),
-        requestedRole: role
+        requestedRole: role,
+        technicianSplitPercent: role === 'TECHNICIAN' ? parsedSplit : null
       });
       onAuthChange(next);
       setEditing(false);
@@ -124,6 +134,7 @@ export function PendingAccessPage({ auth, onAuthChange, onLogout }: Props) {
             <div className="request-summary request-summary-v2">
               <div><span>Punkt</span><strong>{auth.requestedPoint?.pointName}</strong><small>{auth.requestedPoint?.city}</small></div>
               <div><span>Wybrana rola</span><strong>{currentRoleDefinition.label}</strong><small>{currentRoleDefinition.description}</small></div>
+              {currentRequestedRole === 'TECHNICIAN' && <div><span>Rozliczenie serwisanta</span><strong>{auth.requestedPoint?.technicianSplitPercent ?? '—'}%</strong><small>Szef: {auth.requestedPoint?.technicianSplitPercent == null ? '—' : 100 - auth.requestedPoint.technicianSplitPercent}%</small></div>}
             </div>
 
             <div className="pending-actions-row">
@@ -151,6 +162,18 @@ export function PendingAccessPage({ auth, onAuthChange, onLogout }: Props) {
                 );
               })}
             </div>
+
+            {role === 'TECHNICIAN' && <div className="technician-split-request wide">
+              <div><strong>Ustal swoje rozliczenie jako serwisant</strong><span>Ten procent będzie używany dla nowych zakończonych napraw. Możesz go później zmienić w zakładce Rozliczenia.</span></div>
+              <label>
+                <span>Twój udział (%)</span>
+                <input type="number" min="0" max="100" step="0.01" value={technicianSplit} onChange={(e)=>setTechnicianSplit(e.target.value)} placeholder="np. 60"/>
+              </label>
+              <div className="technician-split-preview">
+                <span>Serwisant <strong>{technicianSplit === '' ? '—' : technicianSplit}%</strong></span>
+                <span>Szef <strong>{technicianSplit === '' || !Number.isFinite(Number(technicianSplit.replace(',','.'))) ? '—' : Math.max(0,100-Number(technicianSplit.replace(',','.'))).toFixed(2).replace(/.00$/,'')}%</strong></span>
+              </div>
+            </div>}
 
             <div className="access-confirmation wide"><UserRoundCheck size={18}/><span>Po wysłaniu zgłoszenia Twoje konto pozostanie bez dostępu do danych punktu do czasu akceptacji przez Właściciela aplikacji.</span></div>
             <button className="button primary wide" disabled={busy} onClick={() => void submit()}><Send size={17}/>{busy ? 'Wysyłam…' : requested ? 'Zapisz zmiany i wyślij ponownie' : 'Wyślij zgłoszenie do akceptacji'}</button>

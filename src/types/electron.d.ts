@@ -14,15 +14,15 @@ export type UserRole = 'OWNER' | 'BOSS' | 'COORDINATOR' | 'SUPPORT' | 'TECHNICIA
 export type AccountStatus = 'PENDING' | 'ACTIVE' | 'REJECTED';
 export interface AuthUser { id?: string; email: string; name: string; picture?: string | null; }
 export interface AuthPoint { id: string; name: string; city?: string; }
-export interface RequestedPoint { pointName: string; city: string; requestedRole: UserRole; requestedAt: string; }
+export interface RequestedPoint { pointName: string; city: string; requestedRole: UserRole; technicianSplitPercent?:number|null; requestedAt: string; }
 export interface AuthState {
   configured: boolean; authenticated: boolean; development: boolean; localStarterLoginAllowed: boolean;
   user: AuthUser | null; point: AuthPoint | null; points: AuthPoint[]; role: UserRole | null; status: AccountStatus | null;
-  requestedPoint?: RequestedPoint | null; message?: string;
+  technicianSplitPercent?:number|null; requestedPoint?: RequestedPoint | null; message?: string;
 }
 export interface BrowserState { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean; }
 export interface BrowserBounds { x: number; y: number; width: number; height: number; }
-export interface AdminUser { id: string; email: string; name: string; picture?: string | null; role: UserRole | null; status: AccountStatus; blocked?:boolean; blockedAt?:string|null; blockedReason?:string|null; pointIds: string[]; requestedPoint?: RequestedPoint | null; firstLoginAt: string; lastLoginAt: string; }
+export interface AdminUser { id: string; email: string; name: string; picture?: string | null; role: UserRole | null; technicianSplitPercent?:number|null; status: AccountStatus; blocked?:boolean; blockedAt?:string|null; blockedReason?:string|null; pointIds: string[]; requestedPoint?: RequestedPoint | null; firstLoginAt: string; lastLoginAt: string; }
 export interface AdminPoint {
   id:string; name:string; city:string; active:boolean;
   serviceEnabled?:boolean; acceptsExternalRepairs?:boolean;
@@ -36,6 +36,7 @@ export interface AdminAuditEvent { id:string; action:string; entityType:string; 
 export interface AdminSystemSummary { activeSessions:number; desktopSessions:number; webSessions:number; servicePoints:number; openTransfers:number; blockedUsers:number; }
 export interface AdminOverview { points: AdminPoint[]; users: AdminUser[]; pendingUsers: AdminUser[]; blockedUsers?:AdminUser[]; loginEvents: LoginEvent[]; pendingRevenue: RevenueEntry[]; system?:AdminSystemSummary; transferSummary?:Record<string,number>; recentAudit?:AdminAuditEvent[]; }
 export interface FinancePayload { entries: RevenueEntry[]; summary: { approvedRevenue:number; technicianShare:number; bossShare:number; pendingRevenue:number; }; }
+export interface TechnicianSettlementSettings { configured:boolean; technicianPercent:number|null; bossPercent:number|null; }
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; issueDescription:string; status:string; receivedAt:string; }
@@ -61,7 +62,7 @@ export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:Serv
 export interface ServiceStatusResult {
   order:ServiceOrderSummary;
   notification:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string};
-  settlement?:{id:string;amount:number;currency:string;status:string;serviceOrderId:string;userId:string;pointId:string;approvedAt?:string|null}|null;
+  settlement?:{id:string;amount:number;currency:string;status:string;serviceOrderId:string;userId:string;pointId:string;technicianPercent?:number;bossPercent?:number;technicianShare?:number;bossShare?:number;approvedAt?:string|null}|null;
 }
 export interface ServiceStatusHistoryItem { id:string; fromStatus?:string|null; fromLabel?:string|null; toStatus:string; toLabel:string; note?:string|null; changedAt:string; changedByUserId?:string|null; changedByName:string; }
 export interface ServiceTechnician { id:string; name:string; email:string; }
@@ -94,7 +95,7 @@ declare global {
       ui: { setScale: (scale:'auto'|'compact'|'comfortable'|'large') => Promise<number>; };
       window: { minimize: () => Promise<void>; toggleMaximize: () => Promise<void>; close: () => Promise<void>; };
       auth: { getState: () => Promise<AuthState>; loginGoogle: () => Promise<AuthState>; loginLocal: () => Promise<AuthState>; logout: () => Promise<AuthState>; };
-      access: { requestPoint: (payload:{pointName:string;city:string;requestedRole:UserRole}) => Promise<AuthState>; };
+      access: { requestPoint: (payload:{pointName:string;city:string;requestedRole:UserRole;technicianSplitPercent?:number|null}) => Promise<AuthState>; };
       admin: {
         getOverview: () => Promise<AdminOverview>;
         createPoint: (payload:{name:string;city:string;serviceEnabled?:boolean;acceptsExternalRepairs?:boolean;serviceNote?:string}) => Promise<AdminPoint>;
@@ -109,6 +110,8 @@ declare global {
       };
       finance: {
         list: () => Promise<FinancePayload>;
+        getTechnicianSettings: () => Promise<TechnicianSettlementSettings>;
+        updateTechnicianSettings: (technicianPercent:number) => Promise<TechnicianSettlementSettings>;
         submit: (payload:{amount:number;pointId:string;workDate:string;note?:string}) => Promise<RevenueEntry>;
         review: (revenueId:string, action:'APPROVE'|'REJECT') => Promise<RevenueEntry>;
       };

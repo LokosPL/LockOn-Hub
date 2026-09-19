@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
   name text NOT NULL,
   picture_url text,
   role_code text REFERENCES roles(code),
+  technician_split_percent numeric(5,2) CHECK (technician_split_percent IS NULL OR (technician_split_percent >= 0 AND technician_split_percent <= 100)),
   status text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACTIVE','REJECTED')),
   first_login_at timestamptz NOT NULL DEFAULT now(),
   last_login_at timestamptz NOT NULL DEFAULT now(),
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS access_requests (
   point_name text NOT NULL,
   city text NOT NULL,
   requested_role_code text NOT NULL REFERENCES roles(code),
+  technician_split_percent numeric(5,2) CHECK (technician_split_percent IS NULL OR (technician_split_percent >= 0 AND technician_split_percent <= 100)),
   status text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED')),
   requested_at timestamptz NOT NULL DEFAULT now(),
   resolved_at timestamptz,
@@ -137,6 +139,7 @@ CREATE TABLE IF NOT EXISTS revenue_entries (
   amount numeric(12,2) NOT NULL CHECK (amount >= 0),
   currency char(3) NOT NULL DEFAULT 'PLN',
   category text NOT NULL DEFAULT 'SERVICE',
+  technician_percent numeric(5,2) NOT NULL DEFAULT 50 CHECK (technician_percent >= 0 AND technician_percent <= 100),
   status text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED','SETTLED')),
   note text,
   occurred_at timestamptz NOT NULL DEFAULT now(),
@@ -626,5 +629,45 @@ ON CONFLICT DO NOTHING;
 
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-19-central-v13','Reliable status mail fallback and automatic approved service settlement')
+ON CONFLICT (version) DO NOTHING;
+
+-- 2026-09-19 central-v14: technician-defined settlement share with per-entry snapshots.
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS technician_split_percent numeric(5,2);
+
+ALTER TABLE users
+  DROP CONSTRAINT IF EXISTS users_technician_split_percent_check;
+ALTER TABLE users
+  ADD CONSTRAINT users_technician_split_percent_check
+  CHECK (technician_split_percent IS NULL OR (technician_split_percent >= 0 AND technician_split_percent <= 100));
+
+ALTER TABLE access_requests
+  ADD COLUMN IF NOT EXISTS technician_split_percent numeric(5,2);
+
+ALTER TABLE access_requests
+  DROP CONSTRAINT IF EXISTS access_requests_technician_split_percent_check;
+ALTER TABLE access_requests
+  ADD CONSTRAINT access_requests_technician_split_percent_check
+  CHECK (technician_split_percent IS NULL OR (technician_split_percent >= 0 AND technician_split_percent <= 100));
+
+ALTER TABLE revenue_entries
+  ADD COLUMN IF NOT EXISTS technician_percent numeric(5,2);
+
+UPDATE revenue_entries
+SET technician_percent=50
+WHERE technician_percent IS NULL;
+
+ALTER TABLE revenue_entries
+  ALTER COLUMN technician_percent SET DEFAULT 50,
+  ALTER COLUMN technician_percent SET NOT NULL;
+
+ALTER TABLE revenue_entries
+  DROP CONSTRAINT IF EXISTS revenue_entries_technician_percent_check;
+ALTER TABLE revenue_entries
+  ADD CONSTRAINT revenue_entries_technician_percent_check
+  CHECK (technician_percent >= 0 AND technician_percent <= 100);
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-19-central-v14','Technician-defined settlement share stored on users, access requests and revenue snapshots')
 ON CONFLICT (version) DO NOTHING;
 

@@ -413,12 +413,16 @@ const registerIpc = () => {
     return logout(isDevelopment);
   });
 
-  secureHandle('access:requestPoint', async (payload: { pointName?: unknown; city?: unknown; requestedRole?: unknown }) => {
+  secureHandle('access:requestPoint', async (payload: { pointName?: unknown; city?: unknown; requestedRole?: unknown; technicianSplitPercent?: unknown }) => {
     const token = requireSessionToken();
+    const split = payload?.technicianSplitPercent === null || payload?.technicianSplitPercent === undefined || payload?.technicianSplitPercent === ''
+      ? null
+      : Number(payload.technicianSplitPercent);
     const safePayload = {
       pointName: String(payload?.pointName ?? '').trim().slice(0, 90),
       city: String(payload?.city ?? '').trim().slice(0, 90),
-      requestedRole: String(payload?.requestedRole ?? '').trim().slice(0, 30)
+      requestedRole: String(payload?.requestedRole ?? '').trim().slice(0, 30),
+      technicianSplitPercent: split
     };
     await backendRequest('/access/request-point', {
       method: 'POST',
@@ -506,6 +510,17 @@ const registerIpc = () => {
   secureHandle('finance:list', async () => {
     const token = requireSessionToken();
     return backendRequest('/finance/revenues', {}, token);
+  });
+  secureHandle('finance:getTechnicianSettings', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/finance/technician-settings', {}, token);
+  });
+  secureHandle('finance:updateTechnicianSettings', async (technicianPercent: number) => {
+    const token = requireSessionToken();
+    return backendRequest('/finance/technician-settings', {
+      method: 'POST',
+      body: JSON.stringify({ technicianPercent:Number(technicianPercent) })
+    }, token);
   });
   secureHandle('finance:submit', async (payload: unknown) => {
     const token = requireSessionToken();

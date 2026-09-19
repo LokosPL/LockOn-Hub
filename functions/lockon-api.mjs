@@ -51,6 +51,18 @@ const makeId = (prefix) => prefix + '_' + crypto.randomBytes(10).toString('hex')
 const normalizeEmail = (value = '') => String(value).trim().toLowerCase();
 const normalizePhone = (value = '') => String(value).replace(/\D/g, '').slice(-15);
 const cleanText = (value, max = 240) => String(value ?? '').trim().slice(0, max);
+const normalizeTechnicianPercent = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 100
+    ? Math.round(number * 100) / 100
+    : null;
+};
+const splitRevenueAmount = (amount, technicianPercent) => {
+  const percent = normalizeTechnicianPercent(technicianPercent) ?? 50;
+  const technicianShare = Math.round(Number(amount) * percent) / 100;
+  const bossShare = Math.round((Number(amount) - technicianShare) * 100) / 100;
+  return { technicianPercent:percent, bossPercent:Math.round((100-percent)*100)/100, technicianShare, bossShare };
+};
 const tokenHash = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const b64url = (value) => Buffer.from(value).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 
@@ -128,7 +140,7 @@ const customerView = (row) => ({
 
 const loadRequestedPoint = async (userId) => {
   const { rows } = await q(
-    "SELECT point_name, city, requested_role_code, requested_at FROM access_requests WHERE user_id=$1 AND status='PENDING' ORDER BY requested_at DESC LIMIT 1",
+    "SELECT point_name, city, requested_role_code, technician_split_percent, requested_at FROM access_requests WHERE user_id=$1 AND status='PENDING' ORDER BY requested_at DESC LIMIT 1",
     [userId]
   );
   if (!rows[0]) return null;
@@ -136,13 +148,14 @@ const loadRequestedPoint = async (userId) => {
     pointName: rows[0].point_name,
     city: rows[0].city,
     requestedRole: rows[0].requested_role_code,
+    technicianSplitPercent: rows[0].technician_split_percent == null ? null : Number(rows[0].technician_split_percent),
     requestedAt: rows[0].requested_at
   };
 };
 
 const loadUser = async (userId) => {
   const { rows } = await q(
-    'SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 LIMIT 1',
+    'SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 LIMIT 1',
     [userId]
   );
   return rows[0] || null;
@@ -166,6 +179,7 @@ const publicUser = async (user) => ({
   name: user.name,
   picture: user.picture_url || null,
   role: user.role_code || null,
+  technicianSplitPercent: user.technician_split_percent == null ? null : Number(user.technician_split_percent),
   status: user.status,
   blocked: Boolean(user.blocked_at),
   blockedAt: user.blocked_at || null,
@@ -317,7 +331,7 @@ const exchangeDesktopAuthorizationCode = async (body, expectedPath) => {
 
 const loginProfile = async (profile, clientType, allowCreate) => {
   let result = await q(
-    'SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE google_sub=$1 OR lower(email)=lower($2) ORDER BY CASE WHEN google_sub=$1 THEN 0 ELSE 1 END LIMIT 1',
+    'SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE google_sub=$1 OR lower(email)=lower($2) ORDER BY CASE WHEN google_sub=$1 THEN 0 ELSE 1 END LIMIT 1',
     [profile.sub, profile.email]
   );
   let user = result.rows[0] || null;
@@ -1364,7 +1378,7 @@ const route = async (request) => {
         await client.query('ROLLBACK');
         return json(request, { error: 'CODE_EXPIRED', message: 'Kod jest nieprawidłowy, wykorzystany albo wygasł.' }, 401);
       }
-      const userResult = await client.query("SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 AND status='ACTIVE'", [result.rows[0].user_id]);
+      const userResult = await client.query("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 AND status='ACTIVE'", [result.rows[0].user_id]);
       if (!userResult.rows[0]) {
         await client.query('ROLLBACK');
         return json(request, { error: 'ACCOUNT_NOT_ACTIVE', message: 'Konto nie jest aktywne.' }, 403);
@@ -1392,11 +1406,18 @@ const route = async (request) => {
     const pointName = cleanText(body.pointName, 90);
     const city = cleanText(body.city, 90);
     const requestedRole = String(body.requestedRole || 'USER').toUpperCase();
+    const splitRaw = body.technicianSplitPercent;
+    const technicianSplitPercent = requestedRole === 'TECHNICIAN'
+      ? Number(splitRaw)
+      : null;
     if (!pointName || !city || !REQUESTABLE_ROLES.has(requestedRole)) return json(request, { error: 'VALIDATION', message: 'Nieprawidłowe zgłoszenie punktu.' }, 400);
+    if (requestedRole === 'TECHNICIAN' && (!Number.isFinite(technicianSplitPercent) || technicianSplitPercent < 0 || technicianSplitPercent > 100)) {
+      return json(request, { error: 'TECHNICIAN_SPLIT', message: 'Ustaw swój procent rozliczenia serwisanta od 0 do 100%.' }, 400);
+    }
     await q("UPDATE access_requests SET status='REJECTED',resolved_at=now(),note='Zastąpione nowszym zgłoszeniem' WHERE user_id=$1 AND status='PENDING'", [session.user.id]);
     await q(
-      "INSERT INTO access_requests(id,user_id,point_name,city,requested_role_code,status,requested_at) VALUES($1,$2,$3,$4,$5,'PENDING',now())",
-      [makeId('acr'), session.user.id, pointName, city, requestedRole]
+      "INSERT INTO access_requests(id,user_id,point_name,city,requested_role_code,technician_split_percent,status,requested_at) VALUES($1,$2,$3,$4,$5,$6,'PENDING',now())",
+      [makeId('acr'), session.user.id, pointName, city, requestedRole, technicianSplitPercent]
     );
     return json(request, await authPayload(await loadUser(session.user.id)));
   }
@@ -1406,7 +1427,7 @@ const route = async (request) => {
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
     const [points, users, loginEvents, pendingRevenue, sessions, recentAudit, transferSummary] = await Promise.all([
       q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=p.id AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL) t ON true ORDER BY p.name"),
-      q("SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
+      q("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
       q("SELECT a.id,a.actor_user_id AS user_id,u.email,u.name,u.role_code AS role,u.status,a.created_at FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id WHERE a.action LIKE 'LOGIN_%' ORDER BY a.created_at DESC LIMIT 100"),
       q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC"),
       q("SELECT client_type,count(*)::int AS count FROM auth_sessions WHERE revoked_at IS NULL AND expires_at>now() AND absolute_expires_at>now() GROUP BY client_type"),
@@ -1417,7 +1438,7 @@ const route = async (request) => {
     for (const user of users.rows) mappedUsers.push(await publicUser(user));
     const revenues = pendingRevenue.rows.map((r) => ({
       id:r.id,userId:r.user_id,pointId:r.point_id,amount:Number(r.amount),workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,
-      splitTechnicianPercent:50,splitBossPercent:50,technicianShare:0,bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,
+      splitTechnicianPercent:Number(r.technician_percent ?? 50),splitBossPercent:100-Number(r.technician_percent ?? 50),technicianShare:0,bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,
       technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}
     }));
     const sessionCounts=Object.fromEntries(sessions.rows.map((row)=>[row.client_type,Number(row.count)]));
@@ -1478,8 +1499,11 @@ const route = async (request) => {
     const role=String(body.role||'USER').toUpperCase();
     if(!REQUESTABLE_ROLES.has(role)) return json(request,{error:'ROLE'},400);
     let pointIds=Array.isArray(body.pointIds)?body.pointIds.map(String):[];
+    const req=await loadRequestedPoint(target.id);
+    const technicianSplitPercent = role==='TECHNICIAN' && req?.requestedRole==='TECHNICIAN'
+      ? req.technicianSplitPercent
+      : (target.technician_split_percent == null ? null : Number(target.technician_split_percent));
     if(body.createRequestedPoint===true){
-      const req=await loadRequestedPoint(target.id);
       if(req){
         let found=await q('SELECT id FROM points WHERE lower(name)=lower($1) AND lower(city)=lower($2) LIMIT 1',[req.pointName,req.city]);
         let pointId=found.rows[0]?.id;
@@ -1491,7 +1515,10 @@ const route = async (request) => {
     const client=await pool.connect();
     try{
       await client.query('BEGIN');
-      await client.query("UPDATE users SET role_code=$1,status='ACTIVE',updated_at=now() WHERE id=$2",[role,target.id]);
+      await client.query(
+        "UPDATE users SET role_code=$1,technician_split_percent=CASE WHEN $1='TECHNICIAN' THEN $2 ELSE technician_split_percent END,status='ACTIVE',updated_at=now() WHERE id=$3",
+        [role,technicianSplitPercent,target.id]
+      );
       await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);
       if(!GLOBAL_ROLES.has(role)) for(const pointId of pointIds) await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);
       await client.query("UPDATE access_requests SET status='APPROVED',resolved_at=now(),resolved_by_user_id=$2 WHERE user_id=$1 AND status='PENDING'",[target.id,session.user.id]);
@@ -1500,7 +1527,7 @@ const route = async (request) => {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
     } finally{client.release();}
-    await audit(session.user.id,'USER_APPROVED','user',target.id,null,{role,pointIds});
+    await audit(session.user.id,'USER_APPROVED','user',target.id,null,{role,pointIds,technicianSplitPercent});
     return json(request, await authPayload(await loadUser(target.id)));
   }
 
@@ -1658,13 +1685,36 @@ const route = async (request) => {
     return json(request,{ok:true,resetId,reloginRequired:true,deleted});
   }
 
+  if(method==='GET'&&url.pathname==='/finance/technician-settings'){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Ustawienia rozliczenia są dostępne dla serwisanta.'),{status:403});
+    const row=(await q("SELECT technician_split_percent FROM users WHERE id=$1 LIMIT 1",[u.id])).rows[0];
+    const technicianPercent=normalizeTechnicianPercent(row?.technician_split_percent);
+    return json(request,{
+      configured:technicianPercent!==null,
+      technicianPercent,
+      bossPercent:technicianPercent===null?null:Math.round((100-technicianPercent)*100)/100
+    });
+  }
+
+  if(method==='POST'&&url.pathname==='/finance/technician-settings'){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Ustawienia rozliczenia są dostępne dla serwisanta.'),{status:403});
+    const body=await readJson(request);
+    const technicianPercent=normalizeTechnicianPercent(body.technicianPercent);
+    if(technicianPercent===null)return json(request,{error:'TECHNICIAN_SPLIT',message:'Ustaw procent serwisanta od 0 do 100%.'},400);
+    await q("UPDATE users SET technician_split_percent=$1,updated_at=now() WHERE id=$2",[technicianPercent,u.id]);
+    await audit(u.id,'TECHNICIAN_SETTLEMENT_UPDATED','user',u.id,null,{technicianPercent,bossPercent:Math.round((100-technicianPercent)*100)/100});
+    return json(request,{configured:true,technicianPercent,bossPercent:Math.round((100-technicianPercent)*100)/100});
+  }
+
   if(method==='GET'&&url.pathname==='/finance/revenues'){
     const session=await requireActive(request);const u=session.user;
     let rows;
     if(GLOBAL_ROLES.has(u.role_code)) rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id ORDER BY r.occurred_at DESC")).rows;
     else if(u.role_code==='TECHNICIAN') rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
     else rows=(await q("SELECT DISTINCT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id JOIN user_point_access a ON a.point_id=r.point_id AND a.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
-    const entries=rows.map((r)=>{const amount=Number(r.amount);const approved=r.status==='APPROVED'||r.status==='SETTLED';return{id:r.id,userId:r.user_id,pointId:r.point_id,serviceOrderId:r.service_order_id||null,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:50,splitBossPercent:50,technicianShare:approved?Math.round(amount*50)/100:0,bossShare:approved?Math.round(amount*50)/100:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}}});
+    const entries=rows.map((r)=>{const amount=Number(r.amount);const approved=r.status==='APPROVED'||r.status==='SETTLED';const split=splitRevenueAmount(amount,r.technician_percent);return{id:r.id,userId:r.user_id,pointId:r.point_id,serviceOrderId:r.service_order_id||null,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}}});
     const approved=entries.filter((e)=>e.status==='APPROVED'||e.status==='SETTLED'),pending=entries.filter((e)=>e.status==='PENDING');
     return json(request,{entries,summary:{approvedRevenue:approved.reduce((s,e)=>s+e.amount,0),technicianShare:approved.reduce((s,e)=>s+e.technicianShare,0),bossShare:approved.reduce((s,e)=>s+e.bossShare,0),pendingRevenue:pending.reduce((s,e)=>s+e.amount,0)}});
   }
@@ -1674,10 +1724,14 @@ const route = async (request) => {
     const body=await readJson(request),amount=Number(body.amount),pointId=String(body.pointId||''),note=cleanText(body.note,700),workDate=cleanText(body.workDate,20)||new Date().toISOString().slice(0,10);
     if(!Number.isFinite(amount)||amount<=0)return json(request,{error:'AMOUNT'},400);await requirePoint(session.user,pointId);
     const rounded=Math.round(amount*100)/100;
+    const profile=(await q("SELECT technician_split_percent FROM users WHERE id=$1 LIMIT 1",[session.user.id])).rows[0];
+    const technicianPercent=normalizeTechnicianPercent(profile?.technician_split_percent);
+    if(technicianPercent===null)return json(request,{error:'SETTLEMENT_REQUIRED',message:'Najpierw ustaw swoje rozliczenie serwisanta w sekcji Rozliczenia.'},409);
+    const split=splitRevenueAmount(rounded,technicianPercent);
     const id=makeId('rev');
-    const row=(await q("INSERT INTO revenue_entries(id,point_id,user_id,amount,currency,category,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,'PLN','SERVICE','APPROVED',$5,$6,$3,now()) RETURNING created_at,approved_at",[id,pointId,session.user.id,rounded,note,new Date(workDate+'T12:00:00Z')])).rows[0];
-    await audit(session.user.id,'REVENUE_AUTO_APPROVED','revenue',id,pointId,{amount:rounded,manual:true});
-    return json(request,{id,userId:session.user.id,pointId,serviceOrderId:null,amount:rounded,workDate,note,status:'APPROVED',splitTechnicianPercent:50,splitBossPercent:50,technicianShare:Math.round(rounded*50)/100,bossShare:Math.round(rounded*50)/100,submittedAt:row.created_at,reviewedAt:row.approved_at},201);
+    const row=(await q("INSERT INTO revenue_entries(id,point_id,user_id,amount,currency,category,technician_percent,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,'PLN','SERVICE',$5,'APPROVED',$6,$7,$3,now()) RETURNING created_at,approved_at",[id,pointId,session.user.id,rounded,technicianPercent,note,new Date(workDate+'T12:00:00Z')])).rows[0];
+    await audit(session.user.id,'REVENUE_AUTO_APPROVED','revenue',id,pointId,{amount:rounded,manual:true,technicianPercent});
+    return json(request,{id,userId:session.user.id,pointId,serviceOrderId:null,amount:rounded,workDate,note,status:'APPROVED',splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:split.technicianShare,bossShare:split.bossShare,submittedAt:row.created_at,reviewedAt:row.approved_at},201);
   }
 
   const review=url.pathname.match(/^\/finance\/revenues\/([^/]+)\/review$/);
@@ -1686,17 +1740,20 @@ const route = async (request) => {
     const body=await readJson(request),action=String(body.action||'');if(!['APPROVE','REJECT'].includes(action))return json(request,{error:'ACTION'},400);
     const result=await q("UPDATE revenue_entries SET status=$1,approved_by_user_id=$2,approved_at=now() WHERE id=$3 RETURNING *",[action==='APPROVE'?'APPROVED':'REJECTED',session.user.id,review[1]]);
     if(!result.rows[0])return json(request,{error:'NOT_FOUND'},404);
-    const r=result.rows[0],amount=Number(r.amount),approved=r.status==='APPROVED';
-    return json(request,{id:r.id,userId:r.user_id,pointId:r.point_id,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:50,splitBossPercent:50,technicianShare:approved?Math.round(amount*50)/100:0,bossShare:approved?Math.round(amount*50)/100:0,submittedAt:r.created_at,reviewedAt:r.approved_at});
+    const r=result.rows[0],amount=Number(r.amount),approved=r.status==='APPROVED';const split=splitRevenueAmount(amount,r.technician_percent);
+    return json(request,{id:r.id,userId:r.user_id,pointId:r.point_id,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at});
   }
 
   if(method==='GET'&&url.pathname==='/dashboard'){
     const session=await requireActive(request),u=session.user,ids=await visiblePointIds(u);
-    const revenue=(await q("SELECT amount,status,user_id FROM revenue_entries WHERE point_id=ANY($1::text[])",[ids])).rows;
+    const revenue=(await q("SELECT amount,status,user_id,technician_percent FROM revenue_entries WHERE point_id=ANY($1::text[])",[ids])).rows;
     const users=(await q("SELECT COUNT(DISTINCT u.id)::int AS count FROM users u LEFT JOIN user_point_access a ON a.user_id=u.id WHERE u.status='ACTIVE' AND ($2::boolean OR a.point_id=ANY($1::text[]))",[ids,GLOBAL_ROLES.has(u.role_code)])).rows[0].count;
     const approved=revenue.filter((r)=>r.status==='APPROVED'||r.status==='SETTLED'),pending=revenue.filter((r)=>r.status==='PENDING');
     const approvedSum=approved.reduce((s,r)=>s+Number(r.amount),0),pendingSum=pending.reduce((s,r)=>s+Number(r.amount),0);
-    return json(request,{pointCount:ids.length,activeUsers:users,pendingUsers:u.role_code==='OWNER'?(await q("SELECT COUNT(*)::int AS count FROM users WHERE status='PENDING'")).rows[0].count:0,approvedRevenue:approvedSum,pendingRevenue:pendingSum,bossShare:approvedSum/2,technicianShare:u.role_code==='TECHNICIAN'?approved.filter((r)=>r.user_id===u.id).reduce((s,r)=>s+Number(r.amount)/2,0):approvedSum/2});
+    const technicianShareAll=approved.reduce((sum,row)=>sum+splitRevenueAmount(Number(row.amount),row.technician_percent).technicianShare,0);
+    const bossShareAll=approved.reduce((sum,row)=>sum+splitRevenueAmount(Number(row.amount),row.technician_percent).bossShare,0);
+    const technicianShareOwn=approved.filter((r)=>r.user_id===u.id).reduce((sum,row)=>sum+splitRevenueAmount(Number(row.amount),row.technician_percent).technicianShare,0);
+    return json(request,{pointCount:ids.length,activeUsers:users,pendingUsers:u.role_code==='OWNER'?(await q("SELECT COUNT(*)::int AS count FROM users WHERE status='PENDING'")).rows[0].count:0,approvedRevenue:approvedSum,pendingRevenue:pendingSum,bossShare:bossShareAll,technicianShare:u.role_code==='TECHNICIAN'?technicianShareOwn:technicianShareAll});
   }
 
   if(method==='GET'&&url.pathname==='/service/customers/search'){
@@ -1831,22 +1888,17 @@ const route = async (request) => {
       estimatedCompletionAt=date;
     }
 
-    const canManage=SERVICE_MANAGE_ROLES.has(u.role_code);
-    if(!canManage&&('assignedTechnicianId' in body||'estimatedCost' in body||'finalCost' in body)){
-      throw Object.assign(new Error('Tylko kierownictwo punktu może zmieniać technika i koszty.'),{status:403});
+    const canManageAssignment=SERVICE_MANAGE_ROLES.has(u.role_code);
+    const canEditCosts=SERVICE_EDIT_ROLES.has(u.role_code);
+    if(!canManageAssignment&&'assignedTechnicianId' in body){
+      throw Object.assign(new Error('Tylko kierownictwo punktu może zmieniać przypisanego technika.'),{status:403});
     }
 
     let assignedTechnicianId=found.assigned_technician_id||null;
     let estimatedCost=found.estimated_cost==null?null:Number(found.estimated_cost);
     let finalCost=found.final_cost==null?null:Number(found.final_cost);
-    if(canManage){
+    if(canManageAssignment){
       assignedTechnicianId=cleanText(body.assignedTechnicianId,80)||null;
-      const estimatedRaw=body.estimatedCost;
-      const finalRaw=body.finalCost;
-      estimatedCost=estimatedRaw==null||estimatedRaw===''?null:Number(estimatedRaw);
-      finalCost=finalRaw==null||finalRaw===''?null:Number(finalRaw);
-      if(estimatedCost!=null&&(!Number.isFinite(estimatedCost)||estimatedCost<0))return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
-      if(finalCost!=null&&(!Number.isFinite(finalCost)||finalCost<0))return json(request,{error:'FINAL_COST',message:'Nieprawidłowy koszt końcowy.'},400);
       if(assignedTechnicianId){
         const tech=(await q(
           "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE usr.id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND a.point_id=$2 LIMIT 1",
@@ -1854,6 +1906,18 @@ const route = async (request) => {
         )).rows[0];
         if(!tech)return json(request,{error:'TECHNICIAN',message:'Wybrany technik nie ma dostępu do aktualnego punktu urządzenia.'},400);
       }
+    }
+    if(canEditCosts){
+      if('estimatedCost' in body){
+        const estimatedRaw=body.estimatedCost;
+        estimatedCost=estimatedRaw==null||estimatedRaw===''?null:Number(estimatedRaw);
+      }
+      if('finalCost' in body){
+        const finalRaw=body.finalCost;
+        finalCost=finalRaw==null||finalRaw===''?null:Number(finalRaw);
+      }
+      if(estimatedCost!=null&&(!Number.isFinite(estimatedCost)||estimatedCost<0))return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
+      if(finalCost!=null&&(!Number.isFinite(finalCost)||finalCost<0))return json(request,{error:'FINAL_COST',message:'Nieprawidłowy koszt końcowy.'},400);
     }
 
     const client=await pool.connect();
@@ -1895,7 +1959,7 @@ const route = async (request) => {
     const canManage=SERVICE_MANAGE_ROLES.has(u.role_code);
     let assignedTechnicianId=u.role_code==='TECHNICIAN'?u.id:(canManage?(cleanText(body.assignedTechnicianId,80)||null):null);
     let estimatedCost=null;
-    if(canManage&&body.estimatedCost!==undefined&&body.estimatedCost!==''){
+    if(body.estimatedCost!==undefined&&body.estimatedCost!==''){
       estimatedCost=Number(body.estimatedCost);
       if(!Number.isFinite(estimatedCost)||estimatedCost<0)return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
     }
@@ -2024,6 +2088,35 @@ const route = async (request) => {
       return json(request,{order:view,notification:{queued:false,sent:false,reason:'STATUS_UNCHANGED'}});
     }
 
+    let settlementSpec=null;
+    if(next==='COMPLETED'){
+      const settlementPointId=found.home_point_id||found.point_id;
+      let revenueUserId=found.assigned_technician_id||null;
+      if(!revenueUserId&&u.role_code==='TECHNICIAN') revenueUserId=u.id;
+      if(!revenueUserId){
+        const candidates=(await q(
+          "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE a.point_id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL ORDER BY usr.name,usr.id LIMIT 2",
+          [settlementPointId]
+        )).rows;
+        if(candidates.length===1) revenueUserId=candidates[0].id;
+      }
+      if(!revenueUserId){
+        return json(request,{error:'TECHNICIAN_REQUIRED',message:'Przed zakończeniem zlecenia przypisz serwisanta odpowiedzialnego za naprawę.'},409);
+      }
+      const revenueUser=(await q(
+        "SELECT id,name,technician_split_percent FROM users WHERE id=$1 AND role_code='TECHNICIAN' AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",
+        [revenueUserId]
+      )).rows[0];
+      if(!revenueUser){
+        return json(request,{error:'TECHNICIAN_REQUIRED',message:'Przypisany serwisant nie jest aktywnym kontem TECHNICIAN.'},409);
+      }
+      const technicianPercent=normalizeTechnicianPercent(revenueUser.technician_split_percent);
+      if(technicianPercent===null){
+        return json(request,{error:'SETTLEMENT_REQUIRED',message:'Serwisant '+(revenueUser.name||'')+' musi najpierw ustawić swój procent rozliczenia w sekcji Rozliczenia.'},409);
+      }
+      settlementSpec={settlementPointId,revenueUserId,technicianPercent,split:splitRevenueAmount(settlementAmount,technicianPercent)};
+    }
+
     let settlement=null;
     const statusClient=await pool.connect();
     try{
@@ -2037,19 +2130,11 @@ const route = async (request) => {
         [makeId('hst'),found.id,found.status,next,note||null,u.id]
       );
 
-      if(next==='COMPLETED'){
-        const settlementPointId=found.home_point_id||found.point_id;
-        let revenueUserId=found.assigned_technician_id||null;
-        if(!revenueUserId){
-          revenueUserId=(await statusClient.query(
-            "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE a.point_id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL ORDER BY usr.name,usr.id LIMIT 1",
-            [settlementPointId]
-          )).rows[0]?.id||u.id;
-        }
+      if(next==='COMPLETED'&&settlementSpec){
         const revenueId=makeId('rev');
         const revenue=(await statusClient.query(
-          "INSERT INTO revenue_entries(id,point_id,user_id,service_order_id,amount,currency,category,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,$5,$6,'SERVICE','APPROVED',$7,now(),$8,now()) ON CONFLICT (service_order_id) WHERE service_order_id IS NOT NULL DO UPDATE SET point_id=EXCLUDED.point_id,user_id=EXCLUDED.user_id,amount=EXCLUDED.amount,currency=EXCLUDED.currency,status='APPROVED',note=EXCLUDED.note,approved_by_user_id=EXCLUDED.approved_by_user_id,approved_at=now() RETURNING id,point_id,user_id,service_order_id,amount,currency,status,approved_at",
-          [revenueId,settlementPointId,revenueUserId,found.id,Math.round(settlementAmount*100)/100,found.currency||'PLN','Automatyczne rozliczenie zakończonego zlecenia #'+found.order_number,u.id]
+          "INSERT INTO revenue_entries(id,point_id,user_id,service_order_id,amount,currency,category,technician_percent,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,$5,$6,'SERVICE',$7,'APPROVED',$8,now(),$9,now()) ON CONFLICT (service_order_id) WHERE service_order_id IS NOT NULL DO UPDATE SET point_id=EXCLUDED.point_id,user_id=EXCLUDED.user_id,amount=EXCLUDED.amount,currency=EXCLUDED.currency,technician_percent=EXCLUDED.technician_percent,status='APPROVED',note=EXCLUDED.note,approved_by_user_id=EXCLUDED.approved_by_user_id,approved_at=now() RETURNING id,point_id,user_id,service_order_id,amount,currency,technician_percent,status,approved_at",
+          [revenueId,settlementSpec.settlementPointId,settlementSpec.revenueUserId,found.id,Math.round(settlementAmount*100)/100,found.currency||'PLN',settlementSpec.technicianPercent,'Automatyczne rozliczenie zakończonego zlecenia #'+found.order_number,u.id]
         )).rows[0];
         settlement={
           id:revenue.id,
@@ -2059,6 +2144,10 @@ const route = async (request) => {
           serviceOrderId:revenue.service_order_id,
           userId:revenue.user_id,
           pointId:revenue.point_id,
+          technicianPercent:settlementSpec.split.technicianPercent,
+          bossPercent:settlementSpec.split.bossPercent,
+          technicianShare:settlementSpec.split.technicianShare,
+          bossShare:settlementSpec.split.bossShare,
           approvedAt:revenue.approved_at
         };
       }

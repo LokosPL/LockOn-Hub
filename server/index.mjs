@@ -46,6 +46,20 @@ const nowIso = () => new Date().toISOString();
 const id = (prefix) => `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
 const normalizeEmail = (value = '') => value.trim().toLowerCase();
 const cleanText = (value, max = 240) => String(value ?? '').trim().slice(0, max);
+const normalizeTechnicianPercent = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 100 ? Math.round(number * 100) / 100 : null;
+};
+const splitRevenueAmount = (amount, technicianPercent) => {
+  const percent = normalizeTechnicianPercent(technicianPercent) ?? 50;
+  const technicianShare = Math.round(Number(amount) * percent) / 100;
+  return {
+    technicianPercent: percent,
+    bossPercent: Math.round((100-percent)*100)/100,
+    technicianShare,
+    bossShare: Math.round((Number(amount)-technicianShare)*100)/100
+  };
+};
 const normalizePhone = (value = '') => String(value).replace(/\D/g, '').slice(-15);
 const customerView = (customer) => ({
   id: customer.id,
@@ -137,6 +151,7 @@ const publicUser = (user) => ({
   name: user.name,
   picture: user.picture,
   role: user.role ?? null,
+  technicianSplitPercent: user.technicianSplitPercent ?? null,
   status: user.status,
   pointIds: Array.isArray(user.pointIds) ? user.pointIds : [],
   requestedPoint: user.requestedPoint ?? null,
@@ -418,7 +433,7 @@ const localOrderView = (order) => {
 
 const localOrderViewForUser = (order, user) => {
   const view = localOrderView(order);
-  if (!SERVICE_MANAGE_ROLES.has(user.role)) {
+  if (!SERVICE_EDIT_ROLES.has(user.role)) {
     view.estimatedCost = null;
     view.finalCost = null;
   }
@@ -435,8 +450,14 @@ const revenueVisibleTo = (user, entry) => {
 const revenueView = (entry) => {
   const technician = findUserById(entry.userId);
   const point = db.points.find((p) => p.id === entry.pointId);
+  const split = splitRevenueAmount(entry.amount, entry.splitTechnicianPercent ?? entry.technicianPercent ?? 50);
+  const approved = entry.status === 'APPROVED' || entry.status === 'SETTLED';
   return {
     ...entry,
+    splitTechnicianPercent: split.technicianPercent,
+    splitBossPercent: split.bossPercent,
+    technicianShare: approved ? split.technicianShare : 0,
+    bossShare: approved ? split.bossShare : 0,
     technician: technician ? { id: technician.id, name: technician.name, email: technician.email } : null,
     point: point ? pointSummary(point) : null
   };
@@ -492,9 +513,11 @@ const handle = async (req, res) => {
     const pointName = cleanText(body.pointName, 90);
     const city = cleanText(body.city, 90);
     const requestedRole = String(body.requestedRole || 'USER').toUpperCase();
+    const technicianSplitPercent = requestedRole === 'TECHNICIAN' ? normalizeTechnicianPercent(body.technicianSplitPercent) : null;
     if (!pointName || !city) return json(res, 400, { error: 'VALIDATION', message: 'Wpisz nazwę punktu i miasto.' });
     if (!REQUESTABLE_ROLES.has(requestedRole)) return json(res, 400, { error: 'ROLE', message: 'Wybierz prawidłową rolę.' });
-    user.requestedPoint = { pointName, city, requestedRole, requestedAt: nowIso() };
+    if (requestedRole === 'TECHNICIAN' && technicianSplitPercent === null) return json(res, 400, { error: 'TECHNICIAN_SPLIT', message: 'Ustaw swój procent rozliczenia serwisanta.' });
+    user.requestedPoint = { pointName, city, requestedRole, technicianSplitPercent, requestedAt: nowIso() };
     user.status = 'PENDING';
     saveDb();
     return json(res, 200, authPayload(user));
@@ -557,6 +580,9 @@ const handle = async (req, res) => {
     }
 
     target.role = role;
+    if (role === 'TECHNICIAN' && target.requestedPoint?.requestedRole === 'TECHNICIAN') {
+      target.technicianSplitPercent = target.requestedPoint.technicianSplitPercent ?? null;
+    }
     target.status = 'ACTIVE';
     target.pointIds = GLOBAL_ROLES.has(role) ? [] : pointIds;
     target.requestedPoint = null;
@@ -711,7 +737,7 @@ const handle = async (req, res) => {
       ? user.id
       : (canManage ? (cleanText(body.assignedTechnicianId, 80) || null) : null);
     let estimatedCost = null;
-    if (canManage && body.estimatedCost !== undefined && body.estimatedCost !== '') {
+    if (body.estimatedCost !== undefined && body.estimatedCost !== '') {
       estimatedCost = Number(body.estimatedCost);
       if (!Number.isFinite(estimatedCost) || estimatedCost < 0) return json(res, 400, { error: 'ESTIMATED_COST', message: 'Nieprawidłowy koszt szacowany.' });
     }
@@ -964,12 +990,12 @@ const handle = async (req, res) => {
       estimatedCompletionAt = eta.toISOString();
     }
 
-    const canManage = SERVICE_MANAGE_ROLES.has(user.role);
-    if (!canManage && ('assignedTechnicianId' in body || 'estimatedCost' in body || 'finalCost' in body)) {
-      return json(res, 403, { error: 'FORBIDDEN', message: 'Tylko kierownictwo punktu może zmieniać technika i koszty.' });
+    const canManageAssignment = SERVICE_MANAGE_ROLES.has(user.role);
+    if (!canManageAssignment && 'assignedTechnicianId' in body) {
+      return json(res, 403, { error: 'FORBIDDEN', message: 'Tylko kierownictwo punktu może zmieniać przypisanego technika.' });
     }
 
-    if (canManage) {
+    if (canManageAssignment) {
       const assignedTechnicianId = cleanText(body.assignedTechnicianId, 80) || null;
       if (assignedTechnicianId) {
         const technician = db.users.find((candidate) =>
@@ -980,12 +1006,16 @@ const handle = async (req, res) => {
         );
         if (!technician) return json(res, 400, { error: 'TECHNICIAN', message: 'Wybrany technik nie ma dostępu do tego punktu.' });
       }
-      const estimatedCost = body.estimatedCost == null || body.estimatedCost === '' ? null : Number(body.estimatedCost);
-      const finalCost = body.finalCost == null || body.finalCost === '' ? null : Number(body.finalCost);
-      if (estimatedCost != null && (!Number.isFinite(estimatedCost) || estimatedCost < 0)) return json(res, 400, { error: 'ESTIMATED_COST' });
-      if (finalCost != null && (!Number.isFinite(finalCost) || finalCost < 0)) return json(res, 400, { error: 'FINAL_COST' });
       order.assignedTechnicianId = assignedTechnicianId;
+    }
+    if ('estimatedCost' in body) {
+      const estimatedCost = body.estimatedCost == null || body.estimatedCost === '' ? null : Number(body.estimatedCost);
+      if (estimatedCost != null && (!Number.isFinite(estimatedCost) || estimatedCost < 0)) return json(res, 400, { error: 'ESTIMATED_COST' });
       order.estimatedCost = estimatedCost;
+    }
+    if ('finalCost' in body) {
+      const finalCost = body.finalCost == null || body.finalCost === '' ? null : Number(body.finalCost);
+      if (finalCost != null && (!Number.isFinite(finalCost) || finalCost < 0)) return json(res, 400, { error: 'FINAL_COST' });
       order.finalCost = finalCost;
     }
 
@@ -1167,6 +1197,32 @@ const handle = async (req, res) => {
     return json(res, 200, { userMessage, assistantMessage, action: null });
   }
 
+  if (method === 'GET' && url.pathname === '/finance/technician-settings') {
+    const user = requireRole(req, res, ['TECHNICIAN']);
+    if (!user) return;
+    const technicianPercent = normalizeTechnicianPercent(user.technicianSplitPercent);
+    return json(res, 200, {
+      configured: technicianPercent !== null,
+      technicianPercent,
+      bossPercent: technicianPercent === null ? null : Math.round((100-technicianPercent)*100)/100
+    });
+  }
+
+  if (method === 'POST' && url.pathname === '/finance/technician-settings') {
+    const user = requireRole(req, res, ['TECHNICIAN']);
+    if (!user) return;
+    const body = await readBody(req);
+    const technicianPercent = normalizeTechnicianPercent(body.technicianPercent);
+    if (technicianPercent === null) return json(res, 400, { error:'TECHNICIAN_SPLIT', message:'Ustaw procent serwisanta od 0 do 100%.' });
+    user.technicianSplitPercent = technicianPercent;
+    saveDb();
+    return json(res, 200, {
+      configured:true,
+      technicianPercent,
+      bossPercent:Math.round((100-technicianPercent)*100)/100
+    });
+  }
+
   if (method === 'GET' && url.pathname === '/finance/revenues') {
     const user = requireActive(req, res);
     if (!user) return;
@@ -1194,21 +1250,25 @@ const handle = async (req, res) => {
     const note = cleanText(body.note, 700);
     if (!Number.isFinite(amount) || amount <= 0) return json(res, 400, { error: 'AMOUNT', message: 'Wpisz prawidłową kwotę przychodu.' });
     if (!user.pointIds.includes(pointId)) return json(res, 403, { error: 'POINT', message: 'Nie masz dostępu do tego punktu.' });
+    const technicianPercent = normalizeTechnicianPercent(user.technicianSplitPercent);
+    if (technicianPercent === null) return json(res, 409, { error:'SETTLEMENT_REQUIRED', message:'Najpierw ustaw swoje rozliczenie serwisanta.' });
+    const rounded = Math.round(amount * 100) / 100;
+    const split = splitRevenueAmount(rounded, technicianPercent);
     const entry = {
       id: id('rev'),
       userId: user.id,
       pointId,
-      amount: Math.round(amount * 100) / 100,
+      amount: rounded,
       workDate,
       note,
-      status: 'PENDING',
-      splitTechnicianPercent: 50,
-      splitBossPercent: 50,
-      technicianShare: 0,
-      bossShare: 0,
+      status: 'APPROVED',
+      splitTechnicianPercent: split.technicianPercent,
+      splitBossPercent: split.bossPercent,
+      technicianShare: split.technicianShare,
+      bossShare: split.bossShare,
       submittedAt: nowIso(),
-      reviewedAt: null,
-      reviewedBy: null
+      reviewedAt: nowIso(),
+      reviewedBy: user.id
     };
     db.revenueEntries.unshift(entry);
     saveDb();
@@ -1228,8 +1288,9 @@ const handle = async (req, res) => {
     entry.reviewedAt = nowIso();
     entry.reviewedBy = reviewer.id;
     if (entry.status === 'APPROVED') {
-      entry.technicianShare = Math.round(entry.amount * 0.5 * 100) / 100;
-      entry.bossShare = Math.round(entry.amount * 0.5 * 100) / 100;
+      const split = splitRevenueAmount(entry.amount, entry.splitTechnicianPercent ?? 50);
+      entry.technicianShare = split.technicianShare;
+      entry.bossShare = split.bossShare;
     } else {
       entry.technicianShare = 0;
       entry.bossShare = 0;
