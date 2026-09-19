@@ -1680,10 +1680,10 @@ const route = async (request) => {
   if(method==='POST'&&access){
     const session=await requireActive(request);if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
     const target=await loadUser(access[1]);if(!target)return json(request,{error:'NOT_FOUND'},404);if(target.role_code==='OWNER')return json(request,{error:'OWNER_PROTECTED'},400);
-    const body=await readJson(request);const role=String(body.role||target.role_code||'USER').toUpperCase();const pointIds=Array.isArray(body.pointIds)?body.pointIds.map(String):[];
-    if(!REQUESTABLE_ROLES.has(role))return json(request,{error:'ROLE'},400);if(!GLOBAL_ROLES.has(role)&&pointIds.length===0)return json(request,{error:'POINT_REQUIRED'},400);
-    const client=await pool.connect();try{await client.query('BEGIN');await client.query("UPDATE users SET role_code=$1,status='ACTIVE',updated_at=now() WHERE id=$2",[role,target.id]);await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);if(!GLOBAL_ROLES.has(role))for(const pointId of pointIds)await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK').catch(()=>undefined);throw error;}finally{client.release();}
-    await audit(session.user.id,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds});
+    const body=await readJson(request);const role=String(body.role||target.role_code||'USER').toUpperCase();const pointIds=Array.isArray(body.pointIds)?body.pointIds.map(String):[];const technicianSplitPercent=role==='TECHNICIAN'?normalizeTechnicianPercent(body.technicianSplitPercent):null;
+    if(!REQUESTABLE_ROLES.has(role))return json(request,{error:'ROLE'},400);if(!GLOBAL_ROLES.has(role)&&pointIds.length===0)return json(request,{error:'POINT_REQUIRED'},400);if(role==='TECHNICIAN'&&technicianSplitPercent===null)return json(request,{error:'TECHNICIAN_SPLIT',message:'Ustaw procent rozliczenia serwisanta od 0 do 100%.'},400);
+    const client=await pool.connect();try{await client.query('BEGIN');await client.query("UPDATE users SET role_code=$1,technician_split_percent=CASE WHEN $1='TECHNICIAN' THEN $3 ELSE technician_split_percent END,status='ACTIVE',updated_at=now() WHERE id=$2",[role,target.id,technicianSplitPercent]);await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);if(!GLOBAL_ROLES.has(role))for(const pointId of pointIds)await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK').catch(()=>undefined);throw error;}finally{client.release();}
+    await audit(session.user.id,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent});
     return json(request,await authPayload(await loadUser(target.id)));
   }
 

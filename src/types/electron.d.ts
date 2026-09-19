@@ -104,7 +104,7 @@ declare global {
         updatePointService: (pointId:string,payload:{serviceEnabled:boolean;acceptsExternalRepairs:boolean;externalRepairsPaused?:boolean;serviceNote?:string}) => Promise<AdminPoint>;
         approveUser: (userId:string,payload:{role:UserRole;pointIds:string[];createRequestedPoint?:boolean}) => Promise<unknown>;
         rejectUser: (userId:string) => Promise<unknown>;
-        updateUserAccess: (userId:string,payload:{role:UserRole;pointIds:string[]}) => Promise<unknown>;
+        updateUserAccess: (userId:string,payload:{role:UserRole;pointIds:string[];technicianSplitPercent?:number|null}) => Promise<unknown>;
         blockUser: (userId:string,blocked:boolean,reason?:string) => Promise<AdminUser>;
         logoutUserSessions: (userId:string) => Promise<{ok:true;revoked:number}>;
         logoutAllSessions: (exceptCurrent?:boolean) => Promise<{ok:true;revoked:number;exceptCurrent:boolean}>;
