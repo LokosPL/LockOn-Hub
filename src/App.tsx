@@ -83,6 +83,13 @@ export default function App() {
     } else if (action.type === 'NAVIGATE' && action.target) {
       const target = action.target as NavigationKey;
       if (effectiveRole && roleCanNavigate(effectiveRole, target, auth.supportEnabled === true)) setActive(target);
+    } else if (action.type === 'BROWSER_SEARCH' && action.query) {
+      const query = action.query.trim().slice(0, 180);
+      const url = action.provider === 'YOUTUBE'
+        ? 'https://www.youtube.com/results?search_query=' + encodeURIComponent(query)
+        : 'https://www.google.com/search?q=' + encodeURIComponent(query);
+      setActive('browser');
+      window.setTimeout(() => void window.lockOn.browser.navigate(url), 80);
     }
     setHelpOpen(false);
   };
