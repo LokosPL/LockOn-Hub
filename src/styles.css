@@ -931,3 +931,42 @@ input,textarea,select{line-height:1.45}
   .transfer-mini-history>div{flex-direction:column}
   .transfer-mini-history small{text-align:left}
 }
+
+/* Priority 3: service workflow board */
+.service-workflow-filters{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px;padding:4px}
+.service-workflow-filters button{border:1px solid rgba(255,255,255,.09);background:rgba(255,255,255,.035);color:#aeb6c0;border-radius:12px;padding:8px 11px;display:flex;gap:8px;align-items:center;font:inherit;cursor:pointer;transition:.18s ease}
+.service-workflow-filters button:hover{transform:translateY(-1px);border-color:rgba(255,135,84,.35)}
+.service-workflow-filters button.active{background:rgba(255,135,84,.12);border-color:rgba(255,135,84,.42);color:#f4f6f8}
+.service-workflow-filters button strong{min-width:21px;height:21px;border-radius:999px;display:grid;place-items:center;background:rgba(255,255,255,.07);font-size:11px}
+.service-order-wrap.workflow-overdue{border-color:rgba(255,91,91,.42);box-shadow:inset 3px 0 0 rgba(255,91,91,.8)}
+.service-order-wrap.workflow-due_soon{border-color:rgba(255,183,77,.32);box-shadow:inset 3px 0 0 rgba(255,183,77,.72)}
+.service-order-wrap.workflow-action_now{box-shadow:inset 3px 0 0 rgba(255,135,84,.72)}
+.service-order-wrap.workflow-ready_for_pickup{box-shadow:inset 3px 0 0 rgba(92,210,145,.72)}
+.service-workflow-summary{display:grid;grid-template-columns:minmax(150px,.9fr) minmax(240px,1.5fr) auto;gap:10px;align-items:stretch;margin-top:10px}
+.service-workflow-stage,.service-workflow-next,.service-workflow-attention{border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.025);border-radius:11px;padding:8px 10px}
+.service-workflow-stage span,.service-workflow-next span{display:block;color:#77818d;font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+.service-workflow-stage strong,.service-workflow-next strong{display:block;margin-top:3px;font-size:12px;color:#e9edf2;line-height:1.35}
+.service-workflow-progress{height:4px;background:rgba(255,255,255,.06);border-radius:999px;margin-top:7px;overflow:hidden}
+.service-workflow-progress i{display:block;height:100%;background:linear-gradient(90deg,#ff7541,#ffb067);border-radius:inherit;transition:width .35s ease}
+.service-workflow-attention{display:flex;min-width:130px;flex-direction:column;align-items:flex-end;justify-content:center;text-align:right;color:#c7ced6;font-weight:700;font-size:11px}
+.service-workflow-attention small{font-weight:500;color:#8b96a2;margin-top:3px}
+.service-workflow-attention.overdue{color:#ff8181;background:rgba(255,91,91,.07);border-color:rgba(255,91,91,.2)}
+.service-workflow-attention.due_soon{color:#ffc46b;background:rgba(255,183,77,.06)}
+.service-workflow-attention.action_now{color:#ff9a6f}
+.service-workflow-attention.ready_for_pickup{color:#69d99b}
+@media(max-width:1100px){.service-workflow-summary{grid-template-columns:1fr 1fr}.service-workflow-attention{grid-column:1/-1;align-items:flex-start;text-align:left}}
+@media(max-width:760px){.service-workflow-summary{grid-template-columns:1fr}.service-workflow-attention{grid-column:auto}.service-workflow-filters{overflow-x:auto;flex-wrap:nowrap}.service-workflow-filters button{white-space:nowrap}}
+
+/* Priority 4: technician-driven service points */
+.service-point-auto-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin:8px 0;color:#8f9aa6;font-size:11px}
+.service-point-auto-meta>span{display:inline-flex;gap:5px;align-items:center}
+.service-point-rule{display:block;margin-top:7px;color:#747f8b;line-height:1.45}
+.status-badge.danger{color:#ff8d8d;border-color:rgba(255,91,91,.26);background:rgba(255,91,91,.08)}
+
+/* Priority 5: guarded owner reset */
+.factory-reset-card{border-color:rgba(255,91,91,.18);background:linear-gradient(180deg,rgba(255,91,91,.035),rgba(255,255,255,.015))}
+.factory-reset-warning{display:flex;gap:12px;align-items:flex-start;padding:13px;border-radius:12px;border:1px solid rgba(255,91,91,.18);background:rgba(255,91,91,.055);margin:12px 0 14px;color:#ff9595}
+.factory-reset-warning div{display:flex;flex-direction:column;gap:4px}
+.factory-reset-warning strong{font-size:13px}
+.factory-reset-warning span{font-size:11px;color:#a99191;line-height:1.45}
+
