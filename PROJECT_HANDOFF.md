@@ -614,11 +614,71 @@ Dla każdego priorytetu:
 - Instalator: `LockOn-ServiceOS-Setup.exe`, SHA-256 `b1d804bb20515d92bb84fddb46295c7a95fe669c9193dcd73f83f82b24d4ba3f`; rozmiar 116558278 B. Opublikowane także `latest.yml`, blockmap i `SHA256SUMS.txt`, z build provenance.
 - Tymczasowa gałąź Neon użyta do testu pozostaje nienaruszona; nie usuwano jej autonomicznie.
 
+## Wydanie v0.20.1 — administracja, Wsparcie LockOn, portal klienta i bot serwisowy — 2026-09-19
+
+- Hub PR #47 scalony do `main`: commit `0bd2e312c9be7b6eb6fb347e7f0873104f1f26dd`.
+- Site PR #22 scalony do `lockon-serviceos-site/main`: commit `42f913838d697a7965bfe4d2e7227dae36382e58`.
+- Finalny desktop release PR #48 scalony do `main`: commit `cbf924dfb963de01a4cb41faeb0032f035a5c3c3`.
+- Powód wersji 0.20.1: tag v0.20.0 został opublikowany wcześniej z pośredniego commita, zanim weszła finalna paczka administracji/wsparcia. **Bieżącym wydaniem jest v0.20.1; v0.20.0 traktuj jako pośrednie i nie używaj jako punktu bazowego.**
+- Przed merge funkcjonalnego: Verify ServiceOS #521 SUCCESS, Verify Neon API bundle #16 SUCCESS, CodeQL #263 SUCCESS, Site Verify #165 SUCCESS.
+- Finalny release 0.20.1: Verify ServiceOS #524 SUCCESS przed merge; po merge Verify #525 SUCCESS i CodeQL #266 SUCCESS; release workflow #41 SUCCESS.
+- Publiczne wydanie Windows: **v0.20.1**, opublikowane 2026-09-19T22:37:56Z.
+- Instalator: `LockOn-ServiceOS-Setup.exe`, SHA-256 `cf7c4f500a2cb9015cfab5bcb28965452fcbf80f103503d7bdcd23d1c591a30e`, rozmiar 116568016 B. Są także `latest.yml`, blockmap i `SHA256SUMS.txt`.
+- Produkcyjny backend: Neon `lockonapi` **v32**, deployment completed.
+- Produkcyjny smoke v0.20 SUCCESS: `/health` 200; bez sesji `/me`, `/admin/overview`, `/admin/audit`, `/support/presence`, `/support/tickets`, `/support/conversation`, `POST /support/request`, `POST /assistant/chat`, `/public/customer-portal/me`, losowy `POST /public/customer-portal/login` oraz factory-reset preview zwracają 401. Nie wysyłano żadnego destrukcyjnego POST do factory reset.
+- Produkcyjny schemat v0.20:
+  - `users.support_enabled boolean NOT NULL DEFAULT false`;
+  - `support_conversations.consultant_requested_at`;
+  - `support_conversations.consultant_joined_at`;
+  - `support_messages.metadata jsonb NOT NULL DEFAULT '{}'`;
+  - indeks oczekujących rozmów konsultanta.
+- Zmiana schematu była najpierw sprawdzona na tymczasowej gałęzi Neon `br-frosty-water-b1vljc70`.
+- Pełny temp-Neon E2E `v0.20 admin support temp E2E` run #1 SUCCESS (`V020_ADMIN_SUPPORT_E2E_OK`): OWNER zaakceptował konto, nadał osobne `supportEnabled`, serwisant otrzymał dodatkowe Wsparcie LockOn, bot zwrócił narzędzia `/net` i `/video`, użytkownik poprosił konsultanta, konsultant zobaczył WAITING w presence/tickets, dołączył, odpisał, użytkownik zobaczył JOINED, blokada konta unieważniła sesję, a odblokowanie zadziałało.
+- **Wsparcie LockOn nie jest już główną rolą biznesową.** To dodatkowe uprawnienie `supportEnabled`, które można nadać np. Serwisantowi/Koordynatorowi bez utraty jego głównej roli. Legacy `SUPPORT` pozostaje wspierany dla kompatybilności, ale nowe onboarding/edycja używają głównej roli + osobnego przełącznika Wsparcie LockOn.
+- Desktop Administracja → Konta i uprawnienia:
+  - główna rola i Wsparcie LockOn są rozdzielone;
+  - czytelniejsze karty: nazwa, e-mail, rola, punkty, status, ostatnie logowanie;
+  - blokada/odblokowanie jest jednoznaczna; blokada unieważnia aktywne sesje;
+  - bot może otworzyć konkretne konto OWNER przez akcję `OPEN_USER`.
+- Panel WWW/PWA OWNER:
+  - pokazuje sekcję oczekujących wniosków i pozwala zaakceptować konto z telefonu;
+  - pozwala edytować rolę, punkty, procent serwisanta i osobne Wsparcie LockOn;
+  - pozwala blokować/odblokowywać konto i wylogowywać jego urządzenia;
+  - Site deploy Pages #90 SUCCESS;
+  - cache PWA: `serviceos-shell-v17`.
+- Wsparcie / konsultant:
+  - użytkownik domyślnie rozmawia prywatnie z botem;
+  - konsultant nie widzi treści bot-only rozmowy;
+  - użytkownik wybiera „Poproś konsultanta”, rozmowa przechodzi w WAITING;
+  - uprawniony konsultant widzi aktywnych użytkowników i kolejkę tylko w swoim zakresie punktów, chyba że ma zakres globalny;
+  - po `take` rozmowa przechodzi w JOINED, bot przestaje automatycznie odpowiadać i użytkownik pisze do konsultanta w tym samym wątku;
+  - create/take/reply/close pozostają audytowane.
+- Bot ServiceOS został rozszerzony o akcje aplikacji:
+  - `OPEN_ORDER` — otwiera konkretne zlecenie;
+  - `OPEN_USER` — dla OWNER otwiera konkretne konto;
+  - `NAVIGATE` — przechodzi do właściwego modułu;
+  - `BROWSER_SEARCH` — bezpiecznie otwiera wyszukiwanie materiałów;
+  - `SPEED_TEST` / komenda `/net` — lokalnie mierzy opóźnienie, pobieranie i upload przez `speed.cloudflare.com`;
+  - `CONNECTIVITY_TEST` / `/diag` — sprawdza internet + centralne API + wersję/platformę desktopu;
+  - `/video` / naturalne prośby o film — otwierają wyszukiwanie YouTube dla konkretnego modelu/czynności;
+  - `/web` — wyszukuje instrukcje serwisowe, manuale/schematy/datasheet;
+  - bot zna też audyt, blokady/uprawnienia, przekazania, rozliczenia, Gmail, wsparcie i ustawienia.
+- Desktop wykonuje test internetu przez zaufane IPC w main processie; panel WWW/PWA wykonuje analogiczny pomiar w przeglądarce. Narzędzia są dostępne przez bota, nie są wymagane w głównej nawigacji.
+- E-mail klienta:
+  - każdy przetwarzany service e-mail próbuje pobrać/utworzyć stałą tożsamość portalu klienta;
+  - jeżeli jest dostępna, HTML i wersja tekstowa zawierają stały kod klienta + link do prywatnego portalu, nie tylko przy pierwszym utworzeniu kodu;
+  - dzięki temu klient z istniejącym kodem również widzi go w kolejnych wiadomościach.
+- Portal klienta:
+  - po zalogowaniu pokazuje `customerPortalCode` w osobnej karcie z akcją kopiowania i linkiem portalu;
+  - publiczna karta śledzenia z pojedynczego tokenu ma tylko bezpieczne przejście „Otwórz portal klienta” i **nie ujawnia stałego kodu** — kod daje dostęp do całej historii i nie wolno go wyciągać z publicznego linku jednego zlecenia.
+- Aktualna produkcja po migracji ma OWNER, TECHNICIAN i USER; nie zmieniano produkcyjnym testem żadnej roli ani blokady prawdziwego konta.
+- Tymczasowe gałęzie Neon/GitHub używane do E2E nie zostały autonomicznie usunięte. Ich usunięcie traktuj jako operację destrukcyjną wymagającą osobnego potwierdzenia.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
 2. Sprawdź aktualny `main`, latest release, otwarte PR-y i wszystkie aktywne workflow w obu repozytoriach.
 3. Sprawdź Neon: projekt `wandering-field-13057181`, produkcyjną gałąź `br-steep-bonus-b1f1qh8u`, bazę `lockon`, aktywny deployment `lockonapi` oraz schemat.
-4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to v0.19.0. Nie rozpoczynaj historycznych priorytetów ponownie.
+4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to **v0.20.1**, produkcyjny backend to **lockonapi v32**, a strona/PWA jest po Site PR #22 / Pages #90. Nie rozpoczynaj historycznych priorytetów ponownie.
 5. Przy kolejnej pracy najpierw sprawdź nowe wymagania użytkownika, aktualny main/release/Neon i dopiero utwórz następny backlog lub poprawkę.
 6. Pracuj samodzielnie przez GitHub i Neon; nie proś użytkownika o informacje, które można sprawdzić narzędziami.
