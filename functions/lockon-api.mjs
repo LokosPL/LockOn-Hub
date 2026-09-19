@@ -1826,7 +1826,21 @@ const route = async (request) => {
         "'users',(SELECT count(*) FROM users)," +
         "'service_orders',(SELECT count(*) FROM service_orders)," +
         "'service_order_transfers',(SELECT count(*) FROM service_order_transfers)," +
+        "'service_order_notes',(SELECT count(*) FROM service_order_notes)," +
+        "'service_order_status_history',(SELECT count(*) FROM service_order_status_history)," +
         "'customers',(SELECT count(*) FROM customers)," +
+        "'devices',(SELECT count(*) FROM devices)," +
+        "'revenue_entries',(SELECT count(*) FROM revenue_entries)," +
+        "'settlements',(SELECT count(*) FROM settlements)," +
+        "'point_email_senders',(SELECT count(*) FROM point_email_senders)," +
+        "'point_notification_settings',(SELECT count(*) FROM point_notification_settings)," +
+        "'support_conversations',(SELECT count(*) FROM support_conversations)," +
+        "'support_messages',(SELECT count(*) FROM support_messages)," +
+        "'website_auth_codes',(SELECT count(*) FROM website_auth_codes)," +
+        "'access_requests',(SELECT count(*) FROM access_requests)," +
+        "'user_point_access',(SELECT count(*) FROM user_point_access)," +
+        "'notification_outbox',(SELECT count(*) FROM notification_outbox)," +
+        "'audit_log',(SELECT count(*) FROM audit_log)," +
         "'auth_sessions',(SELECT count(*) FROM auth_sessions)" +
         ") AS counts"
       )).rows[0]?.counts||{};
@@ -2224,7 +2238,7 @@ const route = async (request) => {
   if(method==='POST'&&statusMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
-    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500);
+    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500),actingPointId=cleanText(body.actingPointId,80);
     if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
 
     const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
@@ -2240,6 +2254,12 @@ const route = async (request) => {
     if(next!==found.status){
       if(!effectiveCurrentPointId){
         return json(request,{error:'DEVICE_LOCATION_UNKNOWN',message:'Nie można zmienić statusu, dopóki lokalizacja urządzenia nie jest potwierdzona.'},409);
+      }
+      if(GLOBAL_ROLES.has(u.role_code)&&!actingPointId){
+        return json(request,{error:'ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt, z którego wykonujesz zmianę statusu.'},409);
+      }
+      if(actingPointId&&actingPointId!==effectiveCurrentPointId){
+        return json(request,{error:'WRONG_ACTIVE_POINT',message:'Status może zmienić tylko punkt, w którym fizycznie znajduje się urządzenie.'},409);
       }
       await requirePoint(u,effectiveCurrentPointId);
     }
