@@ -699,6 +699,22 @@ Dla każdego priorytetu:
 - Cache PWA podniesiony do `serviceos-shell-v19`.
 - Brak zmian backendu, bazy, ról, sesji i uprawnień. Produkcyjny Neon pozostaje `lockonapi` v32, publiczny desktop pozostaje v0.20.1.
 
+## Finalny polish całego WWW + logowanie pracownika tylko kodem — 2026-09-20
+
+- Site PR #25 scalony do `lockon-serviceos-site/main`: commit `760bdcb809f94fcc61dbb09ccd9eb9d7e1d2e268`.
+- Finalny Verify gałęzi #184 SUCCESS, Verify PR #185 SUCCESS, Verify po merge na `main` #186 SUCCESS; GitHub Pages deploy #93 SUCCESS.
+- Publiczna strona pracownika nie oferuje już logowania Google. Połączenie/logowanie panelu WWW pracownika odbywa się wyłącznie jednorazowym kodem z aplikacji Windows przez istniejący endpoint `/website/redeem`.
+- Modal połączenia telefonu został całkowicie uproszczony: jedna ścieżka, instrukcja 1–2–3, automatyczne formatowanie `ABCD-EFGH`, przycisk aktywny dopiero po pełnym kodzie, czytelne stany błędu i usuwanie `?login=1` z adresu po otwarciu.
+- Usunięto z publicznej strony przycisk Google Identity, separator „lub”, dodatkowy stan konta Google oraz zależności CSP od `accounts.google.com`.
+- Header strony pracownika został skrócony do prostych linków „Jak działa”, „Aplikacja”, „Telefon” oraz głównych akcji Panel/Pobierz; na mobile linki są pokazane jako małe przewijane chipy.
+- Dodano wspólną końcową warstwę `assets/web-polish.css`, która dopracowuje landing page, panel pracownika, portal klienta, publiczną kartę zlecenia i strony prawne.
+- Panel pracownika na telefonie ma floating bottom navigation, większe touch targety, spokojniejsze karty i formularze, lepszy sticky header oraz ujednolicone dialogi/toasty. Desktop zachowuje boczną nawigację, ale w odświeżonym stylu.
+- Portal klienta ma nowy ekran wejścia: dwukolumnowy na desktopie i jednokolumnowy na mobile, prostsze wyjaśnienie możliwości portalu, wyraźniejszy formularz kodu oraz spójną hierarchię sekcji po zalogowaniu.
+- Publiczna karta pojedynczego zlecenia oraz `privacy.html`, `terms.html`, `signing.html` zostały wizualnie ujednolicone z resztą ServiceOS.
+- Polityka prywatności i regulamin jasno opisują, że aplikacja Windows może używać Google do identyfikacji pracownika, ale panel WWW pracownika jest łączony wyłącznie jednorazowym kodem z aplikacji.
+- Cache PWA podniesiony do `serviceos-shell-v20` i zawiera `assets/web-polish.css`.
+- Brak zmian backendu, schematu DB, ról, uprawnień i endpointów. Produkcyjny Neon nadal ma aktywny `lockonapi` deployment v32, publiczny desktop nadal v0.20.1.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
