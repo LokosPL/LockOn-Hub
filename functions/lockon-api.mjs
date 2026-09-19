@@ -1442,6 +1442,80 @@ const assistantReply = async (session, message) => {
   const user = session.user;
   const lower = message.toLocaleLowerCase('pl-PL');
   const navAction = (target, label) => ({ type:'NAVIGATE', target, label });
+  const cleanSearchQuery = (value) => cleanText(String(value || '')
+    .replace(/^\s*\/(video|film|szukaj|web|net|diag)\b/iu,' ')
+    .replace(/\b(znajdź|znajdz|wyszukaj|pokaż|pokaz|film|filmy|wideo|video|youtube|tutorial|poradnik|instrukcja|instrukcję|instrukcje|jak zrobić|jak zrobic|jak naprawić|jak naprawic)\b/giu,' ')
+    .replace(/\s+/g,' ')
+    .trim(),180);
+
+  if (
+    /^\s*\/net\b/i.test(message) ||
+    lower.includes('test internetu') ||
+    lower.includes('test prędkości') ||
+    lower.includes('test predkosci') ||
+    lower.includes('prędkość internetu') ||
+    lower.includes('predkosc internetu') ||
+    lower.includes('speedtest') ||
+    lower.includes('speed test')
+  ) {
+    return {
+      text:'Uruchamiam lokalny test łącza na tym urządzeniu. Zmierzę opóźnienie, pobieranie i — jeśli serwer testowy pozwoli — wysyłanie. Wynik dotyczy komputera, na którym działa ServiceOS.',
+      action:{type:'SPEED_TEST',label:'Uruchom test internetu'}
+    };
+  }
+
+  if (
+    /^\s*\/diag\b/i.test(message) ||
+    lower.includes('diagnostyka połączenia') ||
+    lower.includes('diagnostyka polaczenia') ||
+    lower.includes('sprawdź połączenie') ||
+    lower.includes('sprawdz polaczenie') ||
+    lower.includes('czy api działa') ||
+    lower.includes('czy api dziala') ||
+    lower.includes('nie łączy z serviceos') ||
+    lower.includes('nie laczy z serviceos')
+  ) {
+    return {
+      text:'Sprawdzę z tego urządzenia dostęp do internetu i centralnego API ServiceOS oraz pokażę opóźnienia, wersję aplikacji i platformę. To pomaga odróżnić problem z siecią od problemu z usługą.',
+      action:{type:'CONNECTIVITY_TEST',label:'Uruchom diagnostykę'}
+    };
+  }
+
+  const wantsVideo =
+    /^\s*\/(video|film)\b/i.test(message) ||
+    lower.includes('youtube') ||
+    lower.includes('film jak') ||
+    lower.includes('wideo jak') ||
+    lower.includes('video jak') ||
+    lower.includes('tutorial') ||
+    (lower.includes('film') && (lower.includes('napraw') || lower.includes('wymieni') || lower.includes('rozebra') || lower.includes('złoży') || lower.includes('zlozy')));
+  if (wantsVideo) {
+    const query = cleanSearchQuery(message);
+    if (query.length < 3) {
+      return { text:'Podaj urządzenie i czynność, np. „film jak wymienić ekran iPhone 15”, „/video Samsung S24 USB-C replacement” albo „YouTube MacBook A2338 battery replacement”.' };
+    }
+    return {
+      text:'Przygotowałem wyszukiwanie filmów instruktażowych dla: „'+query+'”. Otworzę wyniki w przeglądarce ServiceOS, żebyś mógł wybrać materiał pasujący do dokładnej wersji urządzenia.',
+      action:{type:'BROWSER_SEARCH',provider:'YOUTUBE',query,label:'Znajdź filmy na YouTube'}
+    };
+  }
+
+  const wantsWebGuide =
+    /^\s*\/web\b/i.test(message) ||
+    lower.includes('instrukcja serwisowa') ||
+    lower.includes('service manual') ||
+    lower.includes('schemat płyty') ||
+    lower.includes('schemat plyty') ||
+    lower.includes('datasheet') ||
+    lower.includes('manual serwisowy');
+  if (wantsWebGuide) {
+    const query = cleanSearchQuery(message) || cleanText(message.replace(/^\s*\/web\b/i,''),180);
+    if (query.length < 3) return { text:'Podaj model urządzenia i czego szukasz, np. „service manual ThinkPad T14 Gen 4” albo „schemat płyty iPhone 13 charging”.' };
+    return {
+      text:'Otworzę wyszukiwanie materiałów technicznych dla: „'+query+'”. Sprawdź zgodność modelu i rewizji płyty przed użyciem instrukcji.',
+      action:{type:'BROWSER_SEARCH',provider:'WEB',query,label:'Szukaj materiałów technicznych'}
+    };
+  }
 
   if (lower.includes('audyt') || lower.includes('dziennik działa') || lower.includes('kto zmieni')) {
     if (user.role_code !== 'OWNER') return { text:'Audyt jest dostępny właścicielowi systemu. Jeżeli potrzebujesz sprawdzić konkretną zmianę w swoim zleceniu, podaj numer zlecenia.', action:navAction('support','Otwórz pomoc') };
@@ -1642,7 +1716,7 @@ const assistantReply = async (session, message) => {
   }
   if (best) return { text: best.body };
 
-  return { text: 'Mogę pomóc w obsłudze ServiceOS, wyszukać klienta lub zlecenie w Twoim zakresie, sprawdzić historię statusów i notatki oraz wygenerować jednorazowy kod logowania na stronę. Napisz np. "historia klienta Kowalski", "zlecenie 123 statusy", "zlecenie 123 notatki" albo "kod do strony".' };
+  return { text: 'Mogę pomóc w codziennej pracy serwisu i w ServiceOS: wyszukać klienta lub zlecenie w Twoim zakresie, sprawdzić historię i notatki, otworzyć właściwy ekran, wyjaśnić przekazania, rozliczenia, Gmail i uprawnienia, przetestować internet i połączenie z API oraz znaleźć filmy albo materiały techniczne do naprawy. Przykłady: „zlecenie 123 statusy”, „historia klienta Kowalski”, „test internetu”, „diagnostyka połączenia”, „film jak wymienić ekran iPhone 15”, „service manual ThinkPad T14”.' };
 };
 
 const route = async (request) => {
