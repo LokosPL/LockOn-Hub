@@ -684,6 +684,14 @@ const registerIpc = () => {
       body: JSON.stringify({ message: String(message ?? '').trim().slice(0, 1500) })
     }, token);
   });
+  secureHandle('support:request', async (pointId?: string, message?: string) => {
+    const token = requireSessionToken();
+    return backendRequest('/support/request', { method:'POST', body:JSON.stringify({pointId:String(pointId ?? '').trim().slice(0,80),message:String(message ?? '').trim().slice(0,1500)}) }, token);
+  });
+  secureHandle('support:listTickets', async () => backendRequest('/support/tickets', {}, requireSessionToken()));
+  secureHandle('support:take', async (ticketId: string) => backendRequest('/support/tickets/' + encodeURIComponent(safeId(ticketId,'sup')) + '/take', {method:'POST',body:'{}'}, requireSessionToken()));
+  secureHandle('support:reply', async (ticketId: string, message: string) => backendRequest('/support/tickets/' + encodeURIComponent(safeId(ticketId,'sup')) + '/reply', {method:'POST',body:JSON.stringify({message:String(message ?? '').trim().slice(0,2000)})}, requireSessionToken()));
+  secureHandle('support:close', async (ticketId: string) => backendRequest('/support/tickets/' + encodeURIComponent(safeId(ticketId,'sup')) + '/close', {method:'POST',body:'{}'}, requireSessionToken()));
   secureHandle('website:createAuthCode', async () => {
     const token = requireSessionToken();
     return backendRequest('/website/auth-code', { method: 'POST', body: '{}' }, token);
