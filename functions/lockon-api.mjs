@@ -909,6 +909,19 @@ const loadActiveMailSender = async (pointId) => {
   return sender;
 };
 
+const recoverNoSenderNotifications = async (pointId) => {
+  const { rows } = await q(
+    "UPDATE notification_outbox n SET status='PENDING',attempts=0,last_error=NULL,available_at=now(),updated_at=now() FROM service_orders s WHERE n.service_order_id=s.id AND s.point_id=$1 AND n.status='FAILED' AND n.last_error='Brak aktywnego, kompletnego nadawcy Gmail dla punktu.' RETURNING n.id",
+    [pointId]
+  );
+  let sent = 0;
+  for (const row of rows) {
+    const result = await processNotification(row.id);
+    if (result?.sent) sent += 1;
+  }
+  return { recovered: rows.length, sent };
+};
+
 const mailSettingsForPoint = async (pointId) => {
   const row = (await q(
     "SELECT automatic_email_enabled,notify_statuses,sender_display_name,footer_text FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
@@ -1152,9 +1165,6 @@ const queueTransferNotification = async (actor, orderId, transfer, transferStatu
 
     const settings = await mailSettingsForPoint(orderData.point_id);
     if (settings.automatic_email_enabled !== true) return { queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED' };
-
-    const sender = await loadActiveMailSender(orderData.point_id);
-    if (!sender) return { queued:false,sent:false,reason:'NO_SENDER' };
 
     const notificationId = makeId('ntf');
     await q(
@@ -2527,16 +2537,12 @@ const route = async (request) => {
     try{
       const customer=(await q('SELECT email FROM customers WHERE id=$1',[found.customer_id])).rows[0];
       const settings=await mailSettingsForPoint(found.point_id);
-      const senderReady=Boolean(await loadActiveMailSender(found.point_id));
-
       if(!customer?.email){
         notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
       }else if(settings.automatic_email_enabled!==true){
         notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
       }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes(next)){
         notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
-      }else if(!senderReady){
-        notification={queued:false,sent:false,reason:'NO_SENDER'};
       }else{
         const nid=makeId('ntf');
         await q(
@@ -2834,8 +2840,13 @@ const route = async (request) => {
       "INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
       [pointId,u.id,profile.email,encryptSecret(String(tokens.refresh_token))]
     );
-    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER'});
-    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE'});
+    await q(
+      "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,updated_by_user_id,updated_at) VALUES($1,true,$2::text[],'LockOn ServiceOS',$3,now()) ON CONFLICT(point_id) DO NOTHING",
+      [pointId,[...DEFAULT_NOTIFY_STATUSES],u.id]
+    );
+    const recovery=await recoverNoSenderNotifications(pointId);
+    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
   }
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/connect'){
@@ -2848,9 +2859,14 @@ const route = async (request) => {
     await refreshGmailAccess(refreshToken,clientSecret);
 
     await q("INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",[pointId,u.id,profile.email,encryptSecret(refreshToken),encryptSecret(clientSecret)]);
+    await q(
+      "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,updated_by_user_id,updated_at) VALUES($1,true,$2::text[],'LockOn ServiceOS',$3,now()) ON CONFLICT(point_id) DO NOTHING",
+      [pointId,[...DEFAULT_NOTIFY_STATUSES],u.id]
+    );
+    const recovery=await recoverNoSenderNotifications(pointId);
 
-    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN'});
-    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE'});
+    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
   }
 
   if(method==='DELETE'&&url.pathname==='/integrations/gmail'){
