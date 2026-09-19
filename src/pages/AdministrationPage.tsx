@@ -41,7 +41,8 @@ export function AdministrationPage() {
   const [query, setQuery] = useState('');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, { role: UserRole; pointIds: string[]; useRequested: boolean }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null }>>({});
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [pointForm, setPointForm] = useState({ name:'', city:'', serviceEnabled:false, acceptsExternalRepairs:false, serviceNote:'' });
 
   const load = async (silent = false) => {
@@ -66,18 +67,19 @@ export function AdministrationPage() {
 
   const draftFor = (user: AdminUser) => {
     if (user.role === 'OWNER') {
-      return drafts[user.id] ?? { role: 'OWNER' as UserRole, pointIds: [], useRequested: false };
+      return drafts[user.id] ?? { role: 'OWNER' as UserRole, pointIds: [], useRequested: false, technicianSplitPercent: null };
     }
     const requestedRole = user.requestedPoint?.requestedRole;
     const suggestedRole = requestedRole && requestedRole !== 'OWNER' ? requestedRole : 'USER';
     return drafts[user.id] ?? {
       role: (user.role ?? suggestedRole) as UserRole,
       pointIds: user.pointIds ?? [],
-      useRequested: Boolean(user.requestedPoint) && suggestedRole !== 'BOSS'
+      useRequested: Boolean(user.requestedPoint) && suggestedRole !== 'BOSS',
+      technicianSplitPercent: user.technicianSplitPercent ?? user.requestedPoint?.technicianSplitPercent ?? 50
     };
   };
 
-  const patchDraft = (user: AdminUser, patch: Partial<{ role: UserRole; pointIds: string[]; useRequested: boolean }>) => {
+  const patchDraft = (user: AdminUser, patch: Partial<{ role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null }>) => {
     setDrafts((current) => ({ ...current, [user.id]: { ...draftFor(user), ...patch } }));
   };
 
@@ -114,7 +116,8 @@ export function AdministrationPage() {
     const draft = draftFor(user);
     setBusy(true); setNotice('');
     try {
-      await window.lockOn.admin.updateUserAccess(user.id, { role: draft.role, pointIds: draft.pointIds });
+      await window.lockOn.admin.updateUserAccess(user.id, { role: draft.role, pointIds: draft.pointIds, technicianSplitPercent: draft.role === 'TECHNICIAN' ? draft.technicianSplitPercent : null });
+      setEditingUserId(null);
       setNotice(`Zapisano rolę i dostęp dla ${user.email}.`);
       await load(true);
     } catch (error) {
