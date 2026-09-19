@@ -1,0 +1,46 @@
+name: Prepare production Neon payload
+
+on:
+  push:
+    paths:
+      - ".github/workflows/temp-prod-neon-payload.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  payload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.ref_name }}
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: Build compact Neon bundle
+        run: |
+          npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 esbuild@0.25.12
+          mkdir -p tmp/function-payload
+          npx esbuild functions/lockon-api.mjs \
+            --bundle \
+            --minify \
+            --platform=node \
+            --target=node24 \
+            --format=esm \
+            --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" \
+            --outfile=tmp/function-payload/index.mjs
+          cd tmp/function-payload
+          zip -9 -q ../lockonapi-prod.zip index.mjs
+          cd ../..
+          base64 -w0 tmp/lockonapi-prod.zip > tmp/lockonapi-prod.b64
+      - name: Commit temporary payload
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f tmp/lockonapi-prod.b64
+          git commit -m "chore: prepare production Neon payload" || exit 0
+          git push origin "HEAD:${GITHUB_REF_NAME}"
