@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
+  AlertTriangle,
   Ban,
   Building2,
   CheckCircle2,
@@ -11,6 +12,7 @@ import {
   Search,
   ShieldCheck,
   Smartphone,
+  Trash2,
   UserCheck,
   UsersRound,
   Wrench,
@@ -40,7 +42,7 @@ export function AdministrationPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [drafts, setDrafts] = useState<Record<string, { role: UserRole; pointIds: string[]; useRequested: boolean }>>({});
-  const [pointForm, setPointForm] = useState({ name:'', city:'', serviceEnabled:true, acceptsExternalRepairs:true, serviceNote:'' });
+  const [pointForm, setPointForm] = useState({ name:'', city:'', serviceEnabled:false, acceptsExternalRepairs:false, serviceNote:'' });
 
   const load = async (silent = false) => {
     if (!silent) setBusy(true);
@@ -166,12 +168,18 @@ export function AdministrationPage() {
     } finally { setBusy(false); }
   };
 
-  const updatePointService = async (point: AdminPoint, serviceEnabled: boolean, acceptsExternalRepairs: boolean) => {
+  const updatePointService = async (
+    point: AdminPoint,
+    serviceEnabled: boolean,
+    acceptsExternalRepairs: boolean,
+    externalRepairsPaused = point.externalRepairsPaused === true
+  ) => {
     setBusy(true); setNotice('');
     try {
       await window.lockOn.admin.updatePointService(point.id, {
         serviceEnabled,
         acceptsExternalRepairs: serviceEnabled && acceptsExternalRepairs,
+        externalRepairsPaused,
         serviceNote: point.serviceNote || ''
       });
       setNotice(`Zapisano konfigurację serwisu dla ${point.name}.`);
@@ -189,12 +197,39 @@ export function AdministrationPage() {
     setBusy(true); setNotice('');
     try {
       await window.lockOn.admin.createPoint(pointForm);
-      setPointForm({ name:'', city:'', serviceEnabled:true, acceptsExternalRepairs:true, serviceNote:'' });
+      setPointForm({ name:'', city:'', serviceEnabled:false, acceptsExternalRepairs:false, serviceNote:'' });
       setNotice('Nowy punkt został utworzony.');
       await load(true);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Nie udało się utworzyć punktu.');
     } finally { setBusy(false); }
+  };
+
+  const factoryReset = async () => {
+    if (!window.confirm('Factory reset usunie WSZYSTKIE dane biznesowe, punkty, klientów, zlecenia, użytkowników i sesje. Schemat, migracje i konfiguracja systemowa pozostaną. Kontynuować do ponownego logowania Google?')) return;
+    setBusy(true); setNotice('');
+    try {
+      const auth = await window.lockOn.auth.loginGoogle();
+      if (!auth.authenticated || auth.role !== 'OWNER') throw new Error('Ponowne logowanie OWNER nie zostało potwierdzone.');
+      const phrase = window.prompt('Wpisz dokładnie frazę:\n\nUSUŃ WSZYSTKIE DANE');
+      if (phrase === null) return;
+      if (phrase !== 'USUŃ WSZYSTKIE DANE') {
+        setNotice('Reset anulowany: fraza potwierdzająca nie jest identyczna.');
+        return;
+      }
+      if (!window.confirm('OSTATECZNE POTWIERDZENIE\n\nPo kliknięciu OK dane zostaną nieodwracalnie wyczyszczone. Zostaniesz wylogowany i OWNER będzie musiał zalogować się ponownie.')) return;
+      const result = await window.lockOn.admin.factoryReset({
+        phrase,
+        confirmed:true,
+        reason:'Factory reset uruchomiony przez OWNER z aplikacji desktop'
+      });
+      setNotice(`Factory reset zakończony. Id: ${result.resetId}. Aplikacja zostanie przeładowana.`);
+      window.setTimeout(() => window.location.reload(), 900);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Factory reset nie został wykonany.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const normalizedQuery = query.trim().toLowerCase();
@@ -344,6 +379,17 @@ export function AdministrationPage() {
               {blockedUsers.length===0 && <div className="empty-admin">Brak zablokowanych kont.</div>}
             </div>
           </section>
+
+          <section className="panel-card admin-section factory-reset-card">
+            <div className="panel-heading">
+              <div><span className="eyebrow"><AlertTriangle size={13}/> STREFA NIEBEZPIECZNA</span><h2>Factory reset danych ServiceOS</h2><p>Usuwa dane biznesowe, punkty, klientów, urządzenia, zlecenia, użytkowników i sesje. Zachowuje schemat, migracje, role, wiedzę systemową oraz trwały dziennik resetów.</p></div>
+            </div>
+            <div className="factory-reset-warning">
+              <Trash2 size={20}/>
+              <div><strong>Operacja nieodwracalna</strong><span>Wymaga świeżego logowania Google OWNER, dokładnej frazy „USUŃ WSZYSTKIE DANE” i drugiego potwierdzenia.</span></div>
+            </div>
+            <button className="button danger-soft" disabled={busy} onClick={()=>void factoryReset()}><Trash2 size={15}/> Wymaż całą bazę danych biznesowych</button>
+          </section>
         </div>
       )}
 
@@ -354,8 +400,19 @@ export function AdministrationPage() {
             <div className="service-point-admin-list">
               {(data?.points ?? []).map((point)=><article key={point.id}>
                 <div className="service-point-admin-title"><Building2 size={17}/><div><strong>{point.name}</strong><span>{point.city}</span></div></div>
-                <label><input type="checkbox" checked={point.serviceEnabled===true} onChange={(e)=>void updatePointService(point,e.target.checked,e.target.checked ? point.acceptsExternalRepairs===true : false)}/><span>Ma własny serwis</span></label>
-                <label><input type="checkbox" disabled={!point.serviceEnabled} checked={point.acceptsExternalRepairs===true} onChange={(e)=>void updatePointService(point,true,e.target.checked)}/><span>Przyjmuje naprawy z innych punktów</span></label>
+                <div className="service-point-auto-meta">
+                  <span><Wrench size={13}/> Aktywni technicy: <strong>{point.activeTechnicianCount ?? 0}</strong></span>
+                  {point.autoServiceEnabled && <span className="status-badge">Automatyczny cel przekazania</span>}
+                  {point.externalRepairsPaused && <span className="status-badge danger">Przyjęcia wstrzymane</span>}
+                </div>
+                <label><input type="checkbox" checked={point.manualServiceEnabled===true} onChange={(e)=>void updatePointService(point,e.target.checked,e.target.checked ? point.manualAcceptsExternalRepairs===true : false)}/><span>Ręczny wyjątek: punkt działa jako serwis także bez technika</span></label>
+                <label><input type="checkbox" disabled={!point.manualServiceEnabled} checked={point.manualAcceptsExternalRepairs===true} onChange={(e)=>void updatePointService(point,true,e.target.checked)}/><span>Ręczny wyjątek: przyjmuj przekazania bez aktywnego technika</span></label>
+                <label><input type="checkbox" checked={point.externalRepairsPaused===true} onChange={(e)=>void updatePointService(point,point.manualServiceEnabled===true,point.manualAcceptsExternalRepairs===true,e.target.checked)}/><span>Wstrzymaj nowe przekazania do tego punktu</span></label>
+                <small className="service-point-rule">{point.activeTechnicianCount
+                  ? 'Aktywny TECHNICIAN automatycznie udostępnia punkt jako cel przekazania. Wstrzymanie ma pierwszeństwo.'
+                  : point.acceptsExternalRepairs
+                    ? 'Punkt jest dostępny dzięki ręcznej konfiguracji OWNER.'
+                    : 'Brak aktywnego TECHNICIAN — punkt nie przyjmuje nowych przekazań.'}</small>
               </article>)}
             </div>
           </section>
@@ -365,8 +422,8 @@ export function AdministrationPage() {
             <div className="service-form-grid">
               <label><span>Nazwa</span><input value={pointForm.name} onChange={(e)=>setPointForm({...pointForm,name:e.target.value})} placeholder="np. Serwis Szczecin"/></label>
               <label><span>Miasto</span><input value={pointForm.city} onChange={(e)=>setPointForm({...pointForm,city:e.target.value})}/></label>
-              <label className="full check-line"><input type="checkbox" checked={pointForm.serviceEnabled} onChange={(e)=>setPointForm({...pointForm,serviceEnabled:e.target.checked,acceptsExternalRepairs:e.target.checked?pointForm.acceptsExternalRepairs:false})}/><span>To miejsce ma serwis</span></label>
-              <label className="full check-line"><input type="checkbox" disabled={!pointForm.serviceEnabled} checked={pointForm.acceptsExternalRepairs} onChange={(e)=>setPointForm({...pointForm,acceptsExternalRepairs:e.target.checked})}/><span>Przyjmuje zlecenia z innych punktów</span></label>
+              <label className="full check-line"><input type="checkbox" checked={pointForm.serviceEnabled} onChange={(e)=>setPointForm({...pointForm,serviceEnabled:e.target.checked,acceptsExternalRepairs:e.target.checked?pointForm.acceptsExternalRepairs:false})}/><span>Ręczny serwis bez aktywnego TECHNICIAN</span></label>
+              <label className="full check-line"><input type="checkbox" disabled={!pointForm.serviceEnabled} checked={pointForm.acceptsExternalRepairs} onChange={(e)=>setPointForm({...pointForm,acceptsExternalRepairs:e.target.checked})}/><span>Ręcznie przyjmuj przekazania bez aktywnego TECHNICIAN</span></label>
               <label className="full"><span>Notatka wewnętrzna</span><textarea rows={3} value={pointForm.serviceNote} onChange={(e)=>setPointForm({...pointForm,serviceNote:e.target.value})} placeholder="Np. serwis płyt głównych i mikrolutowanie"/></label>
             </div>
             <button className="button primary" disabled={busy} onClick={()=>void createPoint()}><Building2 size={15}/> Dodaj lokalizację</button>

@@ -28,7 +28,8 @@ contextBridge.exposeInMainWorld('lockOn', {
     updateUserAccess: (userId: string, payload: unknown) => ipcRenderer.invoke('admin:updateUserAccess', userId, payload),
     blockUser: (userId: string, blocked: boolean, reason?: string) => ipcRenderer.invoke('admin:blockUser', userId, blocked, reason),
     logoutUserSessions: (userId: string) => ipcRenderer.invoke('admin:logoutUserSessions', userId),
-    logoutAllSessions: (exceptCurrent = true) => ipcRenderer.invoke('admin:logoutAllSessions', exceptCurrent)
+    logoutAllSessions: (exceptCurrent = true) => ipcRenderer.invoke('admin:logoutAllSessions', exceptCurrent),
+    factoryReset: (payload: unknown) => ipcRenderer.invoke('admin:factoryReset', payload)
   },
   finance: {
     list: () => ipcRenderer.invoke('finance:list'),

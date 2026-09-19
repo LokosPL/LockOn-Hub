@@ -77,6 +77,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const [tab, setTab] = useState<'NEW' | 'ORDERS' | 'TRANSFERS' | 'EMAILS'>('NEW');
   const [form, setForm] = useState(emptyForm);
   const [query, setQuery] = useState('');
+  const [orderFilter, setOrderFilter] = useState('ALL');
   const [matches, setMatches] = useState<ServiceCustomer[]>([]);
   const [orders, setOrders] = useState<ServiceOrderSummary[]>([]);
   const [busy, setBusy] = useState(false);
@@ -121,6 +122,22 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     gmail &&
     !gmail.connected &&
     (gmailState === 'NOT_CONNECTED' || gmailState === 'REAUTH_REQUIRED')
+  );
+
+  const workflowFilters = useMemo(() => [
+    {code:'ALL',label:'Wszystkie',count:orders.length},
+    {code:'ACTION_NOW',label:'Wymaga działania teraz',count:orders.filter((order)=>order.workflow?.flags.includes('ACTION_NOW')).length},
+    {code:'DUE_SOON',label:'Kończy się termin',count:orders.filter((order)=>order.workflow?.flags.includes('DUE_SOON')).length},
+    {code:'OVERDUE',label:'Po terminie',count:orders.filter((order)=>order.workflow?.flags.includes('OVERDUE')).length},
+    {code:'IN_TRANSIT',label:'W drodze',count:orders.filter((order)=>order.workflow?.flags.includes('IN_TRANSIT')).length},
+    {code:'WAITING_SERVICE',label:'Czeka na serwis',count:orders.filter((order)=>order.workflow?.flags.includes('WAITING_SERVICE')).length},
+    {code:'WAITING_PARTS',label:'Czeka na części',count:orders.filter((order)=>order.workflow?.flags.includes('WAITING_PARTS')).length},
+    {code:'READY_FOR_PICKUP',label:'Gotowe do odbioru',count:orders.filter((order)=>order.workflow?.flags.includes('READY_FOR_PICKUP')).length}
+  ], [orders]);
+
+  const visibleOrders = useMemo(
+    () => orderFilter === 'ALL' ? orders : orders.filter((order)=>order.workflow?.flags.includes(orderFilter)),
+    [orders,orderFilter]
   );
 
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
@@ -661,8 +678,15 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
             <div><span className="eyebrow"><ClipboardList size={13}/> ZLECENIA</span><h2>Ostatnie naprawy</h2><p>Widoczne są wyłącznie zlecenia z punktów dostępnych dla Twojego konta.</p></div>
             <button className="button small secondary" disabled={ordersBusy} onClick={() => void loadOrders()}><RefreshCw className={ordersBusy ? 'spin' : ''} size={14}/> Odśwież</button>
           </div>
+          <div className="service-workflow-filters">
+            {workflowFilters.map((filter)=><button
+              key={filter.code}
+              className={orderFilter===filter.code?'active':''}
+              onClick={()=>setOrderFilter(filter.code)}
+            ><span>{filter.label}</span><strong>{filter.count}</strong></button>)}
+          </div>
           <div className="service-orders-list">
-            {orders.map((order) => {
+            {visibleOrders.map((order) => {
               const draft = detailsDrafts[order.id];
               const card = customerCards[order.customerId];
               const notes = orderNotes[order.id] ?? [];
@@ -670,13 +694,29 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               const pointTechnicians = techniciansByPoint[currentServicePointId] ?? [];
               const canOperateCurrentPoint = ['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId);
               return (
-                <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''}`}>
+                <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''} workflow-${(order.workflow?.attentionCode || 'ACTIVE').toLowerCase()}`}>
                   <div className="service-order-row">
                     <div className="service-order-number">#{order.orderNumber}</div>
                     <div className="service-order-main">
                       <strong>{order.customerName}</strong>
                       <span>{order.brand} {order.model} · {order.pointName}</span>
                       <small>{order.orderType === 'COMPLAINT' ? 'Reklamacja' : 'Naprawa'} · {order.customerEmail || order.customerPhone || 'brak kontaktu'}</small>
+                      {order.workflow && <div className="service-workflow-summary">
+                        <div className="service-workflow-stage">
+                          <span>Etap {order.workflow.stageNumber}/{order.workflow.stageTotal}</span>
+                          <strong>{order.workflow.stageLabel}</strong>
+                          <div className="service-workflow-progress"><i style={{width:`${order.workflow.progressPercent}%`}}/></div>
+                        </div>
+                        <div className="service-workflow-next">
+                          <span>Następna akcja</span>
+                          <strong>{order.workflow.nextAction}</strong>
+                        </div>
+                        <div className={`service-workflow-attention ${order.workflow.attentionCode.toLowerCase()}`}>
+                          {order.workflow.attentionLabel}
+                          {order.workflow.dueInMinutes != null && order.workflow.dueInMinutes < 0 && <small>{Math.ceil(Math.abs(order.workflow.dueInMinutes)/60)} h po terminie</small>}
+                          {order.workflow.dueInMinutes != null && order.workflow.dueInMinutes >= 0 && order.workflow.dueInMinutes <= 1440 && <small>{Math.max(1,Math.ceil(order.workflow.dueInMinutes/60))} h do terminu</small>}
+                        </div>
+                      </div>}
                       <div className="service-order-quick-meta">
                         <span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span>
                         <span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleString('pl-PL') : 'Brak terminu'}</span>
@@ -805,6 +845,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               );
             })}
             {!ordersBusy && orders.length === 0 && <div className="service-empty">Brak zleceń w Twoim zakresie.</div>}
+            {!ordersBusy && orders.length > 0 && visibleOrders.length === 0 && <div className="service-empty">Brak zleceń w wybranej sekcji.</div>}
           </div>
         </section>
       )}

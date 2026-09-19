@@ -23,7 +23,13 @@ export interface AuthState {
 export interface BrowserState { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean; }
 export interface BrowserBounds { x: number; y: number; width: number; height: number; }
 export interface AdminUser { id: string; email: string; name: string; picture?: string | null; role: UserRole | null; status: AccountStatus; blocked?:boolean; blockedAt?:string|null; blockedReason?:string|null; pointIds: string[]; requestedPoint?: RequestedPoint | null; firstLoginAt: string; lastLoginAt: string; }
-export interface AdminPoint { id: string; name: string; city: string; active: boolean; serviceEnabled?:boolean; acceptsExternalRepairs?:boolean; serviceNote?:string|null; }
+export interface AdminPoint {
+  id:string; name:string; city:string; active:boolean;
+  serviceEnabled?:boolean; acceptsExternalRepairs?:boolean;
+  manualServiceEnabled?:boolean; manualAcceptsExternalRepairs?:boolean;
+  externalRepairsPaused?:boolean; activeTechnicianCount?:number; autoServiceEnabled?:boolean;
+  serviceNote?:string|null;
+}
 export interface LoginEvent { id: string; userId: string; email: string; name: string; role: UserRole | null; status: AccountStatus; pointIds: string[]; createdAt: string; }
 export interface RevenueEntry { id: string; userId: string; pointId: string; amount: number; workDate: string; note: string; status: 'PENDING'|'APPROVED'|'REJECTED'; splitTechnicianPercent: number; splitBossPercent: number; technicianShare: number; bossShare: number; submittedAt: string; reviewedAt?: string|null; technician?: {id:string;name:string;email:string}|null; point?: AdminPoint|null; }
 export interface AdminAuditEvent { id:string; action:string; entityType:string; entityId?:string|null; pointId?:string|null; actorName:string; metadata:Record<string,unknown>; createdAt:string; }
@@ -33,6 +39,13 @@ export interface FinancePayload { entries: RevenueEntry[]; summary: { approvedRe
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; issueDescription:string; status:string; receivedAt:string; }
+export interface ServiceWorkflow {
+  stageNumber:number; stageTotal:number; stageLabel:string;
+  nextActionCode:string; nextAction:string;
+  attentionCode:'OVERDUE'|'DUE_SOON'|'ACTION_NOW'|'IN_TRANSIT'|'WAITING_SERVICE'|'WAITING_PARTS'|'READY_FOR_PICKUP'|'ACTIVE'|'CLOSED';
+  attentionLabel:string; flags:string[]; dueAt?:string|null; dueInMinutes?:number|null;
+  progressPercent:number; sortRank:number; canMarkReady:boolean;
+}
 export interface ServiceOrderSummary extends ServiceOrder {
   pointName:string; homePointName?:string; currentPointName?:string|null; currentLocationLabel?:string|null;
   returnRequired?:boolean; canMarkReady?:boolean; openTransfer?:ServiceTransfer|null;
@@ -40,7 +53,8 @@ export interface ServiceOrderSummary extends ServiceOrder {
   brand:string; model:string; imei?:string|null; serialNumber?:string|null; deviceNotes?:string|null;
   statusLabel:string; assignedTechnicianId?:string|null; assignedTechnicianName?:string|null; assignedTechnicianEmail?:string|null;
   estimatedCost?:number|null; finalCost?:number|null; currency?:string; estimatedCompletionAt?:string|null;
-  completedAt?:string|null; createdAt?:string;
+  completedAt?:string|null; createdAt?:string; updatedAt?:string;
+  workflow?:ServiceWorkflow;
   latestTransfer?:ServiceTransfer|null; transfers?:ServiceTransfer[];
 }
 export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; reusedDevice?:boolean; notification?:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; }
@@ -80,13 +94,14 @@ declare global {
       admin: {
         getOverview: () => Promise<AdminOverview>;
         createPoint: (payload:{name:string;city:string;serviceEnabled?:boolean;acceptsExternalRepairs?:boolean;serviceNote?:string}) => Promise<AdminPoint>;
-        updatePointService: (pointId:string,payload:{serviceEnabled:boolean;acceptsExternalRepairs:boolean;serviceNote?:string}) => Promise<AdminPoint>;
+        updatePointService: (pointId:string,payload:{serviceEnabled:boolean;acceptsExternalRepairs:boolean;externalRepairsPaused?:boolean;serviceNote?:string}) => Promise<AdminPoint>;
         approveUser: (userId:string,payload:{role:UserRole;pointIds:string[];createRequestedPoint?:boolean}) => Promise<unknown>;
         rejectUser: (userId:string) => Promise<unknown>;
         updateUserAccess: (userId:string,payload:{role:UserRole;pointIds:string[]}) => Promise<unknown>;
         blockUser: (userId:string,blocked:boolean,reason?:string) => Promise<AdminUser>;
         logoutUserSessions: (userId:string) => Promise<{ok:true;revoked:number}>;
         logoutAllSessions: (exceptCurrent?:boolean) => Promise<{ok:true;revoked:number;exceptCurrent:boolean}>;
+        factoryReset: (payload:{phrase:string;confirmed:boolean;reason?:string}) => Promise<{ok:true;resetId:string;reloginRequired:true;deleted:Record<string,number>}>;
       };
       finance: {
         list: () => Promise<FinancePayload>;
