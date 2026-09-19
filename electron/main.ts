@@ -499,6 +499,10 @@ const registerIpc = () => {
       body: JSON.stringify({ exceptCurrent: exceptCurrent !== false })
     }, token);
   });
+  secureHandle('admin:factoryResetPreview', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/admin/factory-reset/preview', {}, token);
+  });
   secureHandle('admin:factoryReset', async (payload: unknown) => {
     const token = requireSessionToken();
     return backendRequest('/admin/factory-reset', {
@@ -617,13 +621,14 @@ const registerIpc = () => {
       body: JSON.stringify(payload)
     }, token);
   });
-  secureHandle('service:updateStatus', async (orderId: string, status: string, note?: string) => {
+  secureHandle('service:updateStatus', async (orderId: string, status: string, note?: string, actingPointId?: string) => {
     const token = requireSessionToken();
     return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/status`, {
       method: 'POST',
       body: JSON.stringify({
         status: String(status ?? '').trim().slice(0, 30),
-        note: String(note ?? '').trim().slice(0, 500)
+        note: String(note ?? '').trim().slice(0, 500),
+        actingPointId: String(actingPointId ?? '').trim().slice(0, 80)
       })
     }, token);
   });
