@@ -89,15 +89,33 @@ const readJson = async (request) => {
 
 const q = (text, params = []) => pool.query(text, params);
 
-const pointView = (row) => ({
-  id: row.id,
-  name: row.name,
-  city: row.city,
-  active: row.active !== false,
-  serviceEnabled: row.service_enabled === true,
-  acceptsExternalRepairs: row.accepts_external_repairs === true,
-  serviceNote: row.service_note || null
-});
+const pointView = (row) => {
+  const activeTechnicianCount = Number(row.active_technician_count || 0);
+  const manualServiceEnabled = row.service_enabled === true;
+  const manualAcceptsExternalRepairs = row.accepts_external_repairs === true;
+  const externalRepairsPaused = row.external_repairs_paused === true;
+  const autoServiceEnabled = activeTechnicianCount > 0;
+  const serviceEnabled = row.effective_service_enabled == null
+    ? (manualServiceEnabled || autoServiceEnabled)
+    : row.effective_service_enabled === true;
+  const acceptsExternalRepairs = row.effective_accepts_external_repairs == null
+    ? (!externalRepairsPaused && (autoServiceEnabled || (manualServiceEnabled && manualAcceptsExternalRepairs)))
+    : row.effective_accepts_external_repairs === true;
+  return {
+    id: row.id,
+    name: row.name,
+    city: row.city,
+    active: row.active !== false,
+    serviceEnabled,
+    acceptsExternalRepairs,
+    manualServiceEnabled,
+    manualAcceptsExternalRepairs,
+    externalRepairsPaused,
+    activeTechnicianCount,
+    autoServiceEnabled,
+    serviceNote: row.service_note || null
+  };
+};
 
 const customerView = (row) => ({
   id: row.id,
@@ -131,11 +149,11 @@ const loadUser = async (userId) => {
 
 const loadPointsForUser = async (user) => {
   if (GLOBAL_ROLES.has(user.role_code)) {
-    const { rows } = await q('SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE active=true ORDER BY name');
+    const { rows } = await q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=p.id AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL) t ON true WHERE p.active=true ORDER BY p.name");
     return rows.map(pointView);
   }
   const { rows } = await q(
-    'SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.service_note FROM points p JOIN user_point_access a ON a.point_id=p.id WHERE a.user_id=$1 AND p.active=true ORDER BY p.name',
+    "SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p JOIN user_point_access a0 ON a0.point_id=p.id LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=p.id AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL) t ON true WHERE a0.user_id=$1 AND p.active=true ORDER BY p.name",
     [user.id]
   );
   return rows.map(pointView);
@@ -1368,7 +1386,7 @@ const route = async (request) => {
     const session = await requireActive(request);
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
     const [points, users, loginEvents, pendingRevenue, sessions, recentAudit, transferSummary] = await Promise.all([
-      q('SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points ORDER BY name'),
+      q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=p.id AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL) t ON true ORDER BY p.name"),
       q("SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
       q("SELECT a.id,a.actor_user_id AS user_id,u.email,u.name,u.role_code AS role,u.status,a.created_at FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id WHERE a.action LIKE 'LOGIN_%' ORDER BY a.created_at DESC LIMIT 100"),
       q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC"),
@@ -1396,7 +1414,7 @@ const route = async (request) => {
         activeSessions: Object.values(sessionCounts).reduce((sum,value)=>sum+Number(value||0),0),
         desktopSessions: Number(sessionCounts.DESKTOP||0),
         webSessions: Number(sessionCounts.WEB||0),
-        servicePoints: points.rows.filter((point)=>point.service_enabled===true).length,
+        servicePoints: points.rows.filter((point)=>point.effective_service_enabled===true).length,
         openTransfers: Number(transferCounts.REQUESTED||0)+Number(transferCounts.IN_TRANSIT||0)+Number(transferCounts.DELIVERED||0),
         blockedUsers: mappedUsers.filter((u)=>u.blocked).length
       },
@@ -1426,7 +1444,7 @@ const route = async (request) => {
     let result = await q('SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE lower(name)=lower($1) AND lower(city)=lower($2) LIMIT 1',[name,city]);
     if (result.rows[0]) return json(request, pointView(result.rows[0]));
     const pointId=makeId('pnt');
-    result=await q("INSERT INTO points(id,name,city,active,service_enabled,accepts_external_repairs,service_note) VALUES($1,$2,$3,true,$4,$5,NULLIF($6,'')) RETURNING id,name,city,active,service_enabled,accepts_external_repairs,service_note",[pointId,name,city,serviceEnabled,acceptsExternalRepairs,serviceNote]);
+    result=await q("INSERT INTO points(id,name,city,active,service_enabled,accepts_external_repairs,external_repairs_paused,service_note) VALUES($1,$2,$3,true,$4,$5,false,NULLIF($6,'')) RETURNING id,name,city,active,service_enabled,accepts_external_repairs,external_repairs_paused,service_note",[pointId,name,city,serviceEnabled,acceptsExternalRepairs,serviceNote]);
     await audit(session.user.id,'POINT_CREATED','point',pointId,pointId,{serviceEnabled,acceptsExternalRepairs});
     return json(request, pointView(result.rows[0]), 201);
   }
@@ -1497,9 +1515,15 @@ const route = async (request) => {
     const serviceEnabled=body.serviceEnabled===true;
     const acceptsExternalRepairs=serviceEnabled&&body.acceptsExternalRepairs===true;
     const serviceNote=cleanText(body.serviceNote,500);
-    const row=(await q("UPDATE points SET service_enabled=$1,accepts_external_repairs=$2,service_note=NULLIF($3,''),updated_at=now() WHERE id=$4 RETURNING id,name,city,active,service_enabled,accepts_external_repairs,service_note",[serviceEnabled,acceptsExternalRepairs,serviceNote,pointServiceMatch[1]])).rows[0];
+    const hasPause=Object.prototype.hasOwnProperty.call(body,'externalRepairsPaused');
+    const externalRepairsPaused=hasPause?body.externalRepairsPaused===true:null;
+    const row=(await q("UPDATE points SET service_enabled=$1,accepts_external_repairs=$2,external_repairs_paused=CASE WHEN $3::boolean IS NULL THEN external_repairs_paused ELSE $3 END,service_note=NULLIF($4,''),updated_at=now() WHERE id=$5 RETURNING id,name,city,active,service_enabled,accepts_external_repairs,external_repairs_paused,service_note",[serviceEnabled,acceptsExternalRepairs,externalRepairsPaused,serviceNote,pointServiceMatch[1]])).rows[0];
     if(!row)return json(request,{error:'NOT_FOUND'},404);
-    await audit(session.user.id,'POINT_SERVICE_UPDATED','point',row.id,row.id,{serviceEnabled,acceptsExternalRepairs});
+    const techCount=Number((await q("SELECT count(*)::int AS count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=$1 AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL",[row.id])).rows[0]?.count||0);
+    row.active_technician_count=techCount;
+    row.effective_service_enabled=row.service_enabled===true||techCount>0;
+    row.effective_accepts_external_repairs=row.external_repairs_paused!==true&&(techCount>0||(row.service_enabled===true&&row.accepts_external_repairs===true));
+    await audit(session.user.id,'POINT_SERVICE_UPDATED','point',row.id,row.id,{serviceEnabled,acceptsExternalRepairs,externalRepairsPaused:row.external_repairs_paused,activeTechnicianCount:techCount});
     return json(request,pointView(row));
   }
 
@@ -1951,7 +1975,7 @@ const route = async (request) => {
   if(method==='GET'&&url.pathname==='/service/service-points'){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do listy serwisów.'),{status:403});
-    const {rows}=await q("SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE active=true AND service_enabled=true ORDER BY city,name");
+    const {rows}=await q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users usr ON usr.id=a.user_id WHERE a.point_id=p.id AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL) t ON true WHERE p.active=true AND (p.service_enabled=true OR coalesce(t.active_technician_count,0)>0) ORDER BY p.city,p.name");
     return json(request,rows.map(pointView));
   }
 
@@ -2016,8 +2040,8 @@ const route = async (request) => {
       if(toPointId===homePointId&&fromPointId!==homePointId){
         return json(request,{error:'USE_RETURN_HOME',message:'Powrót do punktu macierzystego musi być zapisany jako osobny zwrot logistyczny.'},400);
       }
-      destination=(await q("SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE id=$1 AND active=true AND service_enabled=true AND accepts_external_repairs=true LIMIT 1",[toPointId])).rows[0];
-      if(!destination)return json(request,{error:'SERVICE_UNAVAILABLE',message:'Wybrany punkt nie przyjmuje przekazań serwisowych.'},400);
+      destination=(await q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users usr ON usr.id=a.user_id WHERE a.point_id=p.id AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL) t ON true WHERE p.id=$1 AND p.active=true AND NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled=true AND p.accepts_external_repairs=true)) LIMIT 1",[toPointId])).rows[0];
+      if(!destination)return json(request,{error:'SERVICE_UNAVAILABLE',message:'Wybrany punkt nie przyjmuje teraz przekazań serwisowych.'},400);
     }
 
     const transferId=makeId('trf');
