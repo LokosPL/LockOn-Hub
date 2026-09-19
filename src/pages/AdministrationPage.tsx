@@ -21,7 +21,7 @@ import {
 import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
 import type { AdminAuditEvent, AdminOverview, AdminPoint, AdminUser } from '../types/electron';
 
-const ASSIGNABLE_ROLES: UserRole[] = ['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER'];
+const ASSIGNABLE_ROLES: UserRole[] = ['BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER'];
 type AdminTab = 'PENDING' | 'ACTIVE' | 'SECURITY' | 'POINTS' | 'AUDIT';
 
 function formatDate(value?: string | null) {
@@ -233,7 +233,9 @@ function auditActorLine(event: AdminAuditEvent) {
   return [event.actorName || 'System', role, source].filter(Boolean).join(' · ');
 }
 
-export function AdministrationPage() {
+interface AdministrationPageProps { focusUserId?: string | null; }
+
+export function AdministrationPage({ focusUserId = null }: AdministrationPageProps) {
   const [data, setData] = useState<AdminOverview | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -244,7 +246,7 @@ export function AdministrationPage() {
   const [auditFilters, setAuditFilters] = useState({ userId:'', pointId:'', action:'', orderNumber:'', dateFrom:'', dateTo:'' });
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, { role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null; supportEnabled: boolean }>>({});
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [pointForm, setPointForm] = useState({ name:'', city:'', serviceEnabled:false, acceptsExternalRepairs:false, serviceNote:'' });
 
@@ -279,22 +281,30 @@ export function AdministrationPage() {
     const timer = window.setInterval(() => void load(true), 12_000);
     return () => window.clearInterval(timer);
   }, [autoRefresh]);
+  useEffect(() => {
+    if (!focusUserId || !data?.users.some((user)=>user.id===focusUserId)) return;
+    setTab('ACTIVE');
+    setEditingUserId(focusUserId);
+    window.setTimeout(() => document.querySelector('[data-admin-user-id="'+CSS.escape(focusUserId)+'"]')?.scrollIntoView({behavior:'smooth',block:'center'}), 80);
+  }, [focusUserId,data?.users]);
 
   const draftFor = (user: AdminUser) => {
     if (user.role === 'OWNER') {
-      return drafts[user.id] ?? { role: 'OWNER' as UserRole, pointIds: [], useRequested: false, technicianSplitPercent: null };
+      return drafts[user.id] ?? { role: 'OWNER' as UserRole, pointIds: [], useRequested: false, technicianSplitPercent: null, supportEnabled: true };
     }
     const requestedRole = user.requestedPoint?.requestedRole;
-    const suggestedRole = requestedRole && requestedRole !== 'OWNER' ? requestedRole : 'USER';
+    const legacySupport = requestedRole === 'SUPPORT' || user.role === 'SUPPORT';
+    const suggestedRole = requestedRole && requestedRole !== 'OWNER' && requestedRole !== 'SUPPORT' ? requestedRole : (user.role && user.role !== 'SUPPORT' ? user.role : 'USER');
     return drafts[user.id] ?? {
       role: (user.role ?? suggestedRole) as UserRole,
       pointIds: user.pointIds ?? [],
       useRequested: Boolean(user.requestedPoint) && suggestedRole !== 'BOSS',
-      technicianSplitPercent: user.technicianSplitPercent ?? user.requestedPoint?.technicianSplitPercent ?? 50
+      technicianSplitPercent: user.technicianSplitPercent ?? user.requestedPoint?.technicianSplitPercent ?? 50,
+      supportEnabled: user.supportEnabled === true || legacySupport
     };
   };
 
-  const patchDraft = (user: AdminUser, patch: Partial<{ role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null }>) => {
+  const patchDraft = (user: AdminUser, patch: Partial<{ role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null; supportEnabled: boolean }>) => {
     setDrafts((current) => ({ ...current, [user.id]: { ...draftFor(user), ...patch } }));
   };
 
@@ -306,7 +316,8 @@ export function AdministrationPage() {
       await window.lockOn.admin.approveUser(user.id, {
         role: draft.role,
         pointIds: globalRole || draft.useRequested ? [] : draft.pointIds,
-        createRequestedPoint: !globalRole && draft.useRequested
+        createRequestedPoint: !globalRole && draft.useRequested,
+        supportEnabled: draft.supportEnabled
       });
       setNotice(`✓ ${user.email} ma teraz aktywne konto z rolą ${ROLE_DEFINITIONS[draft.role].label}.`);
       setDrafts((current) => { const next = { ...current }; delete next[user.id]; return next; });
@@ -331,7 +342,12 @@ export function AdministrationPage() {
     const draft = draftFor(user);
     setBusy(true); setNotice('');
     try {
-      await window.lockOn.admin.updateUserAccess(user.id, { role: draft.role, pointIds: draft.pointIds, technicianSplitPercent: draft.role === 'TECHNICIAN' ? draft.technicianSplitPercent : null });
+      await window.lockOn.admin.updateUserAccess(user.id, {
+        role: draft.role,
+        pointIds: draft.pointIds,
+        technicianSplitPercent: draft.role === 'TECHNICIAN' ? draft.technicianSplitPercent : null,
+        supportEnabled: draft.supportEnabled
+      });
       setEditingUserId(null);
       setNotice(`Zapisano rolę i dostęp dla ${user.email}.`);
       await load(true);
