@@ -1,0 +1,52 @@
+name: Customer portal temp E2E
+
+on:
+  push:
+    paths:
+      - ".github/workflows/customer-portal-temp-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE: https://br-curly-cloud-b1f49trt-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+      STAFF_TOKEN: test-portal-staff-token
+    steps:
+      - name: Run customer portal E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(curl -sS -o /tmp/health -w '%{http_code}' "$BASE/health")" = "200"
+
+          login_code="$(curl -sS -o /tmp/login.json -w '%{http_code}' -X POST             -H 'content-type: application/json'             --data '{"customerId":"LK-ABCD-1234-EFGH-5678"}'             "$BASE/public/customer-portal/login")"
+          test "$login_code" = "200"
+          CUSTOMER_TOKEN="$(node -e "const x=require('/tmp/login.json'); if(!x.sessionToken||!x.orders?.some(o=>o.id==='srv_portal_test')) process.exit(2); process.stdout.write(x.sessionToken)")"
+
+          create_code="$(curl -sS -o /tmp/create.json -w '%{http_code}' -X POST             -H "authorization: Bearer $CUSTOMER_TOKEN" -H 'content-type: application/json'             --data '{"requestedPointId":"pnt_portal_source","serviceOrderId":"srv_portal_test","issueDescription":"Proszę o zdalną wycenę wymiany wyświetlacza."}'             "$BASE/public/customer-portal/quotes")"
+          test "$create_code" = "201"
+          REQUEST_ID="$(node -e "const x=require('/tmp/create.json'); const q=x.quoteRequests?.find(q=>q.issueDescription.includes('wymiany wyświetlacza')); if(!q||q.routedPointId!=='pnt_4e66398ed2bffa894cc4'||q.routingReason!=='MOST_USED_TRANSFER_DESTINATION') process.exit(3); process.stdout.write(q.id)")"
+
+          staff_code="$(curl -sS -o /tmp/staff.json -w '%{http_code}'             -H "authorization: Bearer $STAFF_TOKEN" "$BASE/service/customer-quotes")"
+          test "$staff_code" = "200"
+          node -e "const x=require('/tmp/staff.json'); if(!x.some(q=>q.id===process.argv[1]&&q.routedPointId==='pnt_4e66398ed2bffa894cc4')) process.exit(4)" "$REQUEST_ID"
+
+          quote_code="$(curl -sS -o /tmp/quote.json -w '%{http_code}' -X POST             -H "authorization: Bearer $STAFF_TOKEN" -H 'content-type: application/json'             --data '{"amount":399,"note":"Wycena orientacyjna po opisie klienta."}'             "$BASE/service/customer-quotes/$REQUEST_ID/quote")"
+          test "$quote_code" = "200"
+
+          me_code="$(curl -sS -o /tmp/me.json -w '%{http_code}'             -H "authorization: Bearer $CUSTOMER_TOKEN" "$BASE/public/customer-portal/me")"
+          test "$me_code" = "200"
+          node -e "const x=require('/tmp/me.json'); const q=x.quoteRequests?.find(q=>q.id===process.argv[1]); if(!q||q.status!=='QUOTED'||q.quoteAmount!==399||!q.messages?.some(m=>m.senderKind==='STAFF')) process.exit(5)" "$REQUEST_ID"
+
+          msg_code="$(curl -sS -o /tmp/msg.json -w '%{http_code}' -X POST             -H "authorization: Bearer $CUSTOMER_TOKEN" -H 'content-type: application/json'             --data '{"message":"Dziękuję, proszę zostawić tę wycenę aktywną."}'             "$BASE/public/customer-portal/quotes/$REQUEST_ID/messages")"
+          test "$msg_code" = "200"
+          node -e "const x=require('/tmp/msg.json'); const q=x.quoteRequests?.find(q=>q.id===process.argv[1]); if(!q||q.status!=='OPEN'||!q.messages?.some(m=>m.body.includes('Dziękuję'))) process.exit(6)" "$REQUEST_ID"
+
+          reply_code="$(curl -sS -o /tmp/reply.json -w '%{http_code}' -X POST             -H "authorization: Bearer $STAFF_TOKEN" -H 'content-type: application/json'             --data '{"message":"Wycena pozostaje zapisana w portalu klienta."}'             "$BASE/service/customer-quotes/$REQUEST_ID/reply")"
+          test "$reply_code" = "200"
+
+          echo "CUSTOMER_PORTAL_E2E_OK request=$REQUEST_ID routed=Sklep_LockOn amount=399"
