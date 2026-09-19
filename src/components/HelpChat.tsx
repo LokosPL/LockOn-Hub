@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, KeyRound, LoaderCircle, Send, X } from 'lucide-react';
+import { Bot, Headphones, KeyRound, LoaderCircle, Send, X } from 'lucide-react';
 import type { UserRole } from '../config/roles';
 import type { AuthState, HelpMessage } from '../types/electron';
 
@@ -23,6 +23,7 @@ export function HelpChat({ open, onClose, auth, effectiveRole }: HelpChatProps) 
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  const [consultantRequested, setConsultantRequested] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const canSearchService = ['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN'].includes(effectiveRole);
   const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
@@ -57,6 +58,12 @@ export function HelpChat({ open, onClose, auth, effectiveRole }: HelpChatProps) 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open || !consultantRequested) return;
+    const timer=window.setInterval(()=>void loadConversation(),5000);
+    return ()=>window.clearInterval(timer);
+  }, [open, consultantRequested]);
 
   if (!open) return null;
 
@@ -106,6 +113,7 @@ export function HelpChat({ open, onClose, auth, effectiveRole }: HelpChatProps) 
           {canSearchService && <button onClick={() => setDraft('historia klienta ')}>Historia klienta</button>}
           {canManageGmail && <button onClick={() => void sendText('Jak działają powiadomienia Gmail?')}>Gmail</button>}
           <button onClick={() => void sendText('Jakie są moje uprawnienia?')}>Moje uprawnienia</button>
+          <button onClick={async () => { try { await window.lockOn.support.request(auth.point?.id); setConsultantRequested(true); await loadConversation(); } catch(e){ setError(e instanceof Error?e.message:'Nie udało się poprosić konsultanta.'); } }}><Headphones size={13}/> Poproś konsultanta o pomoc</button>
         </div>
 
         <div className="help-chat-messages">
