@@ -2221,15 +2221,12 @@ const route = async (request) => {
       let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
       try{
         const settings=await mailSettingsForPoint(pointId);
-        const senderReady=Boolean(await loadActiveMailSender(pointId));
         if(!customer.email){
           notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
         }else if(settings.automatic_email_enabled!==true){
           notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
         }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes('RECEIVED')){
           notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
-        }else if(!senderReady){
-          notification={queued:false,sent:false,reason:'NO_SENDER'};
         }else{
           const nid=makeId('ntf');
           await q(

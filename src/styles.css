@@ -716,7 +716,7 @@ input,textarea,select{line-height:1.45}
 .service-orders-list{display:flex;flex-direction:column;gap:7px;margin-top:16px}
 .service-order-row{display:grid;grid-template-columns:72px minmax(0,1fr) 210px;gap:12px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:13px;background:#101318}
 .service-order-row:hover{border-color:var(--line2);background:#12161c}
-.service-order-number{font-weight:850;font-size:14px;color:#ff8150}
+.service-order-number{display:flex;flex-direction:column;gap:4px;color:#ff8150}.service-order-number strong{font-weight:900;font-size:22px;line-height:1}.service-order-number span{font-size:9px;color:#707986;line-height:1.3}
 .service-order-main{min-width:0;display:flex;flex-direction:column}
 .service-order-main strong{font-size:13px}
 .service-order-main span{font-size:11px;color:#89929d;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
