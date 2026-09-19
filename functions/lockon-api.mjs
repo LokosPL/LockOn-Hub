@@ -22,6 +22,8 @@ const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 90;
+const WEB_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 90;
+const WEB_SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 5;
 const WEBSITE_CODE_TTL_MS = 1000 * 60 * 5;
 const BODY_LIMIT = 64 * 1024;
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
@@ -199,9 +201,12 @@ const authPayload = async (user) => ({
 const createSession = async (userId, clientType) => {
   const token = crypto.randomBytes(32).toString('base64url');
   const now = Date.now();
+  const webSession = clientType === 'WEB';
+  const ttl = webSession ? WEB_SESSION_TTL_MS : SESSION_TTL_MS;
+  const absoluteTtl = webSession ? WEB_SESSION_ABSOLUTE_TTL_MS : SESSION_ABSOLUTE_TTL_MS;
   await q(
     'INSERT INTO auth_sessions(id,user_id,token_hash,client_type,created_at,last_seen_at,expires_at,absolute_expires_at) VALUES($1,$2,$3,$4,now(),now(),$5,$6)',
-    [makeId('ses'), userId, tokenHash(token), clientType, new Date(now + SESSION_TTL_MS), new Date(now + SESSION_ABSOLUTE_TTL_MS)]
+    [makeId('ses'), userId, tokenHash(token), clientType, new Date(now + ttl), new Date(now + absoluteTtl)]
   );
   return token;
 };
@@ -213,12 +218,19 @@ const currentSession = async (request) => {
   if (!token) return null;
   const hash = tokenHash(token);
   const { rows } = await q(
-    "SELECT s.id AS session_id,s.user_id,s.client_type,s.created_at AS session_created_at,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
+    "SELECT s.id AS session_id,s.user_id,s.client_type,s.created_at AS session_created_at,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.technician_split_percent,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
     [hash]
   );
   const row = rows[0];
   if (!row) return null;
-  await q('UPDATE auth_sessions SET last_seen_at=now() WHERE id=$1', [row.session_id]);
+  if (row.client_type === 'WEB') {
+    await q(
+      "UPDATE auth_sessions SET last_seen_at=now(),expires_at=LEAST(absolute_expires_at,now()+interval '90 days') WHERE id=$1",
+      [row.session_id]
+    );
+  } else {
+    await q('UPDATE auth_sessions SET last_seen_at=now() WHERE id=$1', [row.session_id]);
+  }
   return {
     sessionId: row.session_id,
     clientType: row.client_type,
@@ -230,6 +242,7 @@ const currentSession = async (request) => {
       name: row.name,
       picture_url: row.picture_url,
       role_code: row.role_code,
+      technician_split_percent: row.technician_split_percent,
       status: row.status,
       blocked_at: row.blocked_at,
       blocked_reason: row.blocked_reason,
@@ -937,13 +950,12 @@ const renderStatusEmail = (item) => {
   const defaultContactText = contactPoint
     ? (
         isTransfer && transferStatus === 'IN_TRANSIT'
-          ? 'W razie pytań skontaktuj się z punktem docelowym przekazania: ' + contactPoint + '.'
-          : isTransfer && ['DELIVERED','ACCEPTED'].includes(transferStatus)
-            ? 'W razie pytań skontaktuj się z punktem, do którego dostarczono urządzenie: ' + contactPoint + '.'
-            : 'W razie pytań skontaktuj się z punktem, w którym aktualnie znajduje się urządzenie: ' + contactPoint + '.'
+          ? 'W razie pytań skontaktuj się z punktem, do którego przekazywane jest urządzenie: ' + contactPoint + '.'
+          : 'W razie pytań skontaktuj się z punktem, w którym znajduje się urządzenie: ' + contactPoint + '.'
       )
     : 'W razie pytań skontaktuj się z punktem prowadzącym zlecenie.';
-  const footer = cleanText(item.footer_text || defaultContactText, 500);
+  const customFooter = cleanText(item.footer_text || '', 500);
+  const footer = cleanText(defaultContactText + (customFooter ? ' ' + customFooter : ''), 500);
 
   const subject = 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
   const intro = isTransfer
@@ -1741,6 +1753,25 @@ const route = async (request) => {
   }
 
 
+  if(method==='GET'&&url.pathname==='/admin/factory-reset/preview'){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Tylko OWNER może sprawdzić factory reset.'),{status:403,code:'OWNER_ONLY'});
+    const counts=(await q(
+      "SELECT jsonb_build_object(" +
+      "'points',(SELECT count(*) FROM points)," +
+      "'users',(SELECT count(*) FROM users)," +
+      "'serviceOrders',(SELECT count(*) FROM service_orders)," +
+      "'transfers',(SELECT count(*) FROM service_order_transfers)," +
+      "'customers',(SELECT count(*) FROM customers)," +
+      "'devices',(SELECT count(*) FROM devices)," +
+      "'revenues',(SELECT count(*) FROM revenue_entries)," +
+      "'sessions',(SELECT count(*) FROM auth_sessions)," +
+      "'notifications',(SELECT count(*) FROM notification_outbox)" +
+      ") AS counts"
+    )).rows[0]?.counts||{};
+    return json(request,{ok:true,counts});
+  }
+
   if(method==='POST'&&url.pathname==='/admin/factory-reset'){
     const session=await requireActive(request);
     if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Tylko OWNER może wykonać reset danych.'),{status:403,code:'OWNER_ONLY'});
@@ -1796,7 +1827,21 @@ const route = async (request) => {
         "'users',(SELECT count(*) FROM users)," +
         "'service_orders',(SELECT count(*) FROM service_orders)," +
         "'service_order_transfers',(SELECT count(*) FROM service_order_transfers)," +
+        "'service_order_notes',(SELECT count(*) FROM service_order_notes)," +
+        "'service_order_status_history',(SELECT count(*) FROM service_order_status_history)," +
         "'customers',(SELECT count(*) FROM customers)," +
+        "'devices',(SELECT count(*) FROM devices)," +
+        "'revenue_entries',(SELECT count(*) FROM revenue_entries)," +
+        "'settlements',(SELECT count(*) FROM settlements)," +
+        "'point_email_senders',(SELECT count(*) FROM point_email_senders)," +
+        "'point_notification_settings',(SELECT count(*) FROM point_notification_settings)," +
+        "'support_conversations',(SELECT count(*) FROM support_conversations)," +
+        "'support_messages',(SELECT count(*) FROM support_messages)," +
+        "'website_auth_codes',(SELECT count(*) FROM website_auth_codes)," +
+        "'access_requests',(SELECT count(*) FROM access_requests)," +
+        "'user_point_access',(SELECT count(*) FROM user_point_access)," +
+        "'notification_outbox',(SELECT count(*) FROM notification_outbox)," +
+        "'audit_log',(SELECT count(*) FROM audit_log)," +
         "'auth_sessions',(SELECT count(*) FROM auth_sessions)" +
         ") AS counts"
       )).rows[0]?.counts||{};
@@ -2194,7 +2239,7 @@ const route = async (request) => {
   if(method==='POST'&&statusMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
-    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500);
+    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500),actingPointId=cleanText(body.actingPointId,80);
     if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
 
     const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
@@ -2210,6 +2255,12 @@ const route = async (request) => {
     if(next!==found.status){
       if(!effectiveCurrentPointId){
         return json(request,{error:'DEVICE_LOCATION_UNKNOWN',message:'Nie można zmienić statusu, dopóki lokalizacja urządzenia nie jest potwierdzona.'},409);
+      }
+      if(GLOBAL_ROLES.has(u.role_code)&&!actingPointId){
+        return json(request,{error:'ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt, z którego wykonujesz zmianę statusu.'},409);
+      }
+      if(actingPointId&&actingPointId!==effectiveCurrentPointId){
+        return json(request,{error:'WRONG_ACTIVE_POINT',message:'Status może zmienić tylko punkt, w którym fizycznie znajduje się urządzenie.'},409);
       }
       await requirePoint(u,effectiveCurrentPointId);
     }

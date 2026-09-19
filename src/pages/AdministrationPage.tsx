@@ -206,24 +206,37 @@ export function AdministrationPage() {
   };
 
   const factoryReset = async () => {
-    if (!window.confirm('Factory reset usunie WSZYSTKIE dane biznesowe: punkty, serwisy, klientów, zlecenia, przekazania, rozliczenia, użytkowników i wszystkie sesje. Schemat i historia wykonanych resetów pozostaną. Kontynuować?')) return;
     setBusy(true); setNotice('');
     try {
+      const preview = await window.lockOn.admin.factoryResetPreview();
+      const counts = preview.counts ?? {};
+      const summary = [
+        `punkty: ${counts.points ?? 0}`,
+        `użytkownicy: ${counts.users ?? 0}`,
+        `zlecenia: ${counts.serviceOrders ?? 0}`,
+        `przekazania: ${counts.transfers ?? 0}`,
+        `klienci: ${counts.customers ?? 0}`,
+        `urządzenia: ${counts.devices ?? 0}`,
+        `rozliczenia: ${counts.revenues ?? 0}`,
+        `sesje: ${counts.sessions ?? 0}`
+      ].join('\n');
+      if (!window.confirm('Factory reset usunie wszystkie dane biznesowe z produkcyjnej bazy ServiceOS.\n\nAktualny stan:\n' + summary + '\n\nSchemat, role, migracje, wiedza systemowa i dziennik resetów pozostaną. Kontynuować?')) return;
       const phrase = window.prompt('Wpisz dokładnie frazę:\n\nUSUŃ WSZYSTKIE DANE');
       if (phrase === null) return;
       if (phrase !== 'USUŃ WSZYSTKIE DANE') {
         setNotice('Reset anulowany: fraza potwierdzająca nie jest identyczna.');
         return;
       }
-      if (!window.confirm('OSTATECZNE POTWIERDZENIE\n\nPo kliknięciu OK wszystkie punkty, serwisy, zlecenia, konta i sesje zostaną nieodwracalnie usunięte.')) return;
+      if (!window.confirm('OSTATECZNE POTWIERDZENIE\n\nPo kliknięciu OK dane pokazane powyżej zostaną nieodwracalnie usunięte.')) return;
       const result = await window.lockOn.admin.factoryReset({
         phrase,
         confirmed:true,
         reason:'Pełny factory reset uruchomiony przez OWNER z aplikacji desktop'
       });
-      setNotice(`Factory reset zakończony. Usunięto wszystkie dane operacyjne. Id: ${result.resetId}.`);
+      const removed = Object.values(result.deleted ?? {}).reduce((sum, value) => sum + Number(value || 0), 0);
+      setNotice(`Factory reset zakończony. Usunięto ${removed} rekordów operacyjnych. Id: ${result.resetId}.`);
       await window.lockOn.auth.logout().catch(() => undefined);
-      window.setTimeout(() => window.location.reload(), 450);
+      window.setTimeout(() => window.location.reload(), 650);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Factory reset nie został wykonany.');
     } finally {
@@ -387,7 +400,7 @@ export function AdministrationPage() {
             </div>
             <div className="factory-reset-warning">
               <Trash2 size={20}/>
-              <div><strong>Operacja nieodwracalna</strong><span>Wymaga świeżego logowania Google OWNER, dokładnej frazy „USUŃ WSZYSTKIE DANE” i drugiego potwierdzenia.</span></div>
+              <div><strong>Operacja nieodwracalna</strong><span>Przed resetem ServiceOS pokaże dokładne liczniki danych do usunięcia. Potem wymaga frazy „USUŃ WSZYSTKIE DANE” i drugiego potwierdzenia.</span></div>
             </div>
             <button className="button danger-soft" disabled={busy} onClick={()=>void factoryReset()}><Trash2 size={15}/> Wymaż całą bazę danych biznesowych</button>
           </section>
