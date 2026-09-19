@@ -1215,3 +1215,9 @@ input,textarea,select{line-height:1.45}
   .support-consultant-compose{grid-template-columns:1fr}.support-thread{height:310px}
   .consultant-state-card{grid-template-columns:30px 1fr}.consultant-state-card>button{grid-column:1/-1;width:100%}
 }
+
+.chat-tool-result{display:grid;grid-template-columns:34px minmax(0,1fr);gap:10px;align-items:start;margin:4px 0 8px;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:#0c1217}
+.chat-tool-result>div{width:32px;height:32px;display:grid;place-items:center;border-radius:9px;background:#151c23;color:#79b8ff}
+.chat-tool-result>span{display:flex;flex-direction:column;gap:3px}.chat-tool-result strong{font-size:11px;color:#dce4ea}.chat-tool-result small{font-size:9px;color:#7d8994;line-height:1.4}
+.chat-tool-result.speed{border-color:rgba(97,183,255,.17)}.chat-tool-result.diag{border-color:rgba(102,217,157,.16)}.chat-tool-result.diag>div{color:#6bdc9f}
+.chat-message-action:disabled{opacity:.55;cursor:wait}
