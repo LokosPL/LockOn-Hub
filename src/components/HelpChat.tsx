@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, ExternalLink, Headphones, KeyRound, LoaderCircle, Send, UserRoundCheck, X } from 'lucide-react';
+import { Activity, Bot, ExternalLink, Gauge, Headphones, KeyRound, LoaderCircle, Send, UserRoundCheck, Wifi, X } from 'lucide-react';
 import type { UserRole } from '../config/roles';
 import type { AuthState, HelpAction, HelpConversation, HelpMessage } from '../types/electron';
 
@@ -36,6 +36,8 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
   const [sending, setSending] = useState(false);
   const [requestingConsultant, setRequestingConsultant] = useState(false);
   const [error, setError] = useState('');
+  const [toolBusy, setToolBusy] = useState(false);
+  const [toolResult, setToolResult] = useState<{title:string;lines:string[];kind:'speed'|'diag'} | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const canSearchService = ['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN'].includes(effectiveRole);
   const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
@@ -77,6 +79,46 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
 
   if (!open) return null;
 
+  const runLocalTool = async (action: HelpAction) => {
+    if (!['SPEED_TEST','CONNECTIVITY_TEST'].includes(action.type) || toolBusy) return;
+    setToolBusy(true);
+    setToolResult(null);
+    setError('');
+    try {
+      if (action.type === 'SPEED_TEST') {
+        const result = await window.lockOn.diagnostics.internetSpeed();
+        setToolResult({
+          kind:'speed',
+          title:'Wynik testu internetu',
+          lines:[
+            `Pobieranie: ${result.downloadMbps.toFixed(1)} Mb/s`,
+            `Wysyłanie: ${result.uploadMbps == null ? 'nie udało się zmierzyć' : result.uploadMbps.toFixed(1)+' Mb/s'}`,
+            `Opóźnienie: ${result.latencyMs} ms`,
+            `Ocena łącza: ${result.quality}`,
+            ...(result.warning ? [result.warning] : [])
+          ]
+        });
+      } else {
+        const result = await window.lockOn.diagnostics.connectivity();
+        setToolResult({
+          kind:'diag',
+          title:'Diagnostyka ServiceOS',
+          lines:[
+            `Internet: ${result.internetOk ? 'działa' : 'brak odpowiedzi'}${result.internetLatencyMs == null ? '' : ' · '+result.internetLatencyMs+' ms'}`,
+            `Centralne API: ${result.apiOk ? 'działa' : 'problem'}${result.apiLatencyMs == null ? '' : ' · '+result.apiLatencyMs+' ms'}`,
+            `Aplikacja: v${result.version} · ${result.platform}`,
+            ...(result.apiError ? ['API: '+result.apiError] : [])
+          ]
+        });
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się wykonać diagnostyki.');
+    } finally {
+      setToolBusy(false);
+      window.setTimeout(() => endRef.current?.scrollIntoView({behavior:'smooth',block:'end'}), 50);
+    }
+  };
+
   const sendText = async (text: string) => {
     const value = text.trim().slice(0, 1500);
     if (!value || sending) return;
@@ -94,6 +136,9 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
         ].slice(-200)
       }));
       setDraft('');
+      if (result.action && ['SPEED_TEST','CONNECTIVITY_TEST'].includes(result.action.type)) {
+        void runLocalTool(result.action);
+      }
       window.setTimeout(() => void loadConversation(true), 500);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się wysłać wiadomości.');
@@ -137,9 +182,16 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
 
   const renderAction = (action?: HelpAction | null) => {
     if (!action || action.type === 'WEBSITE_CODE') return null;
+    const localTool = action.type === 'SPEED_TEST' || action.type === 'CONNECTIVITY_TEST';
     return (
-      <button className="chat-message-action" type="button" onClick={() => onAction(action)}>
-        <ExternalLink size={13}/>{action.label || 'Otwórz w ServiceOS'}
+      <button
+        className="chat-message-action"
+        type="button"
+        disabled={localTool && toolBusy}
+        onClick={() => localTool ? void runLocalTool(action) : onAction(action)}
+      >
+        {action.type === 'SPEED_TEST' ? <Gauge size={13}/> : action.type === 'CONNECTIVITY_TEST' ? <Activity size={13}/> : <ExternalLink size={13}/>}
+        {localTool && toolBusy ? 'Trwa pomiar…' : (action.label || 'Otwórz w ServiceOS')}
       </button>
     );
   };
@@ -210,6 +262,12 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
               {renderAction(message.action)}
             </div>
           ))}
+          {toolResult && (
+            <div className={'chat-tool-result '+toolResult.kind}>
+              <div>{toolResult.kind === 'speed' ? <Wifi size={16}/> : <Activity size={16}/>}</div>
+              <span><strong>{toolResult.title}</strong>{toolResult.lines.map((line,index)=><small key={index}>{line}</small>)}</span>
+            </div>
+          )}
           {error && <div className="chat-message chat-system"><p>{error}</p></div>}
           <div ref={endRef} />
         </div>
