@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('lockOn', {
     blockUser: (userId: string, blocked: boolean, reason?: string) => ipcRenderer.invoke('admin:blockUser', userId, blocked, reason),
     logoutUserSessions: (userId: string) => ipcRenderer.invoke('admin:logoutUserSessions', userId),
     logoutAllSessions: (exceptCurrent = true) => ipcRenderer.invoke('admin:logoutAllSessions', exceptCurrent),
+    factoryResetPreview: () => ipcRenderer.invoke('admin:factoryResetPreview'),
     factoryReset: (payload: unknown) => ipcRenderer.invoke('admin:factoryReset', payload)
   },
   finance: {
@@ -55,7 +56,7 @@ contextBridge.exposeInMainWorld('lockOn', {
     getNotes: (orderId: string) => ipcRenderer.invoke('service:getNotes', orderId),
     addNote: (orderId: string, body: string) => ipcRenderer.invoke('service:addNote', orderId, body),
     updateDetails: (orderId: string, payload: unknown) => ipcRenderer.invoke('service:updateDetails', orderId, payload),
-    updateStatus: (orderId: string, status: string, note?: string) => ipcRenderer.invoke('service:updateStatus', orderId, status, note)
+    updateStatus: (orderId: string, status: string, note?: string, actingPointId?: string) => ipcRenderer.invoke('service:updateStatus', orderId, status, note, actingPointId)
   },
   gmail: {
     getStatus: (pointId: string) => ipcRenderer.invoke('gmail:getStatus', pointId),
