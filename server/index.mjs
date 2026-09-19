@@ -46,6 +46,20 @@ const nowIso = () => new Date().toISOString();
 const id = (prefix) => `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
 const normalizeEmail = (value = '') => value.trim().toLowerCase();
 const cleanText = (value, max = 240) => String(value ?? '').trim().slice(0, max);
+const normalizeTechnicianPercent = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 100 ? Math.round(number * 100) / 100 : null;
+};
+const splitRevenueAmount = (amount, technicianPercent) => {
+  const percent = normalizeTechnicianPercent(technicianPercent) ?? 50;
+  const technicianShare = Math.round(Number(amount) * percent) / 100;
+  return {
+    technicianPercent: percent,
+    bossPercent: Math.round((100-percent)*100)/100,
+    technicianShare,
+    bossShare: Math.round((Number(amount)-technicianShare)*100)/100
+  };
+};
 const normalizePhone = (value = '') => String(value).replace(/\D/g, '').slice(-15);
 const customerView = (customer) => ({
   id: customer.id,
@@ -137,6 +151,7 @@ const publicUser = (user) => ({
   name: user.name,
   picture: user.picture,
   role: user.role ?? null,
+  technicianSplitPercent: user.technicianSplitPercent ?? null,
   status: user.status,
   pointIds: Array.isArray(user.pointIds) ? user.pointIds : [],
   requestedPoint: user.requestedPoint ?? null,
@@ -418,7 +433,7 @@ const localOrderView = (order) => {
 
 const localOrderViewForUser = (order, user) => {
   const view = localOrderView(order);
-  if (!SERVICE_MANAGE_ROLES.has(user.role)) {
+  if (!SERVICE_EDIT_ROLES.has(user.role)) {
     view.estimatedCost = null;
     view.finalCost = null;
   }
@@ -435,8 +450,14 @@ const revenueVisibleTo = (user, entry) => {
 const revenueView = (entry) => {
   const technician = findUserById(entry.userId);
   const point = db.points.find((p) => p.id === entry.pointId);
+  const split = splitRevenueAmount(entry.amount, entry.splitTechnicianPercent ?? entry.technicianPercent ?? 50);
+  const approved = entry.status === 'APPROVED' || entry.status === 'SETTLED';
   return {
     ...entry,
+    splitTechnicianPercent: split.technicianPercent,
+    splitBossPercent: split.bossPercent,
+    technicianShare: approved ? split.technicianShare : 0,
+    bossShare: approved ? split.bossShare : 0,
     technician: technician ? { id: technician.id, name: technician.name, email: technician.email } : null,
     point: point ? pointSummary(point) : null
   };
@@ -492,9 +513,11 @@ const handle = async (req, res) => {
     const pointName = cleanText(body.pointName, 90);
     const city = cleanText(body.city, 90);
     const requestedRole = String(body.requestedRole || 'USER').toUpperCase();
+    const technicianSplitPercent = requestedRole === 'TECHNICIAN' ? normalizeTechnicianPercent(body.technicianSplitPercent) : null;
     if (!pointName || !city) return json(res, 400, { error: 'VALIDATION', message: 'Wpisz nazwę punktu i miasto.' });
     if (!REQUESTABLE_ROLES.has(requestedRole)) return json(res, 400, { error: 'ROLE', message: 'Wybierz prawidłową rolę.' });
-    user.requestedPoint = { pointName, city, requestedRole, requestedAt: nowIso() };
+    if (requestedRole === 'TECHNICIAN' && technicianSplitPercent === null) return json(res, 400, { error: 'TECHNICIAN_SPLIT', message: 'Ustaw swój procent rozliczenia serwisanta.' });
+    user.requestedPoint = { pointName, city, requestedRole, technicianSplitPercent, requestedAt: nowIso() };
     user.status = 'PENDING';
     saveDb();
     return json(res, 200, authPayload(user));
@@ -557,6 +580,9 @@ const handle = async (req, res) => {
     }
 
     target.role = role;
+    if (role === 'TECHNICIAN' && target.requestedPoint?.requestedRole === 'TECHNICIAN') {
+      target.technicianSplitPercent = target.requestedPoint.technicianSplitPercent ?? null;
+    }
     target.status = 'ACTIVE';
     target.pointIds = GLOBAL_ROLES.has(role) ? [] : pointIds;
     target.requestedPoint = null;
