@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('lockOn', {
   },
   finance: {
     list: () => ipcRenderer.invoke('finance:list'),
+    getTechnicianSettings: () => ipcRenderer.invoke('finance:getTechnicianSettings'),
+    updateTechnicianSettings: (technicianPercent: number) => ipcRenderer.invoke('finance:updateTechnicianSettings', technicianPercent),
     submit: (payload: unknown) => ipcRenderer.invoke('finance:submit', payload),
     review: (revenueId: string, action: 'APPROVE' | 'REJECT') => ipcRenderer.invoke('finance:review', revenueId, action)
   },
