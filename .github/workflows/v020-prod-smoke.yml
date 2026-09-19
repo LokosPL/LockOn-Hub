@@ -1,0 +1,46 @@
+name: v0.20 production API smoke
+
+on:
+  push:
+    paths:
+      - ".github/workflows/v020-prod-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE: https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+    steps:
+      - name: Non-destructive production smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          check() {
+            method="$1"; path="$2"; expected="$3"; body="${4:-}"
+            if [ -n "$body" ]; then
+              code="$(curl -sS -o /tmp/resp -w '%{http_code}' --max-time 20 -X "$method" -H 'content-type: application/json' --data "$body" "$BASE$path")"
+            else
+              code="$(curl -sS -o /tmp/resp -w '%{http_code}' --max-time 20 -X "$method" "$BASE$path")"
+            fi
+            echo "$method $path -> $code"
+            head -c 220 /tmp/resp || true
+            echo
+            test "$code" = "$expected"
+          }
+          check GET /health 200
+          check GET /me 401
+          check GET /admin/overview 401
+          check GET /admin/audit 401
+          check GET /support/presence 401
+          check GET /support/tickets 401
+          check GET /support/conversation 401
+          check POST /support/request 401 '{"message":"test"}'
+          check POST /assistant/chat 401 '{"message":"/net"}'
+          check GET /public/customer-portal/me 401
+          check POST /public/customer-portal/login 401 '{"customerId":"LK-ZZZZ-ZZZZ-ZZZZ-ZZZZ"}'
+          check GET /admin/factory-reset/preview 401
