@@ -202,7 +202,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
           setOrderHistories((current) => ({ ...current, [order.id]: history }))
         ));
       }
-      if (!orderNotes[order.id]) {
+      if (canEditStatus && !orderNotes[order.id]) {
         requests.push(window.lockOn.service.getNotes(order.id).then((notes) =>
           setOrderNotes((current) => ({ ...current, [order.id]: notes }))
         ));
