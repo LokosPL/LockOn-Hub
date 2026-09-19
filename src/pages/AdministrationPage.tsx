@@ -353,17 +353,26 @@ export function AdministrationPage() {
             {activeUsers.map((user) => {
               const owner = user.role === 'OWNER';
               const draft = draftFor(user);
+              const editing = editingUserId === user.id;
+              const pointNames = owner || user.role === 'BOSS'
+                ? 'Wszystkie punkty'
+                : (data?.points ?? []).filter((point)=>user.pointIds.includes(point.id)).map((point)=>point.name).join(', ') || 'Brak przypisanego punktu';
               return <article className={`user-access-row ${user.blocked ? 'user-blocked' : ''}`} key={user.id}>
                 <div className="user-access-identity">
                   <strong>{user.name}{user.blocked && <span className="blocked-chip">ZABLOKOWANE</span>}</strong>
                   <span>{user.email}</span>
-                  <small>Ostatnie logowanie: {formatDate(user.lastLoginAt)}</small>
-                  {user.role === 'TECHNICIAN' && <small>Rozliczenie: {user.technicianSplitPercent == null ? 'nieustawione — serwisant musi je ustawić' : `${user.technicianSplitPercent}% serwisant / ${100-user.technicianSplitPercent}% Szef`}</small>}
+                  <small>{user.role ? ROLE_DEFINITIONS[user.role].label : 'Bez roli'} · {pointNames}</small>
+                  <small>Status: {user.blocked ? 'Zablokowane' : 'Aktywne'} · ostatnie logowanie: {formatDate(user.lastLoginAt)}</small>
+                  {user.role === 'TECHNICIAN' && <small>Rozliczenie: {user.technicianSplitPercent == null ? 'nieustawione' : `${user.technicianSplitPercent}% serwisant / ${100-user.technicianSplitPercent}% firma`}</small>}
                 </div>
-                <label><span>Rola</span><select disabled={owner || user.blocked} value={draft.role} onChange={(e) => patchDraft(user, { role: e.target.value as UserRole })}>{owner ? <option value="OWNER">Właściciel aplikacji</option> : ASSIGNABLE_ROLES.map((role) => <option key={role} value={role}>{ROLE_DEFINITIONS[role].label}</option>)}</select></label>
-                <div className="user-points-mini">{owner || draft.role === 'BOSS' ? <span className="global-chip">Wszystkie punkty</span> : <div className="inline-point-checks">{(data?.points ?? []).map((point) => <label key={point.id}><input disabled={user.blocked} type="checkbox" checked={draft.pointIds.includes(point.id)} onChange={() => togglePoint(user, point.id)}/><span>{point.name}</span></label>)}</div>}</div>
+                {editing && !owner ? <>
+                  <label><span>Rola</span><select disabled={user.blocked} value={draft.role} onChange={(e) => patchDraft(user, { role: e.target.value as UserRole })}>{ASSIGNABLE_ROLES.map((role) => <option key={role} value={role}>{ROLE_DEFINITIONS[role].label}</option>)}</select></label>
+                  <div className="user-points-mini">{draft.role === 'BOSS' ? <span className="global-chip">Wszystkie punkty</span> : <div className="inline-point-checks">{(data?.points ?? []).map((point) => <label key={point.id}><input disabled={user.blocked} type="checkbox" checked={draft.pointIds.includes(point.id)} onChange={() => togglePoint(user, point.id)}/><span>{point.name}</span></label>)}</div>}</div>
+                  {draft.role === 'TECHNICIAN' && <label><span>Udział serwisanta (%)</span><input type="number" min="0" max="100" step="0.01" value={draft.technicianSplitPercent ?? ''} onChange={(e)=>patchDraft(user,{technicianSplitPercent:e.target.value===''?null:Number(e.target.value)})}/></label>}
+                </> : <div className="user-points-mini"><span className="global-chip">{pointNames}</span></div>}
                 <div className="user-admin-actions">
-                  {!owner && !user.blocked && <button className="button small secondary" onClick={() => void saveAccess(user)} disabled={busy}><CheckCircle2 size={14}/> Zapisz</button>}
+                  {!owner && !editing && <button className="button small secondary" onClick={() => setEditingUserId(user.id)} disabled={busy || user.blocked}><CheckCircle2 size={14}/> Edytuj konto</button>}
+                  {!owner && editing && <><button className="button small primary" onClick={() => void saveAccess(user)} disabled={busy}><CheckCircle2 size={14}/> Zapisz zmiany</button><button className="button small secondary" onClick={() => setEditingUserId(null)} disabled={busy}>Anuluj</button></>}
                   {!owner && <button className={`button small ${user.blocked ? 'secondary' : 'danger-soft'}`} onClick={() => void blockUser(user,!user.blocked)} disabled={busy}>{user.blocked ? <CheckCircle2 size={14}/> : <Ban size={14}/>}{user.blocked ? 'Odblokuj' : 'Zablokuj'}</button>}
                   <button className="button small secondary" onClick={() => void logoutUser(user)} disabled={busy}><LogOut size={14}/> Wyloguj urządzenia</button>
                 </div>
