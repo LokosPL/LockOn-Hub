@@ -1664,7 +1664,7 @@ const route = async (request) => {
     if(GLOBAL_ROLES.has(u.role_code)) rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id ORDER BY r.occurred_at DESC")).rows;
     else if(u.role_code==='TECHNICIAN') rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
     else rows=(await q("SELECT DISTINCT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id JOIN user_point_access a ON a.point_id=r.point_id AND a.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
-    const entries=rows.map((r)=>{const amount=Number(r.amount);const approved=r.status==='APPROVED'||r.status==='SETTLED';return{id:r.id,userId:r.user_id,pointId:r.point_id,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:50,splitBossPercent:50,technicianShare:approved?Math.round(amount*50)/100:0,bossShare:approved?Math.round(amount*50)/100:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}}});
+    const entries=rows.map((r)=>{const amount=Number(r.amount);const approved=r.status==='APPROVED'||r.status==='SETTLED';return{id:r.id,userId:r.user_id,pointId:r.point_id,serviceOrderId:r.service_order_id||null,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:50,splitBossPercent:50,technicianShare:approved?Math.round(amount*50)/100:0,bossShare:approved?Math.round(amount*50)/100:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}}});
     const approved=entries.filter((e)=>e.status==='APPROVED'||e.status==='SETTLED'),pending=entries.filter((e)=>e.status==='PENDING');
     return json(request,{entries,summary:{approvedRevenue:approved.reduce((s,e)=>s+e.amount,0),technicianShare:approved.reduce((s,e)=>s+e.technicianShare,0),bossShare:approved.reduce((s,e)=>s+e.bossShare,0),pendingRevenue:pending.reduce((s,e)=>s+e.amount,0)}});
   }
@@ -1673,8 +1673,11 @@ const route = async (request) => {
     const session=await requireActive(request);if(session.user.role_code!=='TECHNICIAN')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
     const body=await readJson(request),amount=Number(body.amount),pointId=String(body.pointId||''),note=cleanText(body.note,700),workDate=cleanText(body.workDate,20)||new Date().toISOString().slice(0,10);
     if(!Number.isFinite(amount)||amount<=0)return json(request,{error:'AMOUNT'},400);await requirePoint(session.user,pointId);
-    const id=makeId('rev');await q("INSERT INTO revenue_entries(id,point_id,user_id,amount,currency,category,status,note,occurred_at) VALUES($1,$2,$3,$4,'PLN','SERVICE','PENDING',$5,$6)",[id,pointId,session.user.id,Math.round(amount*100)/100,note,new Date(workDate+'T12:00:00Z')]);
-    return json(request,{id,userId:session.user.id,pointId,amount:Math.round(amount*100)/100,workDate,note,status:'PENDING',splitTechnicianPercent:50,splitBossPercent:50,technicianShare:0,bossShare:0,submittedAt:nowIso()},201);
+    const rounded=Math.round(amount*100)/100;
+    const id=makeId('rev');
+    const row=(await q("INSERT INTO revenue_entries(id,point_id,user_id,amount,currency,category,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,'PLN','SERVICE','APPROVED',$5,$6,$3,now()) RETURNING created_at,approved_at",[id,pointId,session.user.id,rounded,note,new Date(workDate+'T12:00:00Z')])).rows[0];
+    await audit(session.user.id,'REVENUE_AUTO_APPROVED','revenue',id,pointId,{amount:rounded,manual:true});
+    return json(request,{id,userId:session.user.id,pointId,serviceOrderId:null,amount:rounded,workDate,note,status:'APPROVED',splitTechnicianPercent:50,splitBossPercent:50,technicianShare:Math.round(rounded*50)/100,bossShare:Math.round(rounded*50)/100,submittedAt:row.created_at,reviewedAt:row.approved_at},201);
   }
 
   const review=url.pathname.match(/^\/finance\/revenues\/([^/]+)\/review$/);
@@ -1986,7 +1989,7 @@ const route = async (request) => {
     const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500);
     if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
 
-    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,status,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
+    const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
 
@@ -2006,13 +2009,66 @@ const route = async (request) => {
       }
     }
 
+    const settlementAmount = next==='COMPLETED'
+      ? Number(found.final_cost ?? found.estimated_cost)
+      : null;
+    if(next==='COMPLETED'&&(!Number.isFinite(settlementAmount)||settlementAmount<=0)){
+      return json(request,{
+        error:'FINAL_COST_REQUIRED',
+        message:'Przed zakończeniem zlecenia wpisz koszt końcowy. Jeżeli koszt końcowy jest pusty, system może użyć zapisanej wyceny.'
+      },409);
+    }
+
     if(found.status===next){
       const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
       return json(request,{order:view,notification:{queued:false,sent:false,reason:'STATUS_UNCHANGED'}});
     }
 
-    await q("UPDATE service_orders SET status=$1,updated_at=now(),completed_at=CASE WHEN $1='COMPLETED' THEN now() ELSE completed_at END WHERE id=$2",[next,found.id]);
-    await q('INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,note,changed_by_user_id) VALUES($1,$2,$3,$4,$5,$6)',[makeId('hst'),found.id,found.status,next,note||null,u.id]);
+    let settlement=null;
+    const statusClient=await pool.connect();
+    try{
+      await statusClient.query('BEGIN');
+      await statusClient.query(
+        "UPDATE service_orders SET status=$1,updated_at=now(),completed_at=CASE WHEN $1='COMPLETED' THEN now() ELSE completed_at END,final_cost=CASE WHEN $1='COMPLETED' AND final_cost IS NULL THEN estimated_cost ELSE final_cost END WHERE id=$2",
+        [next,found.id]
+      );
+      await statusClient.query(
+        'INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,note,changed_by_user_id) VALUES($1,$2,$3,$4,$5,$6)',
+        [makeId('hst'),found.id,found.status,next,note||null,u.id]
+      );
+
+      if(next==='COMPLETED'){
+        const settlementPointId=found.home_point_id||found.point_id;
+        let revenueUserId=found.assigned_technician_id||null;
+        if(!revenueUserId){
+          revenueUserId=(await statusClient.query(
+            "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE a.point_id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL ORDER BY usr.name,usr.id LIMIT 1",
+            [settlementPointId]
+          )).rows[0]?.id||u.id;
+        }
+        const revenueId=makeId('rev');
+        const revenue=(await statusClient.query(
+          "INSERT INTO revenue_entries(id,point_id,user_id,service_order_id,amount,currency,category,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,$5,$6,'SERVICE','APPROVED',$7,now(),$8,now()) ON CONFLICT (service_order_id) WHERE service_order_id IS NOT NULL DO UPDATE SET point_id=EXCLUDED.point_id,user_id=EXCLUDED.user_id,amount=EXCLUDED.amount,currency=EXCLUDED.currency,status='APPROVED',note=EXCLUDED.note,approved_by_user_id=EXCLUDED.approved_by_user_id,approved_at=now() RETURNING id,point_id,user_id,service_order_id,amount,currency,status,approved_at",
+          [revenueId,settlementPointId,revenueUserId,found.id,Math.round(settlementAmount*100)/100,found.currency||'PLN','Automatyczne rozliczenie zakończonego zlecenia #'+found.order_number,u.id]
+        )).rows[0];
+        settlement={
+          id:revenue.id,
+          amount:Number(revenue.amount),
+          currency:String(revenue.currency||'PLN').trim(),
+          status:revenue.status,
+          serviceOrderId:revenue.service_order_id,
+          userId:revenue.user_id,
+          pointId:revenue.point_id,
+          approvedAt:revenue.approved_at
+        };
+      }
+      await statusClient.query('COMMIT');
+    }catch(error){
+      await statusClient.query('ROLLBACK').catch(()=>undefined);
+      throw error;
+    }finally{
+      statusClient.release();
+    }
 
     let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
     try{
@@ -2047,7 +2103,7 @@ const route = async (request) => {
       console.error('[service status audit]',auditError);
     }
     const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
-    return json(request,{order:view,notification});
+    return json(request,{order:view,notification,settlement});
   }
 
   if(method==='GET'&&url.pathname==='/service/service-points'){
