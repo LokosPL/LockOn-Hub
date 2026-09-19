@@ -722,7 +722,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               return (
                 <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''} workflow-${(order.workflow?.attentionCode || 'ACTIVE').toLowerCase()}`}>
                   <div className="service-order-row">
-                    <div className="service-order-number">#{order.orderNumber}</div>
+                    <div className="service-order-number"><strong>#{order.orderNumber}</strong><span>{new Date(order.receivedAt).toLocaleString('pl-PL')}</span></div>
                     <div className="service-order-main">
                       <strong>{order.customerName}</strong>
                       <span>{order.brand} {order.model} · {order.pointName}</span>
