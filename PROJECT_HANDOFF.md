@@ -584,6 +584,18 @@ Dla każdego priorytetu:
 - Po podłączeniu Gmail potwierdzono rzeczywiste wysyłki: 3 rekordy `SENT`, wszystkie 3 z `provider_message_id`; ostatnia wysyłka 2026-09-19T14:58:30Z.
 - Publiczny desktop pozostaje v0.18.0 — hotfix dotyczy wyłącznie centralnego backendu, a istniejący desktop ma już UI „Powiadomienia” / „Połącz Gmail”.
 
+## Poprawka publicznej karty klienta — 2026-09-19
+
+- Site PR #18 scalony do `lockon-serviceos-site/main`, commit `f5242816a3c27ac7a3c3ee85e38213f315345490`.
+- Verify strony #132 SUCCESS; Deploy LockOn ServiceOS site #86 SUCCESS.
+- Naprawiono błąd CSS, przez który `hidden` przegrywał z `.track-state { display:flex }` i loader oraz ekran błędu mogły być widoczne jednocześnie. Teraz `[hidden]{display:none!important}`.
+- Publiczna karta klienta nie ma już „Przejdź do ServiceOS”, linku logo do `index.html` ani skryptu konfiguracji logowania pracowników.
+- Jeden token/link śledzenia jest utrzymywany przez całe zlecenie. Produkcyjna kontrola dla zlecenia #1: 3 wysłane wiadomości, 1 unikalny link trackingowy.
+- Karta odświeża dane co 20 sekund oraz po powrocie do karty/okna. Chwilowy błąd odświeżenia nie usuwa ostatniej poprawnej karty — klient widzi ostatnie dane i informację o ponowieniu.
+- Widok uproszczono do danych zlecenia/urządzenia, przyjęcia, punktu macierzystego, aktualnej lokalizacji, ETA gdy istnieje, historii statusów i faktycznych przekazań.
+- PWA cache podniesiony do `serviceos-shell-v14`.
+- Nie opublikowano nowej wersji desktopowej; publiczny instalator pozostaje v0.18.0.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
