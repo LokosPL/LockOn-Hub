@@ -431,13 +431,16 @@ const registerIpc = () => {
     const token = requireSessionToken();
     return backendRequest('/admin/overview', {}, token);
   });
-  secureHandle('admin:createPoint', async (payload: { name?: unknown; city?: unknown }) => {
+  secureHandle('admin:createPoint', async (payload: { name?: unknown; city?: unknown; serviceEnabled?: unknown; acceptsExternalRepairs?: unknown; serviceNote?: unknown }) => {
     const token = requireSessionToken();
     return backendRequest('/admin/points', {
       method: 'POST',
       body: JSON.stringify({
         name: String(payload?.name ?? '').trim().slice(0, 90),
-        city: String(payload?.city ?? '').trim().slice(0, 90)
+        city: String(payload?.city ?? '').trim().slice(0, 90),
+        serviceEnabled: payload?.serviceEnabled === true,
+        acceptsExternalRepairs: payload?.acceptsExternalRepairs === true,
+        serviceNote: String(payload?.serviceNote ?? '').trim().slice(0, 500)
       })
     }, token);
   });
@@ -490,6 +493,13 @@ const registerIpc = () => {
     return backendRequest('/admin/logout-all', {
       method: 'POST',
       body: JSON.stringify({ exceptCurrent: exceptCurrent !== false })
+    }, token);
+  });
+  secureHandle('admin:factoryReset', async (payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest('/admin/factory-reset', {
+      method: 'POST',
+      body: JSON.stringify(payload)
     }, token);
   });
 
