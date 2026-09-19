@@ -740,7 +740,8 @@ const handle = async (req, res) => {
       ? user.id
       : (canManage ? (cleanText(body.assignedTechnicianId, 80) || null) : null);
     let estimatedCost = null;
-    if (body.estimatedCost !== undefined && body.estimatedCost !== '') {
+    if (!SERVICE_EDIT_ROLES.has(user.role) && body.estimatedCost !== undefined && body.estimatedCost !== '') return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do danych kosztowych zlecenia.' });
+    if (SERVICE_EDIT_ROLES.has(user.role) && body.estimatedCost !== undefined && body.estimatedCost !== '') {
       estimatedCost = Number(body.estimatedCost);
       if (!Number.isFinite(estimatedCost) || estimatedCost < 0) return json(res, 400, { error: 'ESTIMATED_COST', message: 'Nieprawidłowy koszt szacowany.' });
     }
@@ -990,7 +991,7 @@ const handle = async (req, res) => {
     const otherDevice = imei ? db.devices.find((item) => item.imei === imei && item.id !== device.id) : null;
     if (otherDevice) return json(res, 409, { error: 'IMEI_CONFLICT', message: 'Ten IMEI jest już przypisany do innego urządzenia.' });
 
-    const etaText = cleanText(body.estimatedCompletionAt, 64);
+    const etaText = SERVICE_EDIT_ROLES.has(user.role) ? cleanText(body.estimatedCompletionAt, 64) : '';
     let estimatedCompletionAt = null;
     if (etaText) {
       const eta = new Date(etaText);
