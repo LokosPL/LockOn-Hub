@@ -44,6 +44,7 @@ const STATUS_LABELS = {
   REJECTED: 'Odrzucone'
 };
 const SERVICE_STATUSES = new Set(Object.keys(STATUS_LABELS));
+const DEFAULT_NOTIFY_STATUSES = Object.freeze(['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','REJECTED','CANCELLED']);
 
 const nowIso = () => new Date().toISOString();
 const makeId = (prefix) => prefix + '_' + crypto.randomBytes(10).toString('hex');
@@ -823,6 +824,30 @@ const escapeHtml = (value) => String(value ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+const loadActiveMailSender = async (pointId) => {
+  const { rows } = await q(
+    "SELECT point_id AS sender_point_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,connected_at FROM point_email_senders WHERE status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN point_id=$1 THEN 0 ELSE 1 END,connected_at DESC NULLS LAST,updated_at DESC LIMIT 1",
+    [pointId]
+  );
+  const sender = rows[0] || null;
+  if (!sender) return null;
+  if (!GOOGLE_DESKTOP_CLIENT_SECRET && !sender.oauth_client_secret_ciphertext) return null;
+  return sender;
+};
+
+const mailSettingsForPoint = async (pointId) => {
+  const row = (await q(
+    "SELECT automatic_email_enabled,notify_statuses,sender_display_name,footer_text FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
+    [pointId]
+  )).rows[0];
+  return row || {
+    automatic_email_enabled:true,
+    notify_statuses:[...DEFAULT_NOTIFY_STATUSES],
+    sender_display_name:'LockOn ServiceOS',
+    footer_text:null
+  };
+};
+
 const renderStatusEmail = (item) => {
   const displayName = cleanText(item.sender_display_name || 'LockOn ServiceOS', 80).replace(/[\r\n]+/g, ' ');
   const footer = cleanText(item.footer_text || 'W razie pytań skontaktuj się bezpośrednio z punktem serwisowym.', 500);
@@ -964,7 +989,7 @@ const sendGmail = async (sender, recipient, subject, textBody, htmlBody, display
 
 const processNotification = async (notificationId) => {
   const { rows } = await q(
-    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,p.name AS point_name,c.first_name,d.brand,d.model,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.status AS sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN point_email_senders e ON e.point_id=s.point_id LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
+    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,p.name AS point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
     [notificationId]
   );
   const item = rows[0];
@@ -998,7 +1023,7 @@ const processNotification = async (notificationId) => {
       "UPDATE notification_outbox SET status='SENT',sent_at=now(),provider_message_id=$2,last_error=NULL,updated_at=now() WHERE id=$1",
       [notificationId, sent.id]
     );
-    await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1", [item.point_id]);
+    if(item.sender_point_id) await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1", [item.sender_point_id]);
     return { sent: true, status: 'SENT', messageId: sent.id, attempts: attempt };
   } catch (error) {
     const message = cleanText(error instanceof Error ? error.message : error, 500);
@@ -1007,9 +1032,9 @@ const processNotification = async (notificationId) => {
       [notificationId, message, nextAttemptAt]
     );
     if(isGmailReauthError(error)){
-      await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1", [item.point_id, message]);
+      if(item.sender_point_id) await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1", [item.sender_point_id, message]);
     }else{
-      await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1", [item.point_id, message]);
+      if(item.sender_point_id) await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1", [item.sender_point_id, message]);
     }
     return { sent: false, status: 'FAILED', reason: isGmailReauthError(error) ? 'GMAIL_REAUTH_REQUIRED' : 'SEND_FAILED', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
   }
@@ -1023,19 +1048,11 @@ const queueTransferNotification = async (actor, orderId, transfer, transferStatu
     )).rows[0];
     if (!orderData?.email) return { queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL' };
 
-    const settings = (await q(
-      "SELECT automatic_email_enabled FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
-      [orderData.point_id]
-    )).rows[0] || { automatic_email_enabled:true };
+    const settings = await mailSettingsForPoint(orderData.point_id);
     if (settings.automatic_email_enabled !== true) return { queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED' };
 
-    const sender = (await q(
-      "SELECT refresh_token_ciphertext,oauth_client_secret_ciphertext FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1",
-      [orderData.point_id]
-    )).rows[0];
-    if (!sender || (!GOOGLE_DESKTOP_CLIENT_SECRET && !sender.oauth_client_secret_ciphertext)) {
-      return { queued:false,sent:false,reason:'NO_SENDER' };
-    }
+    const sender = await loadActiveMailSender(orderData.point_id);
+    if (!sender) return { queued:false,sent:false,reason:'NO_SENDER' };
 
     const notificationId = makeId('ntf');
     await q(
@@ -1930,12 +1947,8 @@ const route = async (request) => {
 
       let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
       try{
-        const settingsResult=await q(
-          "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
-          [pointId]
-        );
-        const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
-        const senderReady=(await q("SELECT refresh_token_ciphertext,oauth_client_secret_ciphertext FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1",[pointId])).rows.some((sender)=>Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||sender.oauth_client_secret_ciphertext));
+        const settings=await mailSettingsForPoint(pointId);
+        const senderReady=Boolean(await loadActiveMailSender(pointId));
         if(!customer.email){
           notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
         }else if(settings.automatic_email_enabled!==true){
@@ -2004,12 +2017,8 @@ const route = async (request) => {
     let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
     try{
       const customer=(await q('SELECT email FROM customers WHERE id=$1',[found.customer_id])).rows[0];
-      const settingsResult=await q(
-        "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
-        [found.point_id]
-      );
-      const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
-      const senderReady=(await q("SELECT refresh_token_ciphertext,oauth_client_secret_ciphertext FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1",[found.point_id])).rows.some((sender)=>Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||sender.oauth_client_secret_ciphertext));
+      const settings=await mailSettingsForPoint(found.point_id);
+      const senderReady=Boolean(await loadActiveMailSender(found.point_id));
 
       if(!customer?.email){
         notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
