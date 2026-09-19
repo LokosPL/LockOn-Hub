@@ -955,7 +955,7 @@ const generateCustomerPortalCode = () => {
 const ensureCustomerPortalCode = async (customerId) => {
   let row = (await q("SELECT portal_code_hash,portal_code_ciphertext FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
   if (!row) throw Object.assign(new Error('Nie znaleziono klienta.'),{status:404});
-  if (row.portal_code_ciphertext) return decryptSecret(row.portal_code_ciphertext);
+  if (row.portal_code_ciphertext) return { code: decryptSecret(row.portal_code_ciphertext), created:false };
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const code = generateCustomerPortalCode();
     const hash = tokenHash(code);
@@ -965,9 +965,9 @@ const ensureCustomerPortalCode = async (customerId) => {
         "UPDATE customers SET portal_code_hash=$2,portal_code_ciphertext=$3,portal_code_created_at=COALESCE(portal_code_created_at,now()),updated_at=now() WHERE id=$1 AND portal_code_ciphertext IS NULL RETURNING portal_code_ciphertext",
         [customerId,hash,packed]
       )).rows[0];
-      if (updated?.portal_code_ciphertext) return code;
+      if (updated?.portal_code_ciphertext) return { code, created:true };
       row = (await q("SELECT portal_code_ciphertext FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
-      if (row?.portal_code_ciphertext) return decryptSecret(row.portal_code_ciphertext);
+      if (row?.portal_code_ciphertext) return { code: decryptSecret(row.portal_code_ciphertext), created:false };
     } catch (error) {
       if (String(error?.code || '') !== '23505') throw error;
     }
@@ -1282,8 +1282,11 @@ const processNotification = async (notificationId) => {
     !item.payload?.from
   ) {
     try {
-      item.customer_portal_code = await ensureCustomerPortalCode(item.customer_id);
-      item.customer_portal_url = PUBLIC_PORTAL_URL + '/klient.html';
+      const portalIdentity = await ensureCustomerPortalCode(item.customer_id);
+      if (portalIdentity.created) {
+        item.customer_portal_code = portalIdentity.code;
+        item.customer_portal_url = PUBLIC_PORTAL_URL + '/klient.html';
+      }
     } catch (error) {
       console.error('[customer portal code]', error);
       item.customer_portal_code = '';
