@@ -901,8 +901,6 @@ const mailSettingsForPoint = async (pointId) => {
 
 const renderStatusEmail = (item) => {
   const displayName = cleanText(item.sender_display_name || 'LockOn ServiceOS', 80).replace(/[\r\n]+/g, ' ');
-  const footer = cleanText(item.footer_text || 'W razie pytań skontaktuj się bezpośrednio z punktem serwisowym.', 500);
-
   const transferStatus = String(item.payload?.transferStatus || '').toUpperCase();
   const transferKind = String(item.payload?.transferKind || 'OUTBOUND_SERVICE').toUpperCase();
   const returnHome = transferKind === 'RETURN_HOME';
@@ -926,6 +924,23 @@ const renderStatusEmail = (item) => {
   const fromPoint = cleanText(item.payload?.fromPointName || item.point_name || '', 100);
   const toPoint = cleanText(item.payload?.toPointName || '', 100);
   const transferNote = cleanText(item.payload?.note || '', 300);
+  const contactPoint = cleanText(
+    isTransfer
+      ? (
+          transferStatus === 'CANCELLED'
+            ? (fromPoint || item.current_point_name || item.point_name || '')
+            : (toPoint || item.current_point_name || item.point_name || '')
+        )
+      : (item.current_point_name || item.point_name || ''),
+    100
+  );
+  const footer = cleanText(
+    item.footer_text ||
+    (contactPoint
+      ? 'W razie pytań skontaktuj się z punktem, w którym aktualnie znajduje się urządzenie: ' + contactPoint + '.'
+      : 'W razie pytań skontaktuj się z punktem prowadzącym zlecenie.'),
+    500
+  );
 
   const subject = 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
   const intro = isTransfer
@@ -1042,7 +1057,7 @@ const sendGmail = async (sender, recipient, subject, textBody, htmlBody, display
 
 const processNotification = async (notificationId) => {
   const { rows } = await q(
-    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,p.name AS point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
+    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
     [notificationId]
   );
   const item = rows[0];
