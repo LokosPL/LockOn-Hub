@@ -68,7 +68,7 @@ Stan produkcyjny po realizacji Priorytetu 1 (2026-09-18):
 - USER — podstawowy dostęp punktowy
 - PENDING jest statusem, nie rolą
 
-Koszty zleceń są przeznaczone tylko dla OWNER / BOSS / COORDINATOR.
+Koszty zleceń widzą i edytują OWNER / BOSS / COORDINATOR oraz TECHNICIAN w zakresie zleceń, do których ma dostęp. USER nie widzi ani nie edytuje kosztów.
 
 ## Najważniejsze istniejące funkcje
 
@@ -184,7 +184,7 @@ Istnieją:
 
 ---
 
-# STAN PRIORYTETÓW — 1–5 WYKONANE PRODUKCYJNIE
+# PRIORYTETY HISTORYCZNE — 1–5 WYKONANE PRODUKCYJNIE
 
 ## 1. [WYKONANE] Punkt macierzysty telefonu i obowiązkowy powrót z serwisu
 
@@ -307,10 +307,195 @@ Przed implementacją przeanalizuj FK i wszystkie tabele w Neon. Nie kasuj projek
 
 ---
 
+# AKTUALNY BACKLOG — PRIORYTETY 1–10
+
+> To jest aktualna kolejka pracy po v0.17.0. Historyczne priorytety 1–5 powyżej są już wdrożone. Nowy chat ma realizować poniższe punkty kolejno i samodzielnie, bez ponownego pytania użytkownika o informacje możliwe do sprawdzenia w GitHub/Neon. Każdy priorytet obejmuje backend, desktop i panel WWW/PWA wszędzie tam, gdzie dana funkcja występuje.
+
+## 1. USER — pełny, ale ograniczony workflow przyjęcia zlecenia
+
+Rola `USER` ma:
+- móc normalnie utworzyć nowe zlecenie serwisowe;
+- edytować dane klienta i podstawowe dane przyjęcia;
+- móc anulować zlecenie, gdy klient rezygnuje;
+- móc przekazać urządzenie dalej do serwisu / właściwego punktu;
+- **nie** móc zmieniać zwykłych statusów naprawy (diagnoza, naprawa, gotowe itd.);
+- nie widzieć kosztów serwisowych, rozliczeń ani danych zarządczych.
+
+Dashboard USER ma nie pokazywać:
+- „Punkty w zasięgu”;
+- „Aktywne konta”;
+- „Zatwierdzony przychód”.
+
+Panel WWW/PWA ma ukrywać moduły i przyciski bez uprawnień, w szczególności Administrację. To samo musi być egzekwowane backendowo — ukrycie UI nie może być jedynym zabezpieczeniem.
+
+Kryterium zakończenia: test ról dla desktop + mobile + API, w tym próba niedozwolonej zmiany statusu przez USER = 403, ale create/cancel/customer edit/transfer działają.
+
+## 2. Serwis — czytelne karty zleceń + niezawodny e-mail po przyjęciu
+
+Przebudować kartę zlecenia `#1`, `#2` itd. tak, aby najważniejsze dane były czytelne bez rozwijania:
+- duży numer zlecenia;
+- data i godzina przyjęcia;
+- klient + urządzenie;
+- punkt macierzysty;
+- aktualna lokalizacja;
+- przypisany serwisant;
+- aktualny etap;
+- termin;
+- cena orientacyjna / końcowa dla uprawnionych;
+- czytelne kolory statusu, terminu i lokalizacji.
+
+Naprawić wysyłkę e-mail po przyjęciu telefonu. Potwierdzenie przyjęcia ma być wysyłane deterministycznie, z istniejącym firmowym fallbackiem Gmail i kolejką/retry. Nie wolno uznawać utworzenia zlecenia za „mail wysłany”, jeśli provider go nie przyjął.
+
+Kryterium zakończenia: produkcyjnie sprawdzony flow utworzenia zlecenia z adresem klienta + rekord SENT/provider id albo czytelny stan kolejki/retry; brak cichej porażki.
+
+## 3. E-maile klienta i publiczna karta serwisowa
+
+Przebudować HTML wszystkich wiadomości tak, aby były responsywne na telefonie:
+- pojedyncza kolumna;
+- bez rozjeżdżania szerokości;
+- duże CTA i typografia;
+- poprawne zawijanie długich danych;
+- wersja text jako fallback.
+
+Link „Sprawdź szczegóły” ma prowadzić do jednej spójnej karty serwisowej klienta. Usunąć obecny efekt „ładowanie → błąd plików → niżej urządzenie”.
+
+Karta publiczna ma pokazywać tylko potrzebne informacje:
+- numer zlecenia;
+- dane urządzenia podane przy przyjęciu;
+- dane klienta w bezpiecznym zakresie;
+- aktualny status;
+- aktualną fizyczną lokalizację / punkt;
+- punkt macierzysty, jeśli potrzebny do zrozumienia procesu;
+- przewidywany termin, jeśli istnieje;
+- prostą historię najważniejszych etapów, jeśli poprawia czytelność.
+
+Nie dodawać wymyślonych danych ani modułów niezwiązanych z konkretnym zleceniem. Token śledzenia ma pozostać bezpieczny i nie może ujawniać innych zleceń.
+
+## 4. Wsparcie / konsultant — realny workflow i zakres punktów
+
+Obecna funkcja SUPPORT ma zacząć realnie działać.
+
+Użytkownik w Pomocy ma mieć prostą akcję:
+- „Poproś konsultanta o pomoc” / „Poproś o pomoc osobę”.
+
+Zgłoszenie powinno tworzyć rozmowę/ticket widoczny właściwym konsultantom. SUPPORT ma być rolą punktową:
+- przypisywaną do konkretnych punktów;
+- konsultant widzi zgłoszenia tylko ze swoich punktów, chyba że ma rolę globalną;
+- odpowiedzi konsultanta pojawiają się użytkownikowi w Pomocy;
+- audyt zapisuje utworzenie, przejęcie, odpowiedź i zamknięcie zgłoszenia.
+
+Nie twórz „martwego” przycisku; cały flow musi działać end-to-end desktop/API.
+
+## 5. Administracja — przebudowa „Konta i uprawnienia”
+
+Przebudować panel OWNER, bo obecny układ jest zbyt techniczny i mało czytelny.
+
+Wymagania:
+- czytelna karta użytkownika: imię, e-mail, rola, przypisany punkt/punkty, status, ostatnie logowanie;
+- po akceptacji konto ma mieć przypisanie punktu i nie powinno pokazywać zbędnego wyboru „nazwy sklepu” przy każdej operacji;
+- dodać jednoznaczną akcję **Edytuj konto**;
+- w edycji OWNER może zmienić rolę, punkty, blokadę i właściwe parametry serwisanta;
+- onboarding pending może nadal wykorzystać punkt zgłoszony przez pracownika, ale decyzja OWNER ma być jasna i pojedyncza;
+- polskie nazwy i opis biznesowy zamiast technicznych kodów ról tam, gdzie widzi je zwykły użytkownik.
+
+Nie osłabiaj zabezpieczeń OWNER ani unieważniania sesji przy blokadzie.
+
+## 6. Audyt — szczegółowy i użyteczny operacyjnie
+
+Rozbudować audyt tak, aby OWNER mógł ustalić kto/co/kiedy/gdzie zmienił.
+
+Dla istotnych zdarzeń zapisywać i prezentować:
+- aktora;
+- rolę;
+- punkt;
+- typ obiektu i jego identyfikator;
+- stary stan → nowy stan dla zmian;
+- numer zlecenia, jeśli dotyczy;
+- klient/urządzenie w bezpiecznym skrócie, jeśli potrzebne;
+- status wysyłki e-mail / transferu / rozliczenia;
+- czas;
+- typ klienta (desktop/web) jeśli dostępny.
+
+UI audytu: filtry po użytkowniku, punkcie, typie zdarzenia, zleceniu i zakresie dat; rozwijane szczegóły JSON tylko jako opcja techniczna, nie główny widok.
+
+## 7. Rozliczenia BOSS — punkty + całość firmy
+
+BOSS ma widzieć:
+- łączny przychód serwisowy firmy;
+- łączny udział serwisantów;
+- udział firmy/Szefa;
+- podział per punkt;
+- możliwość rozwinięcia punktu i zobaczenia jego zleceń/przychodów;
+- serwisanta, kwotę, procent zapisany dla danego rozliczenia i datę.
+
+Nie wracaj do stałego 50/50. Obowiązuje model z v0.15+: każdy TECHNICIAN ma własny procent, a `revenue_entries` przechowuje snapshot procentu dla historycznego wpisu.
+
+Dane muszą liczyć się poprawnie zarówno dla automatycznych rozliczeń ze zleceń, jak i dopuszczonych ręcznych wpisów.
+
+## 8. Publiczna strona — prostszy język i krótszy onboarding
+
+Przejrzeć całą `app.serviceos.pl` z perspektywy osoby, która pierwszy raz widzi system.
+
+Wymagania:
+- mniej tekstu;
+- krótkie, konkretne sekcje;
+- proste polskie nazwy zamiast `OWNER`, `TECHNICIAN`, itp. w treści dla pracownika;
+- zamiast wyjaśniania technicznych uprawnień pisać np. „Twoje konto musi zostać zaakceptowane przez osobę uprawnioną”;
+- nie opisywać użytkownikowi wewnętrznych mechanizmów, których nie potrzebuje do rozpoczęcia pracy;
+- zachować działający podgląd UI, ale bez skakania strony;
+- regulamin/akceptacja pozostają na dole procesu;
+- dopiero po akceptacji: pobranie aplikacji i łączenie telefonu;
+- zachować mobile-first, czytelną typografię i istniejące zabezpieczenia CSP/PWA.
+
+## 9. Pełny przegląd techniczny i sprzątanie projektu
+
+Po funkcjonalnych poprawkach zrobić analizę obu repozytoriów:
+- martwy kod;
+- nieużywane komponenty;
+- stare workflow jednorazowe;
+- stare deploy/export/smoke pliki operacyjne;
+- duplikaty API/fallbacków;
+- nieużywane assety;
+- stare cache i wersje;
+- nieaktualne komentarze / dokumentację;
+- zależności npm, które nie są używane;
+- ostrzeżenia build/lint/CodeQL.
+
+Usuwać tylko po potwierdzeniu przez kod/search/workflows, że element nie jest używany. Nie kasować migracji historycznych ani elementów potrzebnych do odtworzenia produkcji.
+
+Na końcu zaktualizować `PROJECT_HANDOFF.md` i opisać, co faktycznie usunięto.
+
+## 10. Google login callback — po polsku, auto-close i powrót do aplikacji
+
+Po logowaniu Google obecna strona callbacku ma być poprawiona:
+- w 100% po polsku;
+- bez technicznych tekstów typu „ACTIVE/OWNER” dla zwykłego pracownika;
+- jasne „Logowanie zakończone. Wracamy do ServiceOS.”;
+- automatyczne zamknięcie karty po ok. 5 sekundach;
+- jeśli bezpiecznie możliwe w Electron: zarejestrować i wykorzystać deep link / custom protocol, aby po sukcesie natychmiast aktywować okno aplikacji;
+- jeśli przeglądarka nie pozwala automatycznie zamknąć karty, pokazać prosty przycisk „Wróć do aplikacji” i nadal wykonać próbę auto-close;
+- analogicznie uprościć stronę błędu logowania.
+
+Sprawdzić desktop OAuth PKCE/state oraz nie osłabić obecnej ochrony callbacku.
+
+## Wspólna definicja ukończenia dla aktualnego backlogu
+
+Dla każdego priorytetu:
+1. Najpierw sprawdź aktualny `main`, kod i produkcyjne dane — nie zakładaj, że opis jest w 100% aktualny.
+2. Zmiany schematu testuj najpierw na tymczasowej gałęzi Neon.
+3. Backend ma egzekwować uprawnienia niezależnie od UI.
+4. Ujednolić desktop i WWW/PWA.
+5. Uruchomić istniejące Verify/CI/CodeQL i nie scalać czerwonych zmian.
+6. Po backendzie zrobić smoke produkcji z kontrolą endpointów chronionych.
+7. Nie wykonywać factory reset ani innych destrukcyjnych testów na danych produkcyjnych.
+8. Po wdrożeniu aktualizować ten plik i przechodzić od razu do kolejnego priorytetu, bez pytania użytkownika o zgodę na zwykłe prace developerskie.
+9. Jawne potwierdzenie użytkownika jest nadal wymagane, jeśli narzędzie wymaga go dla destrukcyjnej/produkcyjnej migracji lub innej nieodwracalnej operacji.
+
 ## Jak zacząć w nowym czacie
 
-1. Otwórz ten plik z GitHub.
-2. Sprawdź aktualny `main`, latest release i workflows.
-3. Sprawdź aktywny deployment `lockonapi` w Neon i aktualny schemat.
-4. Priorytety 1–5 są wdrożone. Nie implementuj ich od nowa; zacznij od aktualnych zgłoszeń/regresji użytkownika i sprawdź invarianty opisane w sekcji v0.17.0.
-5. Wykonuj zmiany samodzielnie przez GitHub/Neon i dopiero przy koniecznej ręcznej czynności poproś użytkownika o jeden krok.
+1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
+2. Sprawdź aktualny `main`, latest release, otwarte PR-y i wszystkie aktywne workflow w obu repozytoriach.
+3. Sprawdź Neon: projekt `wandering-field-13057181`, produkcyjną gałąź `br-steep-bonus-b1f1qh8u`, bazę `lockon`, aktywny deployment `lockonapi` oraz schemat.
+4. Historyczne priorytety 1–5 są wdrożone. **Aktualna praca zaczyna się od nowego Priorytetu 1 z sekcji „AKTUALNY BACKLOG — PRIORYTETY 1–10”.**
+5. Realizuj kolejno 1 → 10. Po zakończeniu jednego przechodź do następnego bez pytania użytkownika, chyba że konieczna operacja wymaga jawnego potwierdzenia.
+6. Pracuj samodzielnie przez GitHub i Neon; nie proś użytkownika o informacje, które można sprawdzić narzędziami.
