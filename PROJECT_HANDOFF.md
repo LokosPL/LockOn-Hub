@@ -14,6 +14,28 @@
 - Neon Function slug: `lockonapi`
 - API: `https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech`
 
+### Aktualny stan produkcyjny — 2026-09-19 / v0.17.0
+
+- aplikacja `main`: `267196fcf77b41da085973c29345636d0b29c279`
+- publiczny release Windows: `v0.17.0`
+- instalator: `LockOn-ServiceOS-Setup.exe`, SHA-256 `bd04dbddbcddde1b431cb089cf9d8ad8b2ac4d6b27481842804427546882e204`
+- strona / panel WWW `main`: `f9656b2c8f2bf5dbbe1c1b9c2f5a6c814270d512`
+- GitHub Pages deploy po PR #9: sukces
+- aktywny Neon `lockonapi`: deployment **v24**
+- produkcyjny smoke v24: `/health` OK; chronione `/me`, zlecenia, finanse, factory-reset preview, factory reset i zmiana statusu zwracają 401 bez sesji
+- PR aplikacji #30 i PR strony #9: scalone
+- bez nowej migracji DB w v0.17.0
+
+Najważniejsze invarianty po v0.17.0:
+- status telefonu zmienia wyłącznie punkt, w którym urządzenie fizycznie się znajduje; OWNER/BOSS także muszą pracować w kontekście aktywnego właściwego punktu;
+- podczas aktywnego transportu status naprawy jest zablokowany;
+- zwykły USER nie może zmieniać statusów;
+- `READY` wymaga `REPAIR_DONE` oraz fizycznego powrotu do punktu macierzystego;
+- sesja WWW jest przechowywana w `localStorage`, 403 nie usuwa tokenu, a aktywne sesje WEB mają odnawiany 90-dniowy TTL;
+- podgląd UI strony używa stałego `preview-stage` i nie stosuje `window.scrollBy`;
+- factory reset ma preflight z licznikami i po transakcji weryfikuje wyzerowanie wszystkich tabel operacyjnych; **nie wykonywano resetu na produkcyjnych danych w ramach testu**;
+- mail operacyjny zawsze wskazuje punkt, w którym znajduje się urządzenie / do którego jest przekazywane; własny footer nie usuwa tej informacji.
+
 Stan produkcyjny po realizacji Priorytetu 1 (2026-09-18):
 - release baseline `main`: `bbac27d7b588c650cc1b57f0cea8c528a07498d3` (commit handoffu jest późniejszy)
 - publiczny release: `v0.12.0`
@@ -162,7 +184,7 @@ Istnieją:
 
 ---
 
-# PRIORYTETY NASTĘPNEJ SESJI — PRIORYTETY 1–2 WYKONANE, ZACZNIJ OD 3
+# STAN PRIORYTETÓW — 1–5 WYKONANE PRODUKCYJNIE
 
 ## 1. [WYKONANE] Punkt macierzysty telefonu i obowiązkowy powrót z serwisu
 
@@ -208,7 +230,7 @@ Brak migracji DB dla tego priorytetu. Produkcyjny rekord nadawcy pozostawał `AC
 
 Nie przywracaj stałego bannera Gmail przy poprawnym połączeniu. Ponowne OAuth ma być reakcją na trwałą utratę zgody, nie na chwilowy błąd sieci/provider.
 
-## 3. Porządek i stopniowanie zleceń — „co robimy dalej”
+## 3. [WYKONANE] Porządek i stopniowanie zleceń — „co robimy dalej”
 
 Obecna lista zleceń ma zostać przekształcona w czytelny workflow pracy.
 
@@ -242,7 +264,7 @@ Dodaj sekcje / filtry typu:
 
 Zlecenia z bliskim ETA powinny być wyżej i mieć czytelny alert. Nie rób tylko kosmetycznego sortowania; backend i UI powinny mieć jednoznaczną logikę „next action”.
 
-## 4. TECHNICIAN przypisany do punktu automatycznie czyni punkt celem przekazania
+## 4. [WYKONANE] TECHNICIAN przypisany do punktu automatycznie czyni punkt celem przekazania
 
 Jeżeli OWNER nada komuś rolę TECHNICIAN dla danego punktu:
 - ten punkt ma automatycznie pojawić się użytkownikom jako możliwy punkt docelowy przekazania urządzenia;
@@ -262,7 +284,7 @@ Sprawdź i ujednolić:
 - desktop selector
 - mobile selector
 
-## 5. OWNER: „Wymaż całą bazę danych”
+## 5. [WYKONANE] OWNER: „Wymaż całą bazę danych”
 
 OWNER ma dostać bardzo silną funkcję resetu danych.
 
@@ -290,5 +312,5 @@ Przed implementacją przeanalizuj FK i wszystkie tabele w Neon. Nie kasuj projek
 1. Otwórz ten plik z GitHub.
 2. Sprawdź aktualny `main`, latest release i workflows.
 3. Sprawdź aktywny deployment `lockonapi` w Neon i aktualny schemat.
-4. Priorytety 1 i 2 są wykonane. Zacznij od priorytetu **3 — porządek i stopniowanie zleceń / jednoznaczne „co robimy dalej”**.
+4. Priorytety 1–5 są wdrożone. Nie implementuj ich od nowa; zacznij od aktualnych zgłoszeń/regresji użytkownika i sprawdź invarianty opisane w sekcji v0.17.0.
 5. Wykonuj zmiany samodzielnie przez GitHub/Neon i dopiero przy koniecznej ręcznej czynności poproś użytkownika o jeden krok.
