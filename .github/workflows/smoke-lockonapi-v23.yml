@@ -1,0 +1,36 @@
+name: Smoke production lockonapi v23
+
+on:
+  push:
+    branches: ["ops/deploy-lockonapi-v23"]
+    paths:
+      - ".github/workflows/smoke-lockonapi-v23.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe production health
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech'
+          body="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 --max-time 20 "$base/health")"
+          printf '%s' "$body" | jq -e '.ok == true and .service == "LockOn ServiceOS Central API"'
+      - name: Verify public tracking and auth boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech'
+          for path in '/me' '/service/orders' '/service/service-points' '/finance/revenues'; do
+            code="$(curl --silent --output /tmp/out.json --write-out '%{http_code}' --max-time 20 "$base/${path#/}")"
+            test "$code" = "401"
+          done
+          track_code="$(curl --silent --output /tmp/track.json --write-out '%{http_code}' --max-time 20 "$base/public/service-track?token=bad")"
+          test "$track_code" = "404"
+          reset_code="$(curl --silent --output /tmp/reset.json --write-out '%{http_code}' --max-time 20 -X POST -H 'Content-Type: application/json' -d '{"phrase":"USUŃ WSZYSTKIE DANE","confirmed":true}' "$base/admin/factory-reset")"
+          test "$reset_code" = "401"
