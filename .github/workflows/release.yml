@@ -11,6 +11,7 @@ permissions:
   contents: write
   id-token: write
   attestations: write
+  actions: read
 
 concurrency:
   group: lockon-release
@@ -72,6 +73,50 @@ jobs:
 
       - name: Build Windows installer
         run: npx electron-builder --win --publish never
+
+      - name: Upload unsigned installer for SignPath
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        id: upload-unsigned-installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lockon-unsigned-installer
+          path: release/LockOn-ServiceOS-Setup.exe
+          archive: false
+          if-no-files-found: error
+
+      - name: Submit installer to SignPath
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Replace installer with signed build
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem -Path signed -Recurse -Filter "LockOn-ServiceOS-Setup.exe" | Select-Object -First 1
+          if (-not $signed) {
+            Write-Error "SignPath nie zwrócił podpisanego instalatora."
+            exit 1
+          }
+          Copy-Item $signed.FullName "release/LockOn-ServiceOS-Setup.exe" -Force
+
+      - name: Verify Authenticode signature
+        if: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature "release/LockOn-ServiceOS-Setup.exe"
+          if ($sig.Status -ne "Valid") {
+            Write-Error "Nieprawidłowy podpis Authenticode: $($sig.Status)"
+            exit 1
+          }
+          Write-Host "Publisher: $($sig.SignerCertificate.Subject)"
 
       - name: Generate SHA-256 checksums
         shell: pwsh
