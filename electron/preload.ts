@@ -81,6 +81,7 @@ contextBridge.exposeInMainWorld('lockOn', {
   },
   support: {
     request: (pointId?: string, message?: string) => ipcRenderer.invoke('support:request', pointId, message),
+    presence: () => ipcRenderer.invoke('support:presence'),
     listTickets: () => ipcRenderer.invoke('support:listTickets'),
     take: (ticketId: string) => ipcRenderer.invoke('support:take', ticketId),
     reply: (ticketId: string, message: string) => ipcRenderer.invoke('support:reply', ticketId, message),
