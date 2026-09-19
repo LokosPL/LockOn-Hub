@@ -302,6 +302,7 @@ export function AdministrationPage() {
                   <div className="request-intent-box">
                     <div className="request-intent-item"><span>Zgłoszony punkt</span><strong>{user.requestedPoint?.pointName ?? 'Nie podano'}</strong><small>{user.requestedPoint?.city ?? '—'}</small></div>
                     <div className="request-intent-item role-intent"><span>Prosi o rolę</span><strong>{ROLE_DEFINITIONS[requestRole].label}</strong><small>Możesz ją zmienić przed akceptacją.</small></div>
+                    {requestRole === 'TECHNICIAN' && <div className="request-intent-item settlement-intent"><span>Wybrane rozliczenie</span><strong>{user.requestedPoint?.technicianSplitPercent ?? '—'}% dla serwisanta</strong><small>{user.requestedPoint?.technicianSplitPercent == null ? 'Serwisant nie ustawił procentu.' : `${100-user.requestedPoint.technicianSplitPercent}% dla Szefa`}</small></div>}
                   </div>
                   <div className="approval-controls approval-controls-v2">
                     <div className="approval-title"><UserCheck size={16}/><div><strong>Decyzja OWNER</strong><span>Rola i zakres punktów.</span></div></div>
@@ -342,6 +343,7 @@ export function AdministrationPage() {
                   <strong>{user.name}{user.blocked && <span className="blocked-chip">ZABLOKOWANE</span>}</strong>
                   <span>{user.email}</span>
                   <small>Ostatnie logowanie: {formatDate(user.lastLoginAt)}</small>
+                  {user.role === 'TECHNICIAN' && <small>Rozliczenie: {user.technicianSplitPercent == null ? 'nieustawione — serwisant musi je ustawić' : `${user.technicianSplitPercent}% serwisant / ${100-user.technicianSplitPercent}% Szef`}</small>}
                 </div>
                 <label><span>Rola</span><select disabled={owner || user.blocked} value={draft.role} onChange={(e) => patchDraft(user, { role: e.target.value as UserRole })}>{owner ? <option value="OWNER">Właściciel aplikacji</option> : ASSIGNABLE_ROLES.map((role) => <option key={role} value={role}>{ROLE_DEFINITIONS[role].label}</option>)}</select></label>
                 <div className="user-points-mini">{owner || draft.role === 'BOSS' ? <span className="global-chip">Wszystkie punkty</span> : <div className="inline-point-checks">{(data?.points ?? []).map((point) => <label key={point.id}><input disabled={user.blocked} type="checkbox" checked={draft.pointIds.includes(point.id)} onChange={() => togglePoint(user, point.id)}/><span>{point.name}</span></label>)}</div>}</div>
