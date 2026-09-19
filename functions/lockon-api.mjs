@@ -197,7 +197,7 @@ const currentSession = async (request) => {
   if (!token) return null;
   const hash = tokenHash(token);
   const { rows } = await q(
-    "SELECT s.id AS session_id,s.user_id,s.client_type,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
+    "SELECT s.id AS session_id,s.user_id,s.client_type,s.created_at AS session_created_at,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
     [hash]
   );
   const row = rows[0];
@@ -205,6 +205,8 @@ const currentSession = async (request) => {
   await q('UPDATE auth_sessions SET last_seen_at=now() WHERE id=$1', [row.session_id]);
   return {
     sessionId: row.session_id,
+    clientType: row.client_type,
+    createdAt: row.session_created_at,
     user: {
       id: row.id,
       google_sub: row.google_sub,
@@ -1570,6 +1572,73 @@ const route = async (request) => {
       : await q("UPDATE auth_sessions SET revoked_at=now() WHERE revoked_at IS NULL");
     await audit(session.user.id,'ALL_SESSIONS_REVOKED','session',null,null,{revoked:Number(result.rowCount||0),exceptCurrent});
     return json(request,{ok:true,revoked:Number(result.rowCount||0),exceptCurrent});
+  }
+
+
+  if(method==='POST'&&url.pathname==='/admin/factory-reset'){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Tylko OWNER może wykonać reset danych.'),{status:403,code:'OWNER_ONLY'});
+    const sessionAgeMs=Date.now()-new Date(session.createdAt||0).getTime();
+    if(!Number.isFinite(sessionAgeMs)||sessionAgeMs>10*60*1000){
+      throw Object.assign(new Error('Dla resetu danych wymagane jest świeże logowanie Google. Zaloguj się ponownie i powtórz operację.'),{status:428,code:'REAUTH_REQUIRED'});
+    }
+    const body=await readJson(request);
+    const phrase=String(body.phrase||'');
+    const confirmed=body.confirmed===true;
+    const reason=cleanText(body.reason,500);
+    if(phrase!=='USUŃ WSZYSTKIE DANE'){
+      return json(request,{error:'CONFIRMATION_PHRASE',message:'Wpisz dokładnie: USUŃ WSZYSTKIE DANE'},400);
+    }
+    if(!confirmed){
+      return json(request,{error:'SECOND_CONFIRMATION_REQUIRED',message:'Wymagane jest drugie potwierdzenie resetu.'},400);
+    }
+
+    const resetId=makeId('rst');
+    await q(
+      "INSERT INTO system_reset_log(id,actor_email,actor_name,client_type,reason,status) VALUES($1,$2,NULLIF($3,''),$4,NULLIF($5,''),'REQUESTED')",
+      [resetId,session.user.email,session.user.name||'',session.clientType||'',reason]
+    );
+
+    const client=await pool.connect();
+    const deleted={};
+    try{
+      await client.query('BEGIN');
+      const remove=async(table)=>{
+        const result=await client.query('DELETE FROM '+table);
+        deleted[table]=Number(result.rowCount||0);
+      };
+      await remove('notification_outbox');
+      await remove('revenue_entries');
+      await remove('service_order_notes');
+      await remove('service_order_status_history');
+      await remove('service_order_transfers');
+      await remove('service_orders');
+      await remove('devices');
+      await remove('customers');
+      await remove('settlements');
+      await remove('point_email_senders');
+      await remove('point_notification_settings');
+      await remove('support_messages');
+      await remove('support_conversations');
+      await remove('website_auth_codes');
+      await remove('access_requests');
+      await remove('user_point_access');
+      await remove('auth_sessions');
+      await remove('audit_log');
+      await remove('users');
+      await remove('points');
+      await client.query('COMMIT');
+    }catch(error){
+      await client.query('ROLLBACK').catch(()=>undefined);
+      const message=cleanText(error instanceof Error?error.message:error,500);
+      await q("UPDATE system_reset_log SET status='FAILED',error=$2,deleted_counts=$3::jsonb,completed_at=now() WHERE id=$1",[resetId,message,JSON.stringify(deleted)]).catch(()=>undefined);
+      throw Object.assign(new Error('Factory reset nie został wykonany. Dane pozostają bez zmian.'),{status:500,code:'FACTORY_RESET_FAILED'});
+    }finally{
+      client.release();
+    }
+
+    await q("UPDATE system_reset_log SET status='COMPLETED',deleted_counts=$2::jsonb,error=NULL,completed_at=now() WHERE id=$1",[resetId,JSON.stringify(deleted)]);
+    return json(request,{ok:true,resetId,reloginRequired:true,deleted});
   }
 
   if(method==='GET'&&url.pathname==='/finance/revenues'){
