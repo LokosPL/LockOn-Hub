@@ -1888,22 +1888,17 @@ const route = async (request) => {
       estimatedCompletionAt=date;
     }
 
-    const canManage=SERVICE_MANAGE_ROLES.has(u.role_code);
-    if(!canManage&&('assignedTechnicianId' in body||'estimatedCost' in body||'finalCost' in body)){
-      throw Object.assign(new Error('Tylko kierownictwo punktu może zmieniać technika i koszty.'),{status:403});
+    const canManageAssignment=SERVICE_MANAGE_ROLES.has(u.role_code);
+    const canEditCosts=SERVICE_EDIT_ROLES.has(u.role_code);
+    if(!canManageAssignment&&'assignedTechnicianId' in body){
+      throw Object.assign(new Error('Tylko kierownictwo punktu może zmieniać przypisanego technika.'),{status:403});
     }
 
     let assignedTechnicianId=found.assigned_technician_id||null;
     let estimatedCost=found.estimated_cost==null?null:Number(found.estimated_cost);
     let finalCost=found.final_cost==null?null:Number(found.final_cost);
-    if(canManage){
+    if(canManageAssignment){
       assignedTechnicianId=cleanText(body.assignedTechnicianId,80)||null;
-      const estimatedRaw=body.estimatedCost;
-      const finalRaw=body.finalCost;
-      estimatedCost=estimatedRaw==null||estimatedRaw===''?null:Number(estimatedRaw);
-      finalCost=finalRaw==null||finalRaw===''?null:Number(finalRaw);
-      if(estimatedCost!=null&&(!Number.isFinite(estimatedCost)||estimatedCost<0))return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
-      if(finalCost!=null&&(!Number.isFinite(finalCost)||finalCost<0))return json(request,{error:'FINAL_COST',message:'Nieprawidłowy koszt końcowy.'},400);
       if(assignedTechnicianId){
         const tech=(await q(
           "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE usr.id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND a.point_id=$2 LIMIT 1",
@@ -1911,6 +1906,18 @@ const route = async (request) => {
         )).rows[0];
         if(!tech)return json(request,{error:'TECHNICIAN',message:'Wybrany technik nie ma dostępu do aktualnego punktu urządzenia.'},400);
       }
+    }
+    if(canEditCosts){
+      if('estimatedCost' in body){
+        const estimatedRaw=body.estimatedCost;
+        estimatedCost=estimatedRaw==null||estimatedRaw===''?null:Number(estimatedRaw);
+      }
+      if('finalCost' in body){
+        const finalRaw=body.finalCost;
+        finalCost=finalRaw==null||finalRaw===''?null:Number(finalRaw);
+      }
+      if(estimatedCost!=null&&(!Number.isFinite(estimatedCost)||estimatedCost<0))return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
+      if(finalCost!=null&&(!Number.isFinite(finalCost)||finalCost<0))return json(request,{error:'FINAL_COST',message:'Nieprawidłowy koszt końcowy.'},400);
     }
 
     const client=await pool.connect();
@@ -1952,7 +1959,7 @@ const route = async (request) => {
     const canManage=SERVICE_MANAGE_ROLES.has(u.role_code);
     let assignedTechnicianId=u.role_code==='TECHNICIAN'?u.id:(canManage?(cleanText(body.assignedTechnicianId,80)||null):null);
     let estimatedCost=null;
-    if(canManage&&body.estimatedCost!==undefined&&body.estimatedCost!==''){
+    if(body.estimatedCost!==undefined&&body.estimatedCost!==''){
       estimatedCost=Number(body.estimatedCost);
       if(!Number.isFinite(estimatedCost)||estimatedCost<0)return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
     }
@@ -2081,6 +2088,35 @@ const route = async (request) => {
       return json(request,{order:view,notification:{queued:false,sent:false,reason:'STATUS_UNCHANGED'}});
     }
 
+    let settlementSpec=null;
+    if(next==='COMPLETED'){
+      const settlementPointId=found.home_point_id||found.point_id;
+      let revenueUserId=found.assigned_technician_id||null;
+      if(!revenueUserId&&u.role_code==='TECHNICIAN') revenueUserId=u.id;
+      if(!revenueUserId){
+        const candidates=(await q(
+          "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE a.point_id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL ORDER BY usr.name,usr.id LIMIT 2",
+          [settlementPointId]
+        )).rows;
+        if(candidates.length===1) revenueUserId=candidates[0].id;
+      }
+      if(!revenueUserId){
+        return json(request,{error:'TECHNICIAN_REQUIRED',message:'Przed zakończeniem zlecenia przypisz serwisanta odpowiedzialnego za naprawę.'},409);
+      }
+      const revenueUser=(await q(
+        "SELECT id,name,technician_split_percent FROM users WHERE id=$1 AND role_code='TECHNICIAN' AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",
+        [revenueUserId]
+      )).rows[0];
+      if(!revenueUser){
+        return json(request,{error:'TECHNICIAN_REQUIRED',message:'Przypisany serwisant nie jest aktywnym kontem TECHNICIAN.'},409);
+      }
+      const technicianPercent=normalizeTechnicianPercent(revenueUser.technician_split_percent);
+      if(technicianPercent===null){
+        return json(request,{error:'SETTLEMENT_REQUIRED',message:'Serwisant '+(revenueUser.name||'')+' musi najpierw ustawić swój procent rozliczenia w sekcji Rozliczenia.'},409);
+      }
+      settlementSpec={settlementPointId,revenueUserId,technicianPercent,split:splitRevenueAmount(settlementAmount,technicianPercent)};
+    }
+
     let settlement=null;
     const statusClient=await pool.connect();
     try{
@@ -2094,19 +2130,11 @@ const route = async (request) => {
         [makeId('hst'),found.id,found.status,next,note||null,u.id]
       );
 
-      if(next==='COMPLETED'){
-        const settlementPointId=found.home_point_id||found.point_id;
-        let revenueUserId=found.assigned_technician_id||null;
-        if(!revenueUserId){
-          revenueUserId=(await statusClient.query(
-            "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE a.point_id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL ORDER BY usr.name,usr.id LIMIT 1",
-            [settlementPointId]
-          )).rows[0]?.id||u.id;
-        }
+      if(next==='COMPLETED'&&settlementSpec){
         const revenueId=makeId('rev');
         const revenue=(await statusClient.query(
-          "INSERT INTO revenue_entries(id,point_id,user_id,service_order_id,amount,currency,category,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,$5,$6,'SERVICE','APPROVED',$7,now(),$8,now()) ON CONFLICT (service_order_id) WHERE service_order_id IS NOT NULL DO UPDATE SET point_id=EXCLUDED.point_id,user_id=EXCLUDED.user_id,amount=EXCLUDED.amount,currency=EXCLUDED.currency,status='APPROVED',note=EXCLUDED.note,approved_by_user_id=EXCLUDED.approved_by_user_id,approved_at=now() RETURNING id,point_id,user_id,service_order_id,amount,currency,status,approved_at",
-          [revenueId,settlementPointId,revenueUserId,found.id,Math.round(settlementAmount*100)/100,found.currency||'PLN','Automatyczne rozliczenie zakończonego zlecenia #'+found.order_number,u.id]
+          "INSERT INTO revenue_entries(id,point_id,user_id,service_order_id,amount,currency,category,technician_percent,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,$5,$6,'SERVICE',$7,'APPROVED',$8,now(),$9,now()) ON CONFLICT (service_order_id) WHERE service_order_id IS NOT NULL DO UPDATE SET point_id=EXCLUDED.point_id,user_id=EXCLUDED.user_id,amount=EXCLUDED.amount,currency=EXCLUDED.currency,technician_percent=EXCLUDED.technician_percent,status='APPROVED',note=EXCLUDED.note,approved_by_user_id=EXCLUDED.approved_by_user_id,approved_at=now() RETURNING id,point_id,user_id,service_order_id,amount,currency,technician_percent,status,approved_at",
+          [revenueId,settlementSpec.settlementPointId,settlementSpec.revenueUserId,found.id,Math.round(settlementAmount*100)/100,found.currency||'PLN',settlementSpec.technicianPercent,'Automatyczne rozliczenie zakończonego zlecenia #'+found.order_number,u.id]
         )).rows[0];
         settlement={
           id:revenue.id,
@@ -2116,6 +2144,10 @@ const route = async (request) => {
           serviceOrderId:revenue.service_order_id,
           userId:revenue.user_id,
           pointId:revenue.point_id,
+          technicianPercent:settlementSpec.split.technicianPercent,
+          bossPercent:settlementSpec.split.bossPercent,
+          technicianShare:settlementSpec.split.technicianShare,
+          bossShare:settlementSpec.split.bossShare,
           approvedAt:revenue.approved_at
         };
       }
