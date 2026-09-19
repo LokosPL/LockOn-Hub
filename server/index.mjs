@@ -617,7 +617,12 @@ const handle = async (req, res) => {
     if (!ROLES.includes(role) || role === 'OWNER') return json(res, 400, { error: 'ROLE' });
     const pointIds = Array.isArray(body.pointIds) ? body.pointIds.filter((value) => db.points.some((p) => p.id === value)) : [];
     if (!GLOBAL_ROLES.has(role) && pointIds.length === 0) return json(res, 400, { error: 'POINT_REQUIRED', message: 'Wybierz co najmniej jeden punkt.' });
+    const technicianSplitPercent = role === 'TECHNICIAN'
+      ? normalizeTechnicianPercent(body.technicianSplitPercent ?? target.technicianSplitPercent)
+      : null;
+    if (role === 'TECHNICIAN' && technicianSplitPercent === null) return json(res, 400, { error: 'TECHNICIAN_SPLIT', message: 'Ustaw procent rozliczenia serwisanta.' });
     target.role = role;
+    target.technicianSplitPercent = technicianSplitPercent;
     target.status = 'ACTIVE';
     target.pointIds = GLOBAL_ROLES.has(role) ? [] : pointIds;
     saveDb();
