@@ -674,6 +674,18 @@ Dla każdego priorytetu:
 - Aktualna produkcja po migracji ma OWNER, TECHNICIAN i USER; nie zmieniano produkcyjnym testem żadnej roli ani blokady prawdziwego konta.
 - Tymczasowe gałęzie Neon/GitHub używane do E2E nie zostały autonomicznie usunięte. Ich usunięcie traktuj jako operację destrukcyjną wymagającą osobnego potwierdzenia.
 
+## Polish WWW/PWA 2026 — landing, panel pracownika i portal klienta — 2026-09-20
+
+- Site PR #23 scalony do `lockon-serviceos-site/main`: commit `ffad6a800cc6741bc51af7c9a2a8994c0c9f01ac`.
+- Verify na PR #170 SUCCESS; Verify po merge na `main` #171 SUCCESS; GitHub Pages deploy #91 SUCCESS.
+- Dodano wspólną warstwę wizualną `assets/ui-2026.css` i lekkie progressive enhancement `assets/ui-2026.js`.
+- Landing pracownika, zalogowany panel WWW/PWA, prywatny portal klienta oraz publiczna karta pojedynczego zlecenia używają teraz jednego spójnego języka UI: ujednolicone karty, przyciski, formularze, focus states, kontrast, promienie, cienie i hierarchia treści.
+- Animacje są subtelne i respektują `prefers-reduced-motion`; dynamicznie pojawiające się karty mają krótkie wejście bez zmiany logiki aplikacji.
+- Panel klienta ma prostsze nazewnictwo dla laika: „kod klienta” zamiast technicznego „identyfikatora”, prostszy opis wycen i historii zleceń.
+- Panel pracownika używa prostszego opisu „Panel pracownika”, czytelniejszej etykiety WŁAŚCICIEL i nawigacji „Zarządzaj” zamiast technicznego skrótu „Admin”.
+- Cache PWA podniesiony do `serviceos-shell-v18`; nowe assety UI są częścią shell cache.
+- Brak zmian backendu, schematu DB, ról, sesji i uprawnień. Produkcyjny Neon pozostaje `lockonapi` v32, a publiczny desktop pozostaje v0.20.1.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
