@@ -92,11 +92,11 @@ export function HelpChat({ open, onClose, auth, effectiveRole }: HelpChatProps) 
         <div className="support-mode-note">
           <KeyRound size={15} />
           <div>
-            <strong>Połączone ze stroną</strong>
-            <span>Asystent zna ServiceOS, może szukać klientów i zleceń tylko w Twoim zakresie oraz wygenerować jednorazowy kod WWW.</span>
+            <strong>Połącz urządzenie mobilne</strong>
+            <span>Otwórz app.serviceos.pl na swoim telefonie, zaakceptuj instrukcję pracownika, a tutaj wygeneruj jednorazowy kod. Telefon dostanie dokładnie Twoją rolę i zakres punktów — żadnych dodatkowych uprawnień.</span>
           </div>
           <button className="button small secondary chat-code-button" disabled={sending} onClick={() => void sendText('Wygeneruj kod do strony')}>
-            Kod WWW
+            Połącz urządzenie
           </button>
         </div>
 
@@ -118,7 +118,7 @@ export function HelpChat({ open, onClose, auth, effectiveRole }: HelpChatProps) 
           {!loading && messages.length === 0 && (
             <div className="chat-message chat-assistant">
               <div className="chat-message-meta"><span>LockOn Pomoc</span></div>
-              <p>Cześć. Możesz pytać o ServiceOS, poprosić o wyszukanie klienta, sprawdzić zlecenie po numerze albo wygenerować kod do strony.</p>
+              <p>Cześć. Możesz pytać o ServiceOS, wyszukać klienta, sprawdzić zlecenie albo połączyć swój telefon z panelem WWW jednorazowym kodem.</p>
             </div>
           )}
           {messages.map((message) => (
