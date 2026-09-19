@@ -218,7 +218,7 @@ const currentSession = async (request) => {
   if (!token) return null;
   const hash = tokenHash(token);
   const { rows } = await q(
-    "SELECT s.id AS session_id,s.user_id,s.client_type,s.created_at AS session_created_at,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
+    "SELECT s.id AS session_id,s.user_id,s.client_type,s.created_at AS session_created_at,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.technician_split_percent,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
     [hash]
   );
   const row = rows[0];
@@ -242,6 +242,7 @@ const currentSession = async (request) => {
       name: row.name,
       picture_url: row.picture_url,
       role_code: row.role_code,
+      technician_split_percent: row.technician_split_percent,
       status: row.status,
       blocked_at: row.blocked_at,
       blocked_reason: row.blocked_reason,
