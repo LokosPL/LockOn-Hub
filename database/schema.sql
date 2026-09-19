@@ -194,8 +194,11 @@ CREATE TABLE IF NOT EXISTS system_reset_log (
   actor_name text,
   client_type text,
   reason text,
+  status text NOT NULL DEFAULT 'REQUESTED' CHECK (status IN ('REQUESTED','COMPLETED','FAILED')),
   deleted_counts jsonb NOT NULL DEFAULT '{}'::jsonb,
-  created_at timestamptz NOT NULL DEFAULT now()
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS system_reset_log_created_idx ON system_reset_log(created_at DESC);
 
