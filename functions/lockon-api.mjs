@@ -934,13 +934,16 @@ const renderStatusEmail = (item) => {
       : (item.current_point_name || item.point_name || ''),
     100
   );
-  const footer = cleanText(
-    item.footer_text ||
-    (contactPoint
-      ? 'W razie pytań skontaktuj się z punktem, w którym aktualnie znajduje się urządzenie: ' + contactPoint + '.'
-      : 'W razie pytań skontaktuj się z punktem prowadzącym zlecenie.'),
-    500
-  );
+  const defaultContactText = contactPoint
+    ? (
+        isTransfer && transferStatus === 'IN_TRANSIT'
+          ? 'W razie pytań skontaktuj się z punktem docelowym przekazania: ' + contactPoint + '.'
+          : isTransfer && ['DELIVERED','ACCEPTED'].includes(transferStatus)
+            ? 'W razie pytań skontaktuj się z punktem, do którego dostarczono urządzenie: ' + contactPoint + '.'
+            : 'W razie pytań skontaktuj się z punktem, w którym aktualnie znajduje się urządzenie: ' + contactPoint + '.'
+      )
+    : 'W razie pytań skontaktuj się z punktem prowadzącym zlecenie.';
+  const footer = cleanText(item.footer_text || defaultContactText, 500);
 
   const subject = 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
   const intro = isTransfer
@@ -982,6 +985,7 @@ const renderStatusEmail = (item) => {
     '',
     'Urządzenie: ' + item.brand + ' ' + item.model,
     'Punkt prowadzący: ' + item.point_name,
+    contactPoint ? 'Kontakt / lokalizacja operacyjna: ' + contactPoint : '',
     item.tracking_url ? 'Śledź zlecenie: ' + item.tracking_url : '',
     '',
     footer,
@@ -1007,6 +1011,7 @@ const renderStatusEmail = (item) => {
           '<div style="margin-top:16px;font-size:13px;color:#aeb6c0">' +
             '<strong style="color:#e8ebef">' + escapeHtml(item.brand) + ' ' + escapeHtml(item.model) + '</strong><br>' +
             'Punkt prowadzący: ' + escapeHtml(item.point_name) +
+            (contactPoint ? '<br>Kontakt / lokalizacja operacyjna: ' + escapeHtml(contactPoint) : '') +
           '</div>' +
           (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:inline-block;margin-top:18px;padding:12px 16px;border-radius:10px;background:#ff7445;color:#fff;text-decoration:none;font-size:13px;font-weight:800">Śledź naprawę i historię urządzenia</a>' : '') +
           '<p style="margin:20px 0 0;font-size:12px;color:#818b97;line-height:1.5">' + escapeHtml(footer) + '</p>' +
