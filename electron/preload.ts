@@ -79,6 +79,10 @@ contextBridge.exposeInMainWorld('lockOn', {
     getConversation: () => ipcRenderer.invoke('assistant:getConversation'),
     send: (message: string) => ipcRenderer.invoke('assistant:send', message)
   },
+  diagnostics: {
+    internetSpeed: () => ipcRenderer.invoke('diagnostics:internetSpeed'),
+    connectivity: () => ipcRenderer.invoke('diagnostics:connectivity')
+  },
   support: {
     request: (pointId?: string, message?: string) => ipcRenderer.invoke('support:request', pointId, message),
     presence: () => ipcRenderer.invoke('support:presence'),
