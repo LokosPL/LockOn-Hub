@@ -596,11 +596,29 @@ Dla każdego priorytetu:
 - PWA cache podniesiony do `serviceos-shell-v14`.
 - Nie opublikowano nowej wersji desktopowej; publiczny instalator pozostaje v0.18.0.
 
+## Wydanie v0.19.0 — polski audyt, portal klienta i przebudowa WWW/PWA — 2026-09-19
+
+- Hub PR #45 scalony do `main`: commit `fd4f8d28cc99f728319959f2be7a07866791d030`.
+- Site PR #20 scalony do `lockon-serviceos-site/main`: commit `5f2f61129ec5ede4b7b251d55a6cdb560f9dfe2b`.
+- Przed merge: Verify ServiceOS #483 SUCCESS, Verify Neon API bundle #11 SUCCESS, CodeQL #253 SUCCESS, Site Verify #150 SUCCESS.
+- Po merge na `main`: Verify ServiceOS #484 SUCCESS, CodeQL #254 SUCCESS, Build central API bundle #134 SUCCESS; Site Verify #151 SUCCESS i Pages deploy #88 SUCCESS.
+- Produkcyjny backend: Neon `lockonapi` **v31**, deployment completed.
+- Produkcyjny smoke v31 SUCCESS: `/health` 200; bez sesji `/me`, `/service/orders`, `/service/customer-quotes`, `/admin/audit`, `/public/customer-portal/me`, factory-reset preview/POST i status mutation POST zwracają 401; losowy nieprawidłowy customer ID także 401. Nie wykonano żadnego testu destrukcyjnego.
+- Domknięto routing wycen klientów: lokalny aktywny serwisant -> najczęściej używany przez USER cel przekazań -> historyczny cel przekazań -> aktywny serwisant fallback. Przypadek punktu bez serwisanta i bez historii został sprawdzony E2E na tymczasowym Neon: `ACTIVE_TECHNICIAN_FALLBACK`, run #1 SUCCESS.
+- Audyt desktop + WWW/PWA jest operacyjnie opisowy po polsku. Główny widok pokazuje osobne zdanie dla działania, przetłumaczone statusy, aktora/rolę/źródło, punkt, numer zlecenia i bezpieczny kontekst klienta/urządzenia. Techniczne ID i JSON są wyłącznie w rozwijanych „Dane techniczne i identyfikatory”. Filtry używają polskich kategorii zamiast wymagania znajomości kodów akcji.
+- Desktopowy moduł Serwis ma zakładkę „Wyceny klientów” dla OWNER/BOSS/COORDINATOR/TECHNICIAN: routing, rozmowa, kwota zdalnej wyceny, odpowiedź i zamknięcie; automatyczne odświeżanie co 20 s.
+- Panel WWW/PWA przebudowany responsywnie: na laptopie stały lewy rail modułów i szerszy workspace; na telefonie przewijalna dolna nawigacja. Karty zleceń pokazują osobno punkt macierzysty, aktualne miejsce urządzenia, serwisanta, termin, cenę/wycenę i przekazanie. Cache PWA: `serviceos-shell-v16`.
+- Publiczna strona pracownika została uproszczona: prosty polski język, sekcja „Jak pracujesz” z przykładowym dniem zlecenia, krótszy przebieg naprawy i automatycznie zmieniający się podgląd aplikacji bez przewijania/skakania; `prefers-reduced-motion` pozostaje respektowane.
+- Prywatny portal klienta pozostaje ukryty: brak linku z normalnej strony pracowniczej i brak wejścia do ServiceOS dla klienta zewnętrznego.
+- Publiczne wydanie Windows: **v0.19.0**, release workflow #39 SUCCESS.
+- Instalator: `LockOn-ServiceOS-Setup.exe`, SHA-256 `b1d804bb20515d92bb84fddb46295c7a95fe669c9193dcd73f83f82b24d4ba3f`; rozmiar 116558278 B. Opublikowane także `latest.yml`, blockmap i `SHA256SUMS.txt`, z build provenance.
+- Tymczasowa gałąź Neon użyta do testu pozostaje nienaruszona; nie usuwano jej autonomicznie.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
 2. Sprawdź aktualny `main`, latest release, otwarte PR-y i wszystkie aktywne workflow w obu repozytoriach.
 3. Sprawdź Neon: projekt `wandering-field-13057181`, produkcyjną gałąź `br-steep-bonus-b1f1qh8u`, bazę `lockon`, aktywny deployment `lockonapi` oraz schemat.
-4. Aktualny backlog Priorytety 1–10 jest zakończony i wydany jako v0.18.0. Nie rozpoczynaj go ponownie.
+4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to v0.19.0. Nie rozpoczynaj historycznych priorytetów ponownie.
 5. Przy kolejnej pracy najpierw sprawdź nowe wymagania użytkownika, aktualny main/release/Neon i dopiero utwórz następny backlog lub poprawkę.
 6. Pracuj samodzielnie przez GitHub i Neon; nie proś użytkownika o informacje, które można sprawdzić narzędziami.
