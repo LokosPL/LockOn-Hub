@@ -1,0 +1,41 @@
+name: Export verified lockonapi v21 artifact
+
+on:
+  push:
+    branches: ["ops/deploy-lockonapi-v21"]
+    paths:
+      - ".github/workflows/export-lockonapi-v21.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download exact verified artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          curl --fail --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/10580456996/zip" \
+            -o lockon-central-api.zip
+          echo "084f2068c2529c2a21b465f5be7b9b87dc68cc621a0a5f10796f8f629a62341d  lockon-central-api.zip" | sha256sum -c -
+      - name: Export base64 handoff
+        shell: bash
+        run: |
+          mkdir -p .deploy
+          base64 -w 4000 lockon-central-api.zip > .deploy/lockonapi-v21.zip.b64
+          printf '%s\n' "084f2068c2529c2a21b465f5be7b9b87dc68cc621a0a5f10796f8f629a62341d" > .deploy/lockonapi-v21.zip.sha256
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .deploy/lockonapi-v21.zip.b64 .deploy/lockonapi-v21.zip.sha256
+          git commit -m "Export verified lockonapi v21 artifact"
+          git push
