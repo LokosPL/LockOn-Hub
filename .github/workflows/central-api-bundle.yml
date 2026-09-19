@@ -48,7 +48,7 @@ jobs:
         shell: bash
         run: |
           (cd central-api-dist && zip -q -9 ../neon-function.zip index.mjs)
-          base64 -w0 neon-function.zip | fold -w 40000 | while IFS= read -r part; do
+          base64 -w0 neon-function.zip | fold -w 40000 | while IFS= read -r part || [ -n "$part" ]; do
             printf 'DEPLOY_PART:%s\n' "$part"
           done
 
