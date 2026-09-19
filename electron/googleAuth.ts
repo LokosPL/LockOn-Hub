@@ -39,6 +39,7 @@ export interface AuthState {
   point: AuthPoint | null;
   points: AuthPoint[];
   role: UserRole | null;
+  technicianSplitPercent?: number | null;
   status: AccountStatus | null;
   requestedPoint?: BackendRequestedPoint | null;
   message?: string;
@@ -139,6 +140,7 @@ const toAuthState = (
     point: points[0] ?? null,
     points,
     role: payload.user.role,
+    technicianSplitPercent: payload.user.technicianSplitPercent ?? null,
     status: payload.user.status,
     requestedPoint: payload.user.requestedPoint ?? null,
     message
@@ -154,6 +156,7 @@ const emptyState = (development: boolean, message?: string): AuthState => ({
   point: null,
   points: [],
   role: null,
+  technicianSplitPercent: null,
   status: null,
   requestedPoint: null,
   message
