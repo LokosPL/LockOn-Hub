@@ -86,9 +86,10 @@ export interface NotificationHistoryItem { id:string; orderId?:string|null; orde
 export interface GmailTestResult { ok:true; recipient:string; messageId:string; }
 export interface NotificationRetryResult { id:string; sent:boolean; status?:string; reason?:string; attempts?:number; nextAttemptAt?:string; messageId?:string; }
 export interface HelpAction {
-  type:'WEBSITE_CODE'|'NAVIGATE'|'OPEN_ORDER'|'OPEN_USER'|string;
+  type:'WEBSITE_CODE'|'NAVIGATE'|'OPEN_ORDER'|'OPEN_USER'|'SPEED_TEST'|'CONNECTIVITY_TEST'|'BROWSER_SEARCH'|string;
   label?:string; target?:string; code?:string; expiresAt?:string;
   orderId?:string; orderNumber?:number; userId?:string;
+  provider?:'YOUTUBE'|'WEB'; query?:string;
 }
 export interface HelpMessage { id:string; author:'user'|'support'|'system'|'assistant'; text:string; action?:HelpAction|null; createdAt:string; }
 export interface HelpConversation {
@@ -99,6 +100,14 @@ export interface HelpConversation {
 }
 export interface AssistantReply { userMessage:HelpMessage; assistantMessage:HelpMessage|null; action?:HelpAction|null; consultantState?:'BOT'|'WAITING'|'JOINED'; }
 export interface WebsiteAuthCode { code:string; expiresAt:string; }
+export interface InternetSpeedResult {
+  testedAt:string; downloadMbps:number; uploadMbps:number|null; latencyMs:number;
+  quality:string; provider:string; warning?:string|null;
+}
+export interface ConnectivityDiagnostics {
+  testedAt:string; internetOk:boolean; internetLatencyMs:number|null; apiOk:boolean; apiLatencyMs:number|null;
+  apiError?:string|null; version:string; platform:string; packaged:boolean; apiBaseUrl:string;
+}
 export interface SupportPresence {
   userId:string; name:string; email:string; role:UserRole|null; supportEnabled:boolean;
   online:boolean; lastSeenAt:string; clientTypes:string[]; conversationId?:string|null;
@@ -185,6 +194,10 @@ declare global {
       assistant: {
         getConversation: () => Promise<HelpConversation>;
         send: (message:string) => Promise<AssistantReply>;
+      };
+      diagnostics: {
+        internetSpeed: () => Promise<InternetSpeedResult>;
+        connectivity: () => Promise<ConnectivityDiagnostics>;
       };
       support: {
         request: (pointId?:string,message?:string) => Promise<{ok:true;conversationId:string;pointId:string;consultantState?:'WAITING'}>;
