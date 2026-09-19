@@ -1265,7 +1265,7 @@ const assistantReply = async (session, message) => {
         else lines.push('Twoja rola nie ma dostępu do danych kosztowych zlecenia.');
       }
 
-      if (lower.includes('notatk')) {
+      if (lower.includes('notatk') && SERVICE_EDIT_ROLES.has(user.role_code)) {
         const { rows } = await q(
           'SELECT n.body,n.created_at,usr.name AS author_name,usr.email AS author_email FROM service_order_notes n JOIN users usr ON usr.id=n.author_user_id WHERE n.service_order_id=$1 ORDER BY n.created_at DESC LIMIT 3',
           [order.id]
