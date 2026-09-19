@@ -1173,6 +1173,8 @@ const renderStatusEmail = (item) => {
     'Punkt prowadzący: ' + item.point_name,
     contactPoint ? 'Kontakt / lokalizacja operacyjna: ' + contactPoint : '',
     item.tracking_url ? 'Śledź zlecenie: ' + item.tracking_url : '',
+    item.customer_portal_code ? 'Twój stały identyfikator klienta: ' + item.customer_portal_code : '',
+    item.customer_portal_url ? 'Historia wszystkich serwisów i zapytania o wycenę: ' + item.customer_portal_url : '',
     '',
     footer,
     '',
@@ -1199,7 +1201,8 @@ const renderStatusEmail = (item) => {
             'Punkt prowadzący: ' + escapeHtml(item.point_name) +
             (contactPoint ? '<br>Kontakt / lokalizacja operacyjna: ' + escapeHtml(contactPoint) : '') +
           '</div>' +
-          (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:block;box-sizing:border-box;width:100%;margin-top:18px;padding:14px 16px;border-radius:10px;background:#ff7445;color:#fff;text-align:center;text-decoration:none;font-size:16px;line-height:1.35;font-weight:800">Śledź naprawę i historię urządzenia</a>' : '') +
+          (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:block;box-sizing:border-box;width:100%;margin-top:18px;padding:14px 16px;border-radius:10px;background:#ff7445;color:#fff;text-align:center;text-decoration:none;font-size:16px;line-height:1.35;font-weight:800">Śledź to zlecenie</a>' : '') +
+          (item.customer_portal_code ? '<div style="margin-top:16px;padding:16px;border-radius:12px;background:#101318;border:1px solid #333944"><div style="font-size:11px;color:#7f8995;text-transform:uppercase">Twój stały identyfikator klienta</div><div style="font-size:20px;font-weight:800;color:#eceff3;letter-spacing:.06em;margin-top:6px">' + escapeHtml(item.customer_portal_code) + '</div><p style="margin:8px 0 0;color:#8f99a5;font-size:12px;line-height:1.5">Zachowaj go. Dzięki niemu zobaczysz historię wszystkich swoich wizyt serwisowych i napiszesz do punktu o wycenę.</p>' + (item.customer_portal_url ? '<a href="' + escapeHtml(item.customer_portal_url) + '" style="display:inline-block;margin-top:10px;color:#ff9869;font-size:13px;font-weight:700;text-decoration:none">Otwórz portal klienta</a>' : '') + '</div>' : '') +
           '<p style="margin:20px 0 0;font-size:12px;color:#818b97;line-height:1.5">' + escapeHtml(footer) + '</p>' +
         '</div>' +
       '</div>' +
@@ -1248,7 +1251,7 @@ const sendGmail = async (sender, recipient, subject, textBody, htmlBody, display
 
 const processNotification = async (notificationId) => {
   const { rows } = await q(
-    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
+    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,s.customer_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
     [notificationId]
   );
   const item = rows[0];
@@ -1272,6 +1275,20 @@ const processNotification = async (notificationId) => {
   }catch(error){
     console.error('[tracking link]',error);
     item.tracking_url='';
+  }
+  if (
+    item.template_key === 'SERVICE_STATUS_CHANGED' &&
+    String(item.payload?.to || '').toUpperCase() === 'RECEIVED' &&
+    !item.payload?.from
+  ) {
+    try {
+      item.customer_portal_code = await ensureCustomerPortalCode(item.customer_id);
+      item.customer_portal_url = PUBLIC_PORTAL_URL + '/klient.html';
+    } catch (error) {
+      console.error('[customer portal code]', error);
+      item.customer_portal_code = '';
+      item.customer_portal_url = '';
+    }
   }
 
   const rendered = renderStatusEmail(item);
