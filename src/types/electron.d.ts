@@ -18,11 +18,11 @@ export interface RequestedPoint { pointName: string; city: string; requestedRole
 export interface AuthState {
   configured: boolean; authenticated: boolean; development: boolean; localStarterLoginAllowed: boolean;
   user: AuthUser | null; point: AuthPoint | null; points: AuthPoint[]; role: UserRole | null; status: AccountStatus | null;
-  technicianSplitPercent?:number|null; requestedPoint?: RequestedPoint | null; message?: string;
+  technicianSplitPercent?:number|null; supportEnabled?:boolean; requestedPoint?: RequestedPoint | null; message?: string;
 }
 export interface BrowserState { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean; }
 export interface BrowserBounds { x: number; y: number; width: number; height: number; }
-export interface AdminUser { id: string; email: string; name: string; picture?: string | null; role: UserRole | null; technicianSplitPercent?:number|null; status: AccountStatus; blocked?:boolean; blockedAt?:string|null; blockedReason?:string|null; pointIds: string[]; requestedPoint?: RequestedPoint | null; firstLoginAt: string; lastLoginAt: string; }
+export interface AdminUser { id: string; email: string; name: string; picture?: string | null; role: UserRole | null; technicianSplitPercent?:number|null; supportEnabled?:boolean; status: AccountStatus; blocked?:boolean; blockedAt?:string|null; blockedReason?:string|null; pointIds: string[]; requestedPoint?: RequestedPoint | null; firstLoginAt: string; lastLoginAt: string; }
 export interface AdminPoint {
   id:string; name:string; city:string; active:boolean;
   serviceEnabled?:boolean; acceptsExternalRepairs?:boolean;
@@ -85,12 +85,31 @@ export interface NotificationSettings { pointId:string; automaticEmailEnabled:bo
 export interface NotificationHistoryItem { id:string; orderId?:string|null; orderNumber?:number|null; recipient:string; status:'PENDING'|'PROCESSING'|'SENT'|'FAILED'|'CANCELLED'; attempts:number; subject?:string|null; providerMessageId?:string|null; lastError?:string|null; availableAt:string; sentAt?:string|null; createdAt:string; updatedAt:string; customerName?:string|null; device?:string|null; }
 export interface GmailTestResult { ok:true; recipient:string; messageId:string; }
 export interface NotificationRetryResult { id:string; sent:boolean; status?:string; reason?:string; attempts?:number; nextAttemptAt?:string; messageId?:string; }
-export interface HelpMessage { id:string; author:'user'|'support'|'system'|'assistant'; text:string; createdAt:string; }
-export interface HelpConversation { id:string; status:string; messages:HelpMessage[]; }
-export interface AssistantReply { userMessage:HelpMessage; assistantMessage:HelpMessage; action?:{type:string;code?:string;expiresAt?:string}|null; }
+export interface HelpAction {
+  type:'WEBSITE_CODE'|'NAVIGATE'|'OPEN_ORDER'|'OPEN_USER'|string;
+  label?:string; target?:string; code?:string; expiresAt?:string;
+  orderId?:string; orderNumber?:number; userId?:string;
+}
+export interface HelpMessage { id:string; author:'user'|'support'|'system'|'assistant'; text:string; action?:HelpAction|null; createdAt:string; }
+export interface HelpConversation {
+  id:string; status:string; consultantState?:'BOT'|'WAITING'|'JOINED';
+  consultantRequestedAt?:string|null; consultantJoinedAt?:string|null;
+  assignedSupportUserId?:string|null; assignedSupportName?:string|null;
+  messages:HelpMessage[];
+}
+export interface AssistantReply { userMessage:HelpMessage; assistantMessage:HelpMessage|null; action?:HelpAction|null; consultantState?:'BOT'|'WAITING'|'JOINED'; }
 export interface WebsiteAuthCode { code:string; expiresAt:string; }
-
-export interface SupportTicket { id:string; userId:string; userName:string; userEmail:string; pointId:string|null; pointName:string; status:'OPEN'|'CLOSED'; assignedSupportUserId:string|null; assignedSupportName:string|null; createdAt:string; updatedAt:string; messages:HelpMessage[]; }
+export interface SupportPresence {
+  userId:string; name:string; email:string; role:UserRole|null; supportEnabled:boolean;
+  online:boolean; lastSeenAt:string; clientTypes:string[]; conversationId?:string|null;
+  consultantState:'BOT'|'WAITING'|'JOINED'; assignedSupportUserId?:string|null; assignedSupportName?:string|null;
+  conversationUpdatedAt?:string|null;
+}
+export interface SupportTicket {
+  id:string; userId:string; userName:string; userEmail:string; pointId:string|null; pointName:string; status:'OPEN'|'CLOSED';
+  assignedSupportUserId:string|null; assignedSupportName:string|null; consultantRequestedAt?:string|null; consultantJoinedAt?:string|null;
+  createdAt:string; updatedAt:string; messages:HelpMessage[];
+}
 export interface CustomerQuoteMessage { id:string; senderKind:'CUSTOMER'|'STAFF'|'SYSTEM'; senderName?:string|null; body:string; createdAt:string; }
 export interface CustomerQuoteRequest {
   id:string; customerId:string; customerName:string; customerEmail?:string|null; customerPhone?:string|null;
@@ -114,9 +133,9 @@ declare global {
         getAudit: (filters?:AdminAuditFilters) => Promise<{events:AdminAuditEvent[]}>;
         createPoint: (payload:{name:string;city:string;serviceEnabled?:boolean;acceptsExternalRepairs?:boolean;serviceNote?:string}) => Promise<AdminPoint>;
         updatePointService: (pointId:string,payload:{serviceEnabled:boolean;acceptsExternalRepairs:boolean;externalRepairsPaused?:boolean;serviceNote?:string}) => Promise<AdminPoint>;
-        approveUser: (userId:string,payload:{role:UserRole;pointIds:string[];createRequestedPoint?:boolean}) => Promise<unknown>;
+        approveUser: (userId:string,payload:{role:UserRole;pointIds:string[];createRequestedPoint?:boolean;supportEnabled?:boolean}) => Promise<unknown>;
         rejectUser: (userId:string) => Promise<unknown>;
-        updateUserAccess: (userId:string,payload:{role:UserRole;pointIds:string[];technicianSplitPercent?:number|null}) => Promise<unknown>;
+        updateUserAccess: (userId:string,payload:{role:UserRole;pointIds:string[];technicianSplitPercent?:number|null;supportEnabled?:boolean}) => Promise<unknown>;
         blockUser: (userId:string,blocked:boolean,reason?:string) => Promise<AdminUser>;
         logoutUserSessions: (userId:string) => Promise<{ok:true;revoked:number}>;
         logoutAllSessions: (exceptCurrent?:boolean) => Promise<{ok:true;revoked:number;exceptCurrent:boolean}>;
@@ -168,7 +187,8 @@ declare global {
         send: (message:string) => Promise<AssistantReply>;
       };
       support: {
-        request: (pointId?:string,message?:string) => Promise<{ok:true;conversationId:string;pointId:string}>;
+        request: (pointId?:string,message?:string) => Promise<{ok:true;conversationId:string;pointId:string;consultantState?:'WAITING'}>;
+        presence: () => Promise<SupportPresence[]>;
         listTickets: () => Promise<SupportTicket[]>;
         take: (ticketId:string) => Promise<{ok:true}>;
         reply: (ticketId:string,message:string) => Promise<{ok:true}>;
