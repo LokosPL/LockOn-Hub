@@ -1007,8 +1007,8 @@ const renderStatusEmail = (item) => {
     'To automatyczna wiadomość z ' + displayName + '.'
   ].filter((line,index,array)=>line!=='' || (index>0 && array[index-1]!=='' )).join('\n');
 
-  const html = '<!doctype html><html lang="pl"><body style="margin:0;background:#111318;color:#eceff3;font-family:Arial,sans-serif">' +
-    '<div style="max-width:620px;margin:0 auto;padding:28px 18px">' +
+  const html = '<!doctype html><html lang="pl"><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"></head><body style="margin:0;background:#111318;color:#eceff3;font-family:Arial,sans-serif;word-break:break-word">' +
+    '<div style="width:100%;max-width:620px;box-sizing:border-box;margin:0 auto;padding:20px 12px">' +
       '<div style="border:1px solid #2a2f37;border-radius:16px;background:#171a20;overflow:hidden">' +
         '<div style="padding:18px 22px;border-bottom:1px solid #2a2f37;background:#13161b">' +
           '<div style="font-size:12px;color:#ff7b45;font-weight:700;letter-spacing:.08em">LOCKON SERVICEOS</div>' +
@@ -1027,7 +1027,7 @@ const renderStatusEmail = (item) => {
             'Punkt prowadzący: ' + escapeHtml(item.point_name) +
             (contactPoint ? '<br>Kontakt / lokalizacja operacyjna: ' + escapeHtml(contactPoint) : '') +
           '</div>' +
-          (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:inline-block;margin-top:18px;padding:12px 16px;border-radius:10px;background:#ff7445;color:#fff;text-decoration:none;font-size:13px;font-weight:800">Śledź naprawę i historię urządzenia</a>' : '') +
+          (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:block;box-sizing:border-box;width:100%;margin-top:18px;padding:14px 16px;border-radius:10px;background:#ff7445;color:#fff;text-align:center;text-decoration:none;font-size:16px;line-height:1.35;font-weight:800">Śledź naprawę i historię urządzenia</a>' : '') +
           '<p style="margin:20px 0 0;font-size:12px;color:#818b97;line-height:1.5">' + escapeHtml(footer) + '</p>' +
         '</div>' +
       '</div>' +
@@ -1389,7 +1389,7 @@ const route = async (request) => {
     if(!/^[A-Za-z0-9_-]{43}$/.test(token))return json(request,{error:'TRACKING_TOKEN',message:'Link śledzenia jest nieprawidłowy albo niepełny.'},404);
     const hash=tokenHash(token);
     const order=(await q(
-      "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_cost,s.final_cost,s.currency,s.estimated_completion_at,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,p.name AS point_name,hp.name AS home_point_name,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.tracking_token_hash=$1 LIMIT 1",
+      "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_completion_at,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,d.imei,d.serial_number,c.first_name,c.last_name,p.name AS point_name,hp.name AS home_point_name,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN customers c ON c.id=s.customer_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.tracking_token_hash=$1 LIMIT 1",
       [hash]
     )).rows[0];
     if(!order)return json(request,{error:'TRACKING_NOT_FOUND',message:'Link śledzenia wygasł albo nie istnieje.'},404);
@@ -1405,13 +1405,11 @@ const route = async (request) => {
         issueDescription:order.issue_description,
         status:order.status,
         statusLabel:STATUS_LABELS[order.status]||order.status,
-        device:{brand:order.brand,model:order.model},
+        customerName:[order.first_name,order.last_name?String(order.last_name).slice(0,1)+'.':''].filter(Boolean).join(' '),
+        device:{brand:order.brand,model:order.model,imei:order.imei?('••••••••••'+String(order.imei).slice(-4)):null,serialNumber:order.serial_number?('••••'+String(order.serial_number).slice(-4)):null},
         pointName:order.point_name,
         homePointName:order.home_point_name||order.point_name,
         currentPointName:order.current_point_name||null,
-        estimatedCost:order.estimated_cost==null?null:Number(order.estimated_cost),
-        finalCost:order.final_cost==null?null:Number(order.final_cost),
-        currency:String(order.currency||'PLN').trim(),
         estimatedCompletionAt:order.estimated_completion_at||null,
         receivedAt:order.received_at,
         completedAt:order.completed_at||null,
