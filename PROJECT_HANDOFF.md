@@ -523,6 +523,16 @@ Dla każdego priorytetu:
 - Produkcyjny odczyt kontrolny: Sklep LockOn 1800 PLN przychodu / 900 PLN serwisant / 900 PLN firma.
 - Bez zmian schematu DB i bez destrukcyjnych testów.
 
+## Priorytet 8 — ZROBIONE produkcyjnie (2026-09-19)
+
+- Site PR #17 scalony; PWA Verify #125 SUCCESS.
+- Publiczna strona używa krótszego, prostego języka pracownika; kody ról OWNER/TECHNICIAN/COORDINATOR/SUPPORT/PENDING/ACTIVE usunięto ze zwykłej treści.
+- Komunikat dostępu: „Twoje konto musi zostać zaakceptowane przez osobę uprawnioną”.
+- Nie eksponuje już pracownikowi szczegółów factory reset ani technicznych mechanizmów uprawnień.
+- Regulamin i polityka prywatności pozostają w końcowej akceptacji; pobieranie aplikacji i łączenie telefonu pozostają zablokowane do akceptacji.
+- Podgląd nadal używa `preview-stage`, bez `window.scrollBy`; CSP/PWA nie zostały osłabione.
+- PWA cache: serviceos-shell-v13.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
