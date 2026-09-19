@@ -133,28 +133,30 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }:
         </div>
       </section>
 
-      <section className="stats-grid compact-stats">
-        <article className="stat-card">
-          <div className="stat-icon orange"><Building2 size={19} /></div>
-          <div><span>Punkty w zasięgu</span><strong>{dashboardData?.pointCount ?? 0}</strong></div>
-          <small>{roleDefinition.scope === 'GLOBAL' ? 'Widok wszystkich punktów' : 'Zakres przypisany do konta'}</small>
-        </article>
+      {role !== 'USER' && (
+        <section className="stats-grid compact-stats">
+          <article className="stat-card">
+            <div className="stat-icon orange"><Building2 size={19} /></div>
+            <div><span>Punkty w zasięgu</span><strong>{dashboardData?.pointCount ?? 0}</strong></div>
+            <small>{roleDefinition.scope === 'GLOBAL' ? 'Widok wszystkich punktów' : 'Zakres przypisany do konta'}</small>
+          </article>
 
-        <article className="stat-card">
-          <div className="stat-icon"><UsersRound size={19} /></div>
-          <div><span>Aktywne konta</span><strong>{dashboardData?.activeUsers ?? 0}</strong></div>
-          <small>{role === 'OWNER' ? String(dashboardData?.pendingUsers ?? 0) + ' czeka na akceptację' : 'W Twoim zakresie dostępu'}</small>
-        </article>
+          <article className="stat-card">
+            <div className="stat-icon"><UsersRound size={19} /></div>
+            <div><span>Aktywne konta</span><strong>{dashboardData?.activeUsers ?? 0}</strong></div>
+            <small>{role === 'OWNER' ? String(dashboardData?.pendingUsers ?? 0) + ' czeka na akceptację' : 'W Twoim zakresie dostępu'}</small>
+          </article>
 
-        <article className="stat-card">
-          <div className="stat-icon orange"><BadgeDollarSign size={19} /></div>
-          <div>
-            <span>{role === 'TECHNICIAN' ? 'Moja zatwierdzona część' : 'Zatwierdzony przychód'}</span>
-            <strong>{money(role === 'TECHNICIAN' ? (dashboardData?.technicianShare ?? 0) : (dashboardData?.approvedRevenue ?? 0))}</strong>
-          </div>
-          <small>Tylko zatwierdzone wpisy</small>
-        </article>
-      </section>
+          <article className="stat-card">
+            <div className="stat-icon orange"><BadgeDollarSign size={19} /></div>
+            <div>
+              <span>{role === 'TECHNICIAN' ? 'Moja zatwierdzona część' : 'Zatwierdzony przychód'}</span>
+              <strong>{money(role === 'TECHNICIAN' ? (dashboardData?.technicianShare ?? 0) : (dashboardData?.approvedRevenue ?? 0))}</strong>
+            </div>
+            <small>Tylko zatwierdzone wpisy</small>
+          </article>
+        </section>
+      )}
 
       <section className="shortcut-grid">
         {shortcuts.map(({ key, title, description, icon: Icon, action }) => (
