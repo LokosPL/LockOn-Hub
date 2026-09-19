@@ -25,6 +25,17 @@ jobs:
         run: npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 esbuild@0.25.12
       - name: Check source syntax
         run: node --check functions/lockon-api.mjs
+      - name: Verify v0.20 support and customer contracts
+        run: |
+          grep -q 'support_enabled' functions/lockon-api.mjs
+          grep -q '/support/presence' functions/lockon-api.mjs
+          grep -q 'consultant_requested_at' functions/lockon-api.mjs
+          grep -q 'customer_portal_code' functions/lockon-api.mjs
+          grep -q "type:'SPEED_TEST'" functions/lockon-api.mjs
+          grep -q "type:'CONNECTIVITY_TEST'" functions/lockon-api.mjs
+          grep -q "type:'BROWSER_SEARCH'" functions/lockon-api.mjs
+          grep -q 'support_enabled' database/migrations/2026-09-19-v020-support-capability.sql
+          grep -q 'diagnostics-v020' database/migrations/2026-09-19-v020-assistant-knowledge.sql
       - name: Bundle for Neon Functions
         run: |
           mkdir -p central-api-dist
