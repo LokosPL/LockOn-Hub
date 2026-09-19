@@ -35,7 +35,7 @@ const BODY_LIMIT_BYTES = 64 * 1024;
 const googleVerifier = new OAuth2Client();
 
 const ROLES = ['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER'];
-const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
+const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
 const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
 const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
@@ -165,7 +165,11 @@ const publicUser = (user) => ({
   picture: user.picture,
   role: user.role ?? null,
   technicianSplitPercent: user.technicianSplitPercent ?? null,
+  supportEnabled: user.supportEnabled === true || user.role === 'SUPPORT' || user.role === 'OWNER',
   status: user.status,
+  blocked: Boolean(user.blockedAt),
+  blockedAt: user.blockedAt ?? null,
+  blockedReason: user.blockedReason ?? null,
   pointIds: Array.isArray(user.pointIds) ? user.pointIds : [],
   requestedPoint: user.requestedPoint ?? null,
   firstLoginAt: user.firstLoginAt,
@@ -198,6 +202,7 @@ const ensureOwner = (profile = {}) => {
       name: profile.name || 'Bartłomiej Motłoch',
       picture: profile.picture || null,
       role: 'OWNER',
+      supportEnabled: true,
       status: 'ACTIVE',
       pointIds: [],
       requestedPoint: null,
@@ -207,6 +212,9 @@ const ensureOwner = (profile = {}) => {
     db.users.push(owner);
   } else {
     owner.role = 'OWNER';
+    owner.supportEnabled = true;
+    owner.blockedAt = null;
+    owner.blockedReason = null;
     owner.status = 'ACTIVE';
     owner.pointIds = [];
     owner.googleSub = profile.sub || owner.googleSub || null;
@@ -316,6 +324,10 @@ const requireUser = (req, res) => {
     json(res, 401, { error: 'UNAUTHORIZED', message: 'Sesja wygasła albo jest nieprawidłowa.' });
     return null;
   }
+  if (user.blockedAt) {
+    json(res, 401, { error: 'ACCOUNT_BLOCKED', message: user.blockedReason ? 'Konto zostało zablokowane: '+user.blockedReason : 'Konto zostało zablokowane.' });
+    return null;
+  }
   return user;
 };
 
@@ -334,6 +346,17 @@ const requireRole = (req, res, roles) => {
   if (!user) return null;
   if (!roles.includes(user.role)) {
     json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do tej operacji.' });
+    return null;
+  }
+  return user;
+};
+
+const hasSupportAccess = (user) => user?.role === 'OWNER' || user?.role === 'SUPPORT' || user?.supportEnabled === true;
+const requireSupportAccess = (req, res) => {
+  const user = requireActive(req, res);
+  if (!user) return null;
+  if (!hasSupportAccess(user)) {
+    json(res,403,{error:'SUPPORT_FORBIDDEN',message:'Brak uprawnienia Wsparcie LockOn.'});
     return null;
   }
   return user;
@@ -384,6 +407,7 @@ const loginProfile = (profile) => {
       name: profile.name,
       picture: profile.picture || null,
       role: null,
+      supportEnabled: false,
       status: 'PENDING',
       pointIds: [],
       requestedPoint: null,
@@ -543,12 +567,15 @@ const handle = async (req, res) => {
     const users = db.users.map(publicUser);
     const logins = db.loginEvents.slice(0, 100);
     const pendingRevenue = db.revenueEntries.filter((r) => r.status === 'PENDING').map(revenueView);
+    const activeSessions=db.sessions.filter((session)=>Number(session.expiresAt)>Date.now()&&Number(session.absoluteExpiresAt||session.expiresAt)>Date.now()).length;
     return json(res, 200, {
       points: db.points.map(pointSummary),
       users,
-      pendingUsers,
+      pendingUsers: pendingUsers.filter((user)=>!user.blocked),
+      blockedUsers: users.filter((user)=>user.blocked),
       loginEvents: logins,
-      pendingRevenue
+      pendingRevenue,
+      system:{activeSessions,desktopSessions:activeSessions,webSessions:0,servicePoints:db.points.length,openTransfers:0,blockedUsers:users.filter((user)=>user.blocked).length}
     });
   }
 
@@ -609,7 +636,7 @@ const handle = async (req, res) => {
     if (!target) return json(res, 404, { error: 'NOT_FOUND', message: 'Nie znaleziono użytkownika.' });
     const body = await readBody(req);
     const role = String(body.role || target.requestedPoint?.requestedRole || 'USER');
-    if (!ROLES.includes(role) || role === 'OWNER') return json(res, 400, { error: 'ROLE', message: 'Nieprawidłowa rola.' });
+    if (!REQUESTABLE_ROLES.has(role)) return json(res, 400, { error: 'ROLE', message: 'Nieprawidłowa rola.' });
 
     let pointIds = Array.isArray(body.pointIds) ? body.pointIds.filter((value) => db.points.some((p) => p.id === value)) : [];
     if (body.createRequestedPoint === true && target.requestedPoint) {
@@ -627,6 +654,7 @@ const handle = async (req, res) => {
     }
 
     target.role = role;
+    target.supportEnabled = body.supportEnabled === true;
     if (role === 'TECHNICIAN' && target.requestedPoint?.requestedRole === 'TECHNICIAN') {
       target.technicianSplitPercent = target.requestedPoint.technicianSplitPercent ?? null;
     }
@@ -660,7 +688,7 @@ const handle = async (req, res) => {
     if (target.role === 'OWNER') return json(res, 400, { error: 'OWNER_PROTECTED', message: 'Nie można zmienić roli głównego właściciela.' });
     const body = await readBody(req);
     const role = String(body.role || target.role || 'USER');
-    if (!ROLES.includes(role) || role === 'OWNER') return json(res, 400, { error: 'ROLE' });
+    if (!REQUESTABLE_ROLES.has(role)) return json(res, 400, { error: 'ROLE' });
     const pointIds = Array.isArray(body.pointIds) ? body.pointIds.filter((value) => db.points.some((p) => p.id === value)) : [];
     if (!GLOBAL_ROLES.has(role) && pointIds.length === 0) return json(res, 400, { error: 'POINT_REQUIRED', message: 'Wybierz co najmniej jeden punkt.' });
     const technicianSplitPercent = role === 'TECHNICIAN'
@@ -668,14 +696,54 @@ const handle = async (req, res) => {
       : null;
     if (role === 'TECHNICIAN' && technicianSplitPercent === null) return json(res, 400, { error: 'TECHNICIAN_SPLIT', message: 'Ustaw procent rozliczenia serwisanta.' });
     target.role = role;
+    target.supportEnabled = body.supportEnabled === true;
     target.technicianSplitPercent = technicianSplitPercent;
     target.status = 'ACTIVE';
     target.pointIds = GLOBAL_ROLES.has(role) ? [] : pointIds;
     saveDb();
-    localAudit(owner,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent:target.technicianSplitPercent});
+    localAudit(owner,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent:target.technicianSplitPercent,supportEnabled:target.supportEnabled});
     return json(res, 200, authPayload(target));
   }
 
+
+  const blockUserMatch=url.pathname.match(/^\/admin\/users\/([^/]+)\/block$/);
+  if(method==='POST'&&blockUserMatch){
+    const owner=requireRole(req,res,['OWNER']);if(!owner)return;
+    const target=findUserById(blockUserMatch[1]);if(!target)return json(res,404,{error:'NOT_FOUND'});
+    if(target.role==='OWNER')return json(res,400,{error:'OWNER_PROTECTED',message:'Konta właściciela nie można zablokować.'});
+    const body=await readBody(req),blocked=body.blocked!==false;
+    if(blocked){
+      target.blockedAt=nowIso();target.blockedReason=cleanText(body.reason,500)||null;
+      db.sessions=db.sessions.filter((session)=>session.userId!==target.id);
+      localAudit(owner,'USER_BLOCKED','user',target.id,null,{reason:target.blockedReason});
+    }else{
+      target.blockedAt=null;target.blockedReason=null;
+      localAudit(owner,'USER_UNBLOCKED','user',target.id);
+    }
+    saveDb();
+    return json(res,200,publicUser(target));
+  }
+
+  const logoutUserMatch=url.pathname.match(/^\/admin\/users\/([^/]+)\/logout-all$/);
+  if(method==='POST'&&logoutUserMatch){
+    const owner=requireRole(req,res,['OWNER']);if(!owner)return;
+    const target=findUserById(logoutUserMatch[1]);if(!target)return json(res,404,{error:'NOT_FOUND'});
+    const before=db.sessions.length;
+    db.sessions=db.sessions.filter((session)=>session.userId!==target.id || target.id===owner.id);
+    const revoked=before-db.sessions.length;
+    saveDb();localAudit(owner,'USER_SESSIONS_REVOKED','user',target.id,null,{revoked});
+    return json(res,200,{ok:true,revoked});
+  }
+
+  if(method==='POST'&&url.pathname==='/admin/logout-all'){
+    const owner=requireRole(req,res,['OWNER']);if(!owner)return;
+    const before=db.sessions.length;
+    const currentOwnerIds=new Set(db.sessions.filter((session)=>session.userId===owner.id).map((session)=>session.tokenHash));
+    db.sessions=db.sessions.filter((session)=>session.userId===owner.id && currentOwnerIds.has(session.tokenHash));
+    const revoked=before-db.sessions.length;
+    saveDb();localAudit(owner,'ALL_SESSIONS_REVOKED','auth_session',null,null,{revoked});
+    return json(res,200,{ok:true,revoked,exceptCurrent:true});
+  }
 
   if (method === 'GET' && url.pathname === '/service/customers/search') {
     const user = requireActive(req, res);
@@ -781,7 +849,7 @@ const handle = async (req, res) => {
     const handlingMode = String(body.handlingMode || 'STANDARD').toUpperCase();
     const canEditWorkflow = SERVICE_EDIT_ROLES.has(user.role);
     const etaText = canEditWorkflow ? cleanText(body.estimatedCompletionAt, 64) : '';
-    let estimatedCompletionAt = canEditWorkflow ? null : order.estimatedCompletionAt;
+    let estimatedCompletionAt = null;
     if (etaText) {
       const eta = new Date(etaText);
       if (Number.isNaN(eta.getTime())) return json(res, 400, { error: 'ETA', message: 'Nieprawidłowy przewidywany termin.' });
@@ -1228,19 +1296,139 @@ const handle = async (req, res) => {
     });
   }
 
+  const localConversationFor = (userId) => {
+    let conversation = db.supportConversations.find((item) => item.userId === userId && item.status === 'OPEN');
+    if (!conversation) {
+      conversation = {
+        id:id('sup'), userId, pointId:null, status:'OPEN',
+        assignedSupportUserId:null, consultantRequestedAt:null, consultantJoinedAt:null,
+        createdAt:nowIso(), updatedAt:nowIso()
+      };
+      db.supportConversations.push(conversation);
+    }
+    return conversation;
+  };
+  const localConversationPayload = (conversation) => ({
+    id:conversation.id,
+    status:conversation.status,
+    consultantRequestedAt:conversation.consultantRequestedAt || null,
+    consultantJoinedAt:conversation.consultantJoinedAt || conversation.takenAt || null,
+    assignedSupportUserId:conversation.assignedSupportUserId || null,
+    assignedSupportName:conversation.assignedSupportUserId ? (findUserById(conversation.assignedSupportUserId)?.name || null) : null,
+    consultantState:conversation.assignedSupportUserId ? 'JOINED' : conversation.consultantRequestedAt ? 'WAITING' : 'BOT',
+    messages:db.supportMessages
+      .filter((item)=>item.conversationId===conversation.id)
+      .map((item)=>({id:item.id,author:item.author,text:item.text,action:item.action||null,createdAt:item.createdAt}))
+  });
+
   if (method === 'GET' && url.pathname === '/support/conversation') {
     const user = requireActive(req, res);
     if (!user) return;
-    let conversation = db.supportConversations.find((item) => item.userId === user.id && item.status === 'OPEN');
-    if (!conversation) {
-      conversation = { id: id('sup'), userId: user.id, status: 'OPEN', createdAt: nowIso(), updatedAt: nowIso() };
-      db.supportConversations.push(conversation);
-      saveDb();
+    const conversation = localConversationFor(user.id);
+    saveDb();
+    return json(res, 200, localConversationPayload(conversation));
+  }
+
+  if (method === 'POST' && url.pathname === '/support/request') {
+    const user=requireActive(req,res);if(!user)return;
+    const body=await readBody(req);
+    const conversation=localConversationFor(user.id);
+    const pointId=cleanText(body.pointId,80) || (user.pointIds||[])[0] || null;
+    if(pointId&&!canSeePoint(user,pointId))return json(res,403,{error:'POINT_FORBIDDEN',message:'Brak dostępu do wybranego punktu.'});
+    conversation.pointId=pointId;
+    if(!conversation.consultantRequestedAt){
+      conversation.consultantRequestedAt=nowIso();
+      db.supportMessages.push({id:id('msg'),conversationId:conversation.id,author:'system',text:'Poproszono konsultanta o pomoc. Do czasu dołączenia konsultanta możesz nadal korzystać z bota.',createdAt:nowIso()});
     }
-    const messages = db.supportMessages
-      .filter((item) => item.conversationId === conversation.id)
-      .map((item) => ({ id: item.id, author: item.author, text: item.text, createdAt: item.createdAt }));
-    return json(res, 200, { id: conversation.id, status: conversation.status, messages });
+    const note=cleanText(body.message,1500);
+    if(note)db.supportMessages.push({id:id('msg'),conversationId:conversation.id,author:'user',text:note,createdAt:nowIso()});
+    conversation.updatedAt=nowIso();
+    localAudit(user,'SUPPORT_REQUESTED','support_conversation',conversation.id,pointId,{});
+    saveDb();
+    return json(res,201,{ok:true,conversationId:conversation.id,pointId,consultantState:'WAITING'});
+  }
+
+  if (method === 'GET' && url.pathname === '/support/presence') {
+    const support=requireSupportAccess(req,res);if(!support)return;
+    const cutoff=Date.now()-10*60*1000;
+    const global=GLOBAL_ROLES.has(support.role);
+    const visiblePoints=new Set(support.pointIds||[]);
+    const latestSessionByUser=new Map();
+    for(const session of db.sessions){
+      if(Number(session.expiresAt)<=Date.now()||Number(session.absoluteExpiresAt||session.expiresAt)<=Date.now()||Number(session.lastSeenAt||0)<cutoff)continue;
+      const current=latestSessionByUser.get(session.userId);
+      if(!current||Number(session.lastSeenAt||0)>Number(current.lastSeenAt||0))latestSessionByUser.set(session.userId,session);
+    }
+    const rows=db.users.filter((candidate)=>{
+      if(candidate.id===support.id||candidate.status!=='ACTIVE'||candidate.blockedAt||!latestSessionByUser.has(candidate.id))return false;
+      return global||(candidate.pointIds||[]).some((pointId)=>visiblePoints.has(pointId));
+    }).map((candidate)=>{
+      const conversation=db.supportConversations.filter((item)=>item.userId===candidate.id&&item.status==='OPEN').sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt)))[0]||null;
+      const session=latestSessionByUser.get(candidate.id);
+      return {
+        userId:candidate.id,name:candidate.name,email:candidate.email,role:candidate.role||null,supportEnabled:candidate.supportEnabled===true,
+        online:true,lastSeenAt:new Date(Number(session.lastSeenAt||Date.now())).toISOString(),clientTypes:['DESKTOP'],
+        conversationId:conversation?.consultantRequestedAt?conversation.id:null,
+        consultantState:conversation?.assignedSupportUserId?'JOINED':conversation?.consultantRequestedAt?'WAITING':'BOT',
+        assignedSupportUserId:conversation?.assignedSupportUserId||null,
+        assignedSupportName:conversation?.assignedSupportUserId?(findUserById(conversation.assignedSupportUserId)?.name||null):null,
+        conversationUpdatedAt:conversation?.consultantRequestedAt?conversation.updatedAt:null
+      };
+    });
+    return json(res,200,rows);
+  }
+
+  if (method === 'GET' && url.pathname === '/support/tickets') {
+    const support=requireSupportAccess(req,res);if(!support)return;
+    const global=GLOBAL_ROLES.has(support.role),visiblePoints=new Set(support.pointIds||[]);
+    const tickets=db.supportConversations
+      .filter((conversation)=>conversation.consultantRequestedAt && (global || !conversation.pointId || visiblePoints.has(conversation.pointId)))
+      .sort((a,b)=>(a.status===b.status?String(b.updatedAt).localeCompare(String(a.updatedAt)):a.status==='OPEN'?-1:1))
+      .slice(0,200)
+      .map((conversation)=>{
+        const owner=findUserById(conversation.userId);
+        const point=db.points.find((item)=>item.id===conversation.pointId);
+        return {
+          id:conversation.id,userId:conversation.userId,userName:owner?.name||'Użytkownik',userEmail:owner?.email||'',
+          pointId:conversation.pointId||null,pointName:point?.name||'Brak punktu',status:conversation.status,
+          assignedSupportUserId:conversation.assignedSupportUserId||null,
+          assignedSupportName:conversation.assignedSupportUserId?(findUserById(conversation.assignedSupportUserId)?.name||null):null,
+          consultantRequestedAt:conversation.consultantRequestedAt||null,consultantJoinedAt:conversation.consultantJoinedAt||conversation.takenAt||null,
+          createdAt:conversation.createdAt,updatedAt:conversation.updatedAt,
+          messages:db.supportMessages.filter((item)=>item.conversationId===conversation.id).map((item)=>({id:item.id,author:item.author,text:item.text,action:item.action||null,createdAt:item.createdAt}))
+        };
+      });
+    return json(res,200,tickets);
+  }
+
+  const localSupportAction=url.pathname.match(/^\/support\/tickets\/([^/]+)\/(take|reply|close)$/);
+  if(method==='POST'&&localSupportAction){
+    const support=requireSupportAccess(req,res);if(!support)return;
+    const conversation=db.supportConversations.find((item)=>item.id===localSupportAction[1]);
+    if(!conversation)return json(res,404,{error:'NOT_FOUND'});
+    if(conversation.pointId&&!GLOBAL_ROLES.has(support.role)&&!(support.pointIds||[]).includes(conversation.pointId))return json(res,403,{error:'POINT_FORBIDDEN'});
+    const action=localSupportAction[2],body=await readBody(req);
+    if(action==='take'){
+      if(!conversation.consultantRequestedAt)return json(res,409,{error:'CONSULTANT_NOT_REQUESTED'});
+      const firstJoin=!conversation.assignedSupportUserId;
+      conversation.assignedSupportUserId=support.id;
+      conversation.takenAt=conversation.takenAt||nowIso();
+      conversation.consultantJoinedAt=conversation.consultantJoinedAt||nowIso();
+      if(firstJoin)db.supportMessages.push({id:id('msg'),conversationId:conversation.id,author:'system',text:(support.name||support.email||'Konsultant')+' dołączył do rozmowy.',createdAt:nowIso()});
+      localAudit(support,'SUPPORT_TAKEN','support_conversation',conversation.id,conversation.pointId,{firstJoin});
+    }else if(action==='reply'){
+      const message=cleanText(body.message,2000);if(!message)return json(res,400,{error:'MESSAGE'});
+      if(!conversation.assignedSupportUserId){
+        conversation.assignedSupportUserId=support.id;conversation.takenAt=conversation.takenAt||nowIso();conversation.consultantJoinedAt=conversation.consultantJoinedAt||nowIso();
+      }
+      db.supportMessages.push({id:id('msg'),conversationId:conversation.id,author:'support',text:message,createdAt:nowIso()});
+      localAudit(support,'SUPPORT_REPLIED','support_conversation',conversation.id,conversation.pointId,{});
+    }else{
+      conversation.status='CLOSED';conversation.closedAt=nowIso();
+      localAudit(support,'SUPPORT_CLOSED','support_conversation',conversation.id,conversation.pointId,{});
+    }
+    conversation.updatedAt=nowIso();saveDb();
+    return json(res,200,{ok:true});
   }
 
   if (method === 'POST' && url.pathname === '/assistant/chat') {
@@ -1249,25 +1437,41 @@ const handle = async (req, res) => {
     const body = await readBody(req);
     const message = cleanText(body.message, 1500);
     if (!message) return json(res, 400, { error: 'MESSAGE' });
-    let conversation = db.supportConversations.find((item) => item.userId === user.id && item.status === 'OPEN');
-    if (!conversation) {
-      conversation = { id: id('sup'), userId: user.id, status: 'OPEN', createdAt: nowIso(), updatedAt: nowIso() };
-      db.supportConversations.push(conversation);
-    }
+    const conversation = localConversationFor(user.id);
     const userMessage = { id: id('msg'), conversationId: conversation.id, author: 'user', text: message, createdAt: nowIso() };
-    const lower = message.toLowerCase();
-    let answer = 'Mogę pomóc w obsłudze ServiceOS. Centralne wyszukiwanie klientów, zleceń i kod WWW działają po podłączeniu aplikacji do Neon API.';
-    if (lower.includes('aktualiz')) answer = 'ServiceOS sprawdza aktualizacje po starcie, cyklicznie podczas pracy i po powrocie do aplikacji.';
-    if (lower.includes('klient')) {
+    db.supportMessages.push(userMessage);
+    conversation.updatedAt=nowIso();
+    if(conversation.assignedSupportUserId){
+      saveDb();
+      return json(res,200,{userMessage,assistantMessage:null,action:null,consultantState:'JOINED'});
+    }
+    const lower = message.toLocaleLowerCase('pl-PL');
+    let answer = 'Mogę pomóc w obsłudze ServiceOS, uruchomić test internetu, sprawdzić połączenie oraz otworzyć wyszukiwanie filmów i materiałów technicznych.';
+    let action = null;
+    if(/^\s*\/net\b/i.test(message)||lower.includes('test internetu')||lower.includes('test prędkości')||lower.includes('test predkosci')||lower.includes('prędkość internetu')||lower.includes('predkosc internetu')||lower.includes('speedtest')){
+      answer='Uruchamiam lokalny test łącza na tym urządzeniu. Zmierzę opóźnienie, pobieranie i wysyłanie.';
+      action={type:'SPEED_TEST',label:'Uruchom test internetu'};
+    }else if(/^\s*\/diag\b/i.test(message)||lower.includes('diagnostyka połączenia')||lower.includes('diagnostyka polaczenia')||lower.includes('czy api działa')||lower.includes('czy api dziala')){
+      answer='Sprawdzę połączenie tego urządzenia z internetem i ServiceOS.';
+      action={type:'CONNECTIVITY_TEST',label:'Uruchom diagnostykę'};
+    }else if(/^\s*\/(video|film)\b/i.test(message)||lower.includes('youtube')||lower.includes('film jak')||lower.includes('tutorial')){
+      const query=cleanText(message.replace(/^\s*\/(video|film)\b/i,'').replace(/\b(znajdź|znajdz|wyszukaj|pokaż|pokaz|film|wideo|video|youtube|tutorial|jak zrobić|jak zrobic)\b/giu,' ').replace(/\s+/g,' ').trim(),180);
+      if(query.length>=3){answer='Otworzę filmy instruktażowe dla: „'+query+'”.';action={type:'BROWSER_SEARCH',provider:'YOUTUBE',query,label:'Znajdź filmy na YouTube'};}
+      else answer='Podaj urządzenie i czynność, np. „film jak wymienić ekran iPhone 15”.';
+    }else if(/^\s*\/web\b/i.test(message)||lower.includes('service manual')||lower.includes('instrukcja serwisowa')||lower.includes('datasheet')||lower.includes('schemat płyty')||lower.includes('schemat plyty')){
+      const query=cleanText(message.replace(/^\s*\/web\b/i,'').trim(),180);
+      if(query.length>=3){answer='Otworzę materiały techniczne dla: „'+query+'”.';action={type:'BROWSER_SEARCH',provider:'WEB',query,label:'Szukaj materiałów technicznych'};}
+    }else if (lower.includes('aktualiz')) {
+      answer = 'ServiceOS sprawdza aktualizacje po starcie, cyklicznie podczas pracy i po powrocie do aplikacji.';
+    }else if (lower.includes('klient')) {
       const term = lower.replace(/znajdź|znajdz|wyszukaj|klienta|klient|pokaż|pokaz|szukaj/g, ' ').trim();
       const found = term.length >= 2 ? db.customers.filter((item) => `${item.firstName} ${item.lastName} ${item.email || ''} ${item.phone || ''}`.toLowerCase().includes(term)).slice(0, 5) : [];
       if (found.length) answer = 'Znalazłem lokalnie:\n' + found.map((item) => `- ${item.firstName} ${item.lastName} · ${item.email || item.phone || 'brak kontaktu'}`).join('\n');
     }
-    const assistantMessage = { id: id('msg'), conversationId: conversation.id, author: 'assistant', text: answer, createdAt: nowIso() };
-    db.supportMessages.push(userMessage, assistantMessage);
-    conversation.updatedAt = nowIso();
+    const assistantMessage = { id: id('msg'), conversationId: conversation.id, author: 'assistant', text: answer, action, createdAt: nowIso() };
+    db.supportMessages.push(assistantMessage);
     saveDb();
-    return json(res, 200, { userMessage, assistantMessage, action: null });
+    return json(res, 200, { userMessage, assistantMessage, action, consultantState:conversation.consultantRequestedAt?'WAITING':'BOT' });
   }
 
   if (method === 'GET' && url.pathname === '/finance/technician-settings') {

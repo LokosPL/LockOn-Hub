@@ -79,7 +79,7 @@ export function Sidebar({
       </div>
 
       <nav className="nav-list" aria-label="Nawigacja">
-        {items.filter(({ key }) => roleCanNavigate(effectiveRole, key)).map(({ key, label, icon: Icon }) => (
+        {items.filter(({ key }) => roleCanNavigate(effectiveRole, key, auth.supportEnabled === true)).map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             className={`nav-item ${active === key ? 'active' : ''}`}
@@ -97,7 +97,7 @@ export function Sidebar({
         <Headphones size={18} /><span>Pomoc</span><small>Chat</small>
       </button>
 
-      {roleCanNavigate(effectiveRole, 'settings') && (
+      {roleCanNavigate(effectiveRole, 'settings', auth.supportEnabled === true) && (
         <button className={`nav-item settings-item ${active === 'settings' ? 'active' : ''}`} onClick={() => onChange('settings')}>
           <Settings size={18} /><span>Ustawienia</span>
         </button>
@@ -124,7 +124,7 @@ export function Sidebar({
         ) : <div className="account-avatar">{initials || <UserRound size={17} />}</div>}
         <div className="account-copy">
           <strong>{auth.user?.name ?? 'Użytkownik'}</strong>
-          <span>{ROLE_DEFINITIONS[actualRole].shortLabel}</span>
+          <span>{ROLE_DEFINITIONS[actualRole].shortLabel}{auth.supportEnabled && actualRole !== 'OWNER' ? ' + Wsparcie' : ''}</span>
         </div>
         <button className="logout-button" onClick={() => void onLogout()} title="Wyloguj"><LogOut size={16} /></button>
       </div>

@@ -14,7 +14,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { AdministrationPage } from './pages/AdministrationPage';
 import { EarningsPage } from './pages/EarningsPage';
 import { ServicePage } from './pages/ServicePage';
-import type { AuthState } from './types/electron';
+import type { AuthState, HelpAction } from './types/electron';
 import { ROLE_DEFINITIONS, roleCanNavigate, type UserRole } from './config/roles';
 import { applyStoredUiPreferences } from './uiPreferences';
 
@@ -25,6 +25,8 @@ export default function App() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [previewRole, setPreviewRole] = useState<UserRole | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
+  const [focusUserId, setFocusUserId] = useState<string | null>(null);
 
   useEffect(() => {
     if (view === 'splash') return;
@@ -41,7 +43,7 @@ export default function App() {
 
   useEffect(() => {
     if (!auth?.authenticated || !effectiveRole || auth.status !== 'ACTIVE') return;
-    if (!roleCanNavigate(effectiveRole, active)) setActive('dashboard');
+    if (!roleCanNavigate(effectiveRole, active, auth.supportEnabled === true)) setActive('dashboard');
   }, [active, auth?.authenticated, auth?.status, effectiveRole]);
 
   useEffect(() => {
@@ -70,6 +72,27 @@ export default function App() {
       </div>
     );
   }
+
+  const handleHelpAction = (action: HelpAction) => {
+    if (action.type === 'OPEN_ORDER' && action.orderId) {
+      setFocusOrderId(action.orderId);
+      setActive('service');
+    } else if (action.type === 'OPEN_USER' && action.userId && actualRole === 'OWNER') {
+      setFocusUserId(action.userId);
+      setActive('administration');
+    } else if (action.type === 'NAVIGATE' && action.target) {
+      const target = action.target as NavigationKey;
+      if (effectiveRole && roleCanNavigate(effectiveRole, target, auth.supportEnabled === true)) setActive(target);
+    } else if (action.type === 'BROWSER_SEARCH' && action.query) {
+      const query = action.query.trim().slice(0, 180);
+      const url = action.provider === 'YOUTUBE'
+        ? 'https://www.youtube.com/results?search_query=' + encodeURIComponent(query)
+        : 'https://www.google.com/search?q=' + encodeURIComponent(query);
+      setActive('browser');
+      window.setTimeout(() => void window.lockOn.browser.navigate(url), 80);
+    }
+    setHelpOpen(false);
+  };
 
   const doLogout = async () => {
     const next = await window.lockOn.auth.logout();
@@ -126,11 +149,11 @@ export default function App() {
               userName={auth.user?.name ?? 'Użytkownik'}
             />
           )}
-          {active === 'administration' && <AdministrationPage />}
-          {active === 'service' && <ServicePage auth={auth} effectiveRole={effectiveRole!} />}
+          {active === 'administration' && <AdministrationPage focusUserId={focusUserId} />}
+          {active === 'service' && <ServicePage auth={auth} effectiveRole={effectiveRole!} focusOrderId={focusOrderId} />}
           {active === 'earnings' && <EarningsPage auth={auth} effectiveRole={effectiveRole!} />}
           {active === 'browser' && <BrowserPage />}
-          {active === 'support' && <SupportDesk role={effectiveRole!} onOpenChat={() => setHelpOpen(true)} />}
+          {active === 'support' && <SupportDesk role={effectiveRole!} supportEnabled={auth.supportEnabled} onOpenChat={() => setHelpOpen(true)} />}
           {active === 'settings' && (
             <SettingsPage
               auth={auth}
@@ -141,7 +164,7 @@ export default function App() {
           )}
         </main>
 
-        <HelpChat open={helpOpen} onClose={() => setHelpOpen(false)} auth={auth} effectiveRole={effectiveRole!} />
+        <HelpChat open={helpOpen} onClose={() => setHelpOpen(false)} auth={auth} effectiveRole={effectiveRole!} onAction={handleHelpAction} />
         <UpdatePrompt />
       </div>
     </div>

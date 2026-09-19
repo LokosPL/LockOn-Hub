@@ -21,7 +21,7 @@ import {
 import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
 import type { AdminAuditEvent, AdminOverview, AdminPoint, AdminUser } from '../types/electron';
 
-const ASSIGNABLE_ROLES: UserRole[] = ['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER'];
+const ASSIGNABLE_ROLES: UserRole[] = ['BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER'];
 type AdminTab = 'PENDING' | 'ACTIVE' | 'SECURITY' | 'POINTS' | 'AUDIT';
 
 function formatDate(value?: string | null) {
@@ -233,7 +233,9 @@ function auditActorLine(event: AdminAuditEvent) {
   return [event.actorName || 'System', role, source].filter(Boolean).join(' · ');
 }
 
-export function AdministrationPage() {
+interface AdministrationPageProps { focusUserId?: string | null; }
+
+export function AdministrationPage({ focusUserId = null }: AdministrationPageProps) {
   const [data, setData] = useState<AdminOverview | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -244,7 +246,7 @@ export function AdministrationPage() {
   const [auditFilters, setAuditFilters] = useState({ userId:'', pointId:'', action:'', orderNumber:'', dateFrom:'', dateTo:'' });
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, { role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null; supportEnabled: boolean }>>({});
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [pointForm, setPointForm] = useState({ name:'', city:'', serviceEnabled:false, acceptsExternalRepairs:false, serviceNote:'' });
 
@@ -279,22 +281,30 @@ export function AdministrationPage() {
     const timer = window.setInterval(() => void load(true), 12_000);
     return () => window.clearInterval(timer);
   }, [autoRefresh]);
+  useEffect(() => {
+    if (!focusUserId || !data?.users.some((user)=>user.id===focusUserId)) return;
+    setTab('ACTIVE');
+    setEditingUserId(focusUserId);
+    window.setTimeout(() => document.querySelector('[data-admin-user-id="'+CSS.escape(focusUserId)+'"]')?.scrollIntoView({behavior:'smooth',block:'center'}), 80);
+  }, [focusUserId,data?.users]);
 
   const draftFor = (user: AdminUser) => {
     if (user.role === 'OWNER') {
-      return drafts[user.id] ?? { role: 'OWNER' as UserRole, pointIds: [], useRequested: false, technicianSplitPercent: null };
+      return drafts[user.id] ?? { role: 'OWNER' as UserRole, pointIds: [], useRequested: false, technicianSplitPercent: null, supportEnabled: true };
     }
     const requestedRole = user.requestedPoint?.requestedRole;
-    const suggestedRole = requestedRole && requestedRole !== 'OWNER' ? requestedRole : 'USER';
+    const legacySupport = requestedRole === 'SUPPORT' || user.role === 'SUPPORT';
+    const suggestedRole = requestedRole && requestedRole !== 'OWNER' && requestedRole !== 'SUPPORT' ? requestedRole : (user.role && user.role !== 'SUPPORT' ? user.role : 'USER');
     return drafts[user.id] ?? {
       role: (user.role ?? suggestedRole) as UserRole,
       pointIds: user.pointIds ?? [],
       useRequested: Boolean(user.requestedPoint) && suggestedRole !== 'BOSS',
-      technicianSplitPercent: user.technicianSplitPercent ?? user.requestedPoint?.technicianSplitPercent ?? 50
+      technicianSplitPercent: user.technicianSplitPercent ?? user.requestedPoint?.technicianSplitPercent ?? 50,
+      supportEnabled: user.supportEnabled === true || legacySupport
     };
   };
 
-  const patchDraft = (user: AdminUser, patch: Partial<{ role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null }>) => {
+  const patchDraft = (user: AdminUser, patch: Partial<{ role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null; supportEnabled: boolean }>) => {
     setDrafts((current) => ({ ...current, [user.id]: { ...draftFor(user), ...patch } }));
   };
 
@@ -306,7 +316,8 @@ export function AdministrationPage() {
       await window.lockOn.admin.approveUser(user.id, {
         role: draft.role,
         pointIds: globalRole || draft.useRequested ? [] : draft.pointIds,
-        createRequestedPoint: !globalRole && draft.useRequested
+        createRequestedPoint: !globalRole && draft.useRequested,
+        supportEnabled: draft.supportEnabled
       });
       setNotice(`✓ ${user.email} ma teraz aktywne konto z rolą ${ROLE_DEFINITIONS[draft.role].label}.`);
       setDrafts((current) => { const next = { ...current }; delete next[user.id]; return next; });
@@ -331,7 +342,12 @@ export function AdministrationPage() {
     const draft = draftFor(user);
     setBusy(true); setNotice('');
     try {
-      await window.lockOn.admin.updateUserAccess(user.id, { role: draft.role, pointIds: draft.pointIds, technicianSplitPercent: draft.role === 'TECHNICIAN' ? draft.technicianSplitPercent : null });
+      await window.lockOn.admin.updateUserAccess(user.id, {
+        role: draft.role,
+        pointIds: draft.pointIds,
+        technicianSplitPercent: draft.role === 'TECHNICIAN' ? draft.technicianSplitPercent : null,
+        supportEnabled: draft.supportEnabled
+      });
       setEditingUserId(null);
       setNotice(`Zapisano rolę i dostęp dla ${user.email}.`);
       await load(true);
@@ -347,9 +363,11 @@ export function AdministrationPage() {
   };
 
   const blockUser = async (user: AdminUser, blocked: boolean) => {
-    const promptResult = blocked ? window.prompt('Powód blokady (opcjonalnie):', user.blockedReason || '') : '';
-    if (blocked && promptResult === null) return;
-    const reason = promptResult ?? '';
+    const confirmed = window.confirm(blocked
+      ? `Zablokować konto ${user.name} (${user.email})? Użytkownik zostanie natychmiast wylogowany ze wszystkich urządzeń.`
+      : `Odblokować konto ${user.name} (${user.email})?`);
+    if (!confirmed) return;
+    const reason = blocked ? 'Ręczna blokada konta przez właściciela' : '';
     setBusy(true); setNotice('');
     try {
       await window.lockOn.admin.blockUser(user.id, blocked, reason);
@@ -540,6 +558,10 @@ export function AdministrationPage() {
                       const nextRole = e.target.value as UserRole;
                       patchDraft(user, { role: nextRole, useRequested: nextRole === 'BOSS' ? false : draft.useRequested });
                     }}>{ASSIGNABLE_ROLES.map((role) => <option key={role} value={role}>{ROLE_DEFINITIONS[role].label}</option>)}</select></label>
+                    <label className="support-permission-toggle">
+                      <input type="checkbox" checked={draft.supportEnabled} onChange={(e)=>patchDraft(user,{supportEnabled:e.target.checked})}/>
+                      <span><strong>Wsparcie LockOn</strong><small>Dodatkowe uprawnienie. Pozwala dołączać do rozmów użytkowników z przypisanych punktów, gdy poproszą konsultanta. Nie zmienia głównej roli.</small></span>
+                    </label>
                     {globalRole ? (
                       <div className="global-access-note"><ShieldCheck size={15}/><span>Rola <strong>Szef</strong> ma dostęp globalny.</span></div>
                     ) : (
@@ -572,21 +594,30 @@ export function AdministrationPage() {
               const pointNames = owner || user.role === 'BOSS'
                 ? 'Wszystkie punkty'
                 : (data?.points ?? []).filter((point)=>user.pointIds.includes(point.id)).map((point)=>point.name).join(', ') || 'Brak przypisanego punktu';
-              return <article className={`user-access-row ${user.blocked ? 'user-blocked' : ''}`} key={user.id}>
+              return <article data-admin-user-id={user.id} className={`user-access-row user-access-row-v2 ${user.blocked ? 'user-blocked' : ''} ${focusUserId===user.id?'focused':''}`} key={user.id}>
                 <div className="user-access-identity">
-                  <strong>{user.name}{user.blocked && <span className="blocked-chip">ZABLOKOWANE</span>}</strong>
+                  <div className="admin-user-name-line"><strong>{user.name}</strong><div className="admin-user-chips">{user.blocked && <span className="blocked-chip">Zablokowane</span>}{user.supportEnabled && <span className="support-chip">Wsparcie LockOn</span>}</div></div>
                   <span>{user.email}</span>
-                  <small>{user.role ? ROLE_DEFINITIONS[user.role].label : 'Bez roli'} · {pointNames}</small>
-                  <small>Status: {user.blocked ? 'Zablokowane' : 'Aktywne'} · ostatnie logowanie: {formatDate(user.lastLoginAt)}</small>
+                  <div className="admin-user-summary-grid">
+                    <div><small>Główna rola</small><strong>{user.role ? ROLE_DEFINITIONS[user.role].shortLabel : 'Bez roli'}</strong></div>
+                    <div><small>Punkty</small><strong>{pointNames}</strong></div>
+                    <div><small>Status</small><strong>{user.blocked ? 'Konto zablokowane' : 'Konto aktywne'}</strong></div>
+                    <div><small>Ostatnie logowanie</small><strong>{formatDate(user.lastLoginAt)}</strong></div>
+                  </div>
+                  {user.blocked && user.blockedReason && <div className="admin-block-reason"><Ban size={13}/><span>{user.blockedReason}</span></div>}
                   {user.role === 'TECHNICIAN' && <small>Rozliczenie: {user.technicianSplitPercent == null ? 'nieustawione' : `${user.technicianSplitPercent}% serwisant / ${100-user.technicianSplitPercent}% firma`}</small>}
                 </div>
                 {editing && !owner ? <>
-                  <label><span>Rola</span><select disabled={user.blocked} value={draft.role} onChange={(e) => patchDraft(user, { role: e.target.value as UserRole })}>{ASSIGNABLE_ROLES.map((role) => <option key={role} value={role}>{ROLE_DEFINITIONS[role].label}</option>)}</select></label>
-                  <div className="user-points-mini">{draft.role === 'BOSS' ? <span className="global-chip">Wszystkie punkty</span> : <div className="inline-point-checks">{(data?.points ?? []).map((point) => <label key={point.id}><input disabled={user.blocked} type="checkbox" checked={draft.pointIds.includes(point.id)} onChange={() => togglePoint(user, point.id)}/><span>{point.name}</span></label>)}</div>}</div>
+                  <label><span>Rola</span><select disabled={false} value={draft.role} onChange={(e) => patchDraft(user, { role: e.target.value as UserRole })}>{ASSIGNABLE_ROLES.map((role) => <option key={role} value={role}>{ROLE_DEFINITIONS[role].label}</option>)}</select></label>
+                  <div className="user-points-mini">{draft.role === 'BOSS' ? <span className="global-chip">Wszystkie punkty</span> : <div className="inline-point-checks">{(data?.points ?? []).map((point) => <label key={point.id}><input disabled={false} type="checkbox" checked={draft.pointIds.includes(point.id)} onChange={() => togglePoint(user, point.id)}/><span>{point.name}</span></label>)}</div>}</div>
                   {draft.role === 'TECHNICIAN' && <label><span>Udział serwisanta (%)</span><input type="number" min="0" max="100" step="0.01" value={draft.technicianSplitPercent ?? ''} onChange={(e)=>patchDraft(user,{technicianSplitPercent:e.target.value===''?null:Number(e.target.value)})}/></label>}
+                  <label className="support-permission-toggle compact">
+                    <input type="checkbox" checked={draft.supportEnabled} onChange={(e)=>patchDraft(user,{supportEnabled:e.target.checked})}/>
+                    <span><strong>Wsparcie LockOn</strong><small>Może obsługiwać rozmowy osób z przypisanych punktów.</small></span>
+                  </label>
                 </> : <div className="user-points-mini"><span className="global-chip">{pointNames}</span></div>}
                 <div className="user-admin-actions">
-                  {!owner && !editing && <button className="button small secondary" onClick={() => setEditingUserId(user.id)} disabled={busy || user.blocked}><CheckCircle2 size={14}/> Edytuj konto</button>}
+                  {!owner && !editing && <button className="button small secondary" onClick={() => setEditingUserId(user.id)} disabled={busy}><CheckCircle2 size={14}/> Edytuj konto</button>}
                   {!owner && editing && <><button className="button small primary" onClick={() => void saveAccess(user)} disabled={busy}><CheckCircle2 size={14}/> Zapisz zmiany</button><button className="button small secondary" onClick={() => setEditingUserId(null)} disabled={busy}>Anuluj</button></>}
                   {!owner && <button className={`button small ${user.blocked ? 'secondary' : 'danger-soft'}`} onClick={() => void blockUser(user,!user.blocked)} disabled={busy}>{user.blocked ? <CheckCircle2 size={14}/> : <Ban size={14}/>}{user.blocked ? 'Odblokuj' : 'Zablokuj'}</button>}
                   <button className="button small secondary" onClick={() => void logoutUser(user)} disabled={busy}><LogOut size={14}/> Wyloguj urządzenia</button>

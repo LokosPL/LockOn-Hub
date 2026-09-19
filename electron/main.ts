@@ -416,8 +416,127 @@ const secureHandle = (channel: string, listener: SecureHandler) => {
 
 const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf' | 'sup' | 'cqr') => {
   const text = String(value ?? '');
-  if (!new RegExp(`^${prefix}_[a-f0-9]{20}$`).test(text)) throw new Error('Nieprawidłowy identyfikator.');
+  const pattern = new RegExp('^' + prefix + '_[a-f0-9]{20}' + '$');
+  if (!pattern.test(text)) throw new Error('Nieprawidłowy identyfikator.');
   return text;
+};
+
+const measureFetch = async (url: string, init: RequestInit = {}, timeoutMs = 15_000) => {
+  const started = performance.now();
+  const response = await fetch(url, {
+    ...init,
+    cache: 'no-store',
+    redirect: 'error',
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const body = await response.arrayBuffer();
+  return { elapsedMs: Math.max(1, performance.now() - started), bytes: body.byteLength };
+};
+
+const runInternetSpeedTest = async () => {
+  const latencySamples: number[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const started = performance.now();
+    const response = await fetch('https://speed.cloudflare.com/__down?bytes=1000', {
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!response.ok) throw new Error(`Serwer testowy zwrócił HTTP ${response.status}.`);
+    await response.arrayBuffer();
+    latencySamples.push(performance.now() - started);
+  }
+
+  const download = await measureFetch('https://speed.cloudflare.com/__down?bytes=5000000', {}, 20_000);
+  const downloadMbps = Number(((download.bytes * 8) / (download.elapsedMs * 1000)).toFixed(1));
+
+  let uploadMbps: number | null = null;
+  let uploadWarning: string | null = null;
+  try {
+    const uploadBytes = 1_000_000;
+    const uploadBody = Buffer.alloc(uploadBytes, 0x61);
+    const started = performance.now();
+    const response = await fetch('https://speed.cloudflare.com/__up', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: uploadBody,
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(20_000)
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await response.arrayBuffer().catch(() => new ArrayBuffer(0));
+    const elapsedMs = Math.max(1, performance.now() - started);
+    uploadMbps = Number(((uploadBytes * 8) / (elapsedMs * 1000)).toFixed(1));
+  } catch {
+    uploadWarning = 'Nie udało się wiarygodnie zmierzyć wysyłania. Pobieranie i opóźnienie zostały zmierzone poprawnie.';
+  }
+
+  const latencyMs = Number((latencySamples.reduce((sum, value) => sum + value, 0) / latencySamples.length).toFixed(0));
+  const quality = downloadMbps >= 100 && latencyMs <= 35
+    ? 'Bardzo dobre'
+    : downloadMbps >= 30 && latencyMs <= 70
+      ? 'Dobre'
+      : downloadMbps >= 10 && latencyMs <= 120
+        ? 'Wystarczające'
+        : 'Słabe';
+
+  return {
+    testedAt: new Date().toISOString(),
+    downloadMbps,
+    uploadMbps,
+    latencyMs,
+    quality,
+    provider: 'Cloudflare speed test',
+    warning: uploadWarning
+  };
+};
+
+const runConnectivityDiagnostics = async () => {
+  const started = performance.now();
+  let apiOk = false;
+  let apiLatencyMs: number | null = null;
+  let apiError: string | null = null;
+  try {
+    const response = await fetch(getBackendApiBaseUrl() + '/health', {
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000)
+    });
+    apiOk = response.ok;
+    apiLatencyMs = Number((performance.now() - started).toFixed(0));
+    if (!response.ok) apiError = `HTTP ${response.status}`;
+  } catch (error) {
+    apiError = error instanceof Error ? error.message : 'Brak połączenia';
+  }
+
+  let internetOk = false;
+  let internetLatencyMs: number | null = null;
+  try {
+    const internetStarted = performance.now();
+    const response = await fetch('https://speed.cloudflare.com/__down?bytes=1000', {
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000)
+    });
+    internetOk = response.ok;
+    await response.arrayBuffer();
+    internetLatencyMs = Number((performance.now() - internetStarted).toFixed(0));
+  } catch {}
+
+  return {
+    testedAt: new Date().toISOString(),
+    internetOk,
+    internetLatencyMs,
+    apiOk,
+    apiLatencyMs,
+    apiError,
+    version: app.getVersion(),
+    platform: process.platform,
+    packaged: app.isPackaged,
+    apiBaseUrl: getBackendApiBaseUrl()
+  };
 };
 
 const registerIpc = () => {
@@ -758,10 +877,19 @@ const registerIpc = () => {
       body: JSON.stringify({ message: String(message ?? '').trim().slice(0, 1500) })
     }, token);
   });
+  secureHandle('diagnostics:internetSpeed', async () => {
+    requireSessionToken();
+    return runInternetSpeedTest();
+  });
+  secureHandle('diagnostics:connectivity', async () => {
+    requireSessionToken();
+    return runConnectivityDiagnostics();
+  });
   secureHandle('support:request', async (pointId?: string, message?: string) => {
     const token = requireSessionToken();
     return backendRequest('/support/request', { method:'POST', body:JSON.stringify({pointId:String(pointId ?? '').trim().slice(0,80),message:String(message ?? '').trim().slice(0,1500)}) }, token);
   });
+  secureHandle('support:presence', async () => backendRequest('/support/presence', {}, requireSessionToken()));
   secureHandle('support:listTickets', async () => backendRequest('/support/tickets', {}, requireSessionToken()));
   secureHandle('support:take', async (ticketId: string) => backendRequest('/support/tickets/' + encodeURIComponent(safeId(ticketId,'sup')) + '/take', {method:'POST',body:'{}'}, requireSessionToken()));
   secureHandle('support:reply', async (ticketId: string, message: string) => backendRequest('/support/tickets/' + encodeURIComponent(safeId(ticketId,'sup')) + '/reply', {method:'POST',body:JSON.stringify({message:String(message ?? '').trim().slice(0,2000)})}, requireSessionToken()));

@@ -85,5 +85,5 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   }
 };
 
-export const roleCanNavigate = (role: UserRole, key: NavigationKey) =>
-  ROLE_DEFINITIONS[role].navigation.includes(key);
+export const roleCanNavigate = (role: UserRole, key: NavigationKey, supportEnabled = false) =>
+  ROLE_DEFINITIONS[role].navigation.includes(key) || (key === 'support' && supportEnabled);

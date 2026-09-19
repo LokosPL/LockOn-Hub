@@ -25,6 +25,7 @@ import type { UserRole } from '../config/roles';
 interface ServicePageProps {
   auth: AuthState;
   effectiveRole: UserRole;
+  focusOrderId?: string | null;
 }
 
 const emptyForm = {
@@ -75,7 +76,7 @@ const deliveryLabel = (status: NotificationHistoryItem['status']) => ({
   CANCELLED: 'Anulowano'
 }[status]);
 
-export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
+export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
   const [tab, setTab] = useState<'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAILS'>('NEW');
   const [form, setForm] = useState(emptyForm);
   const [query, setQuery] = useState('');
@@ -321,6 +322,15 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
       .then(setTechnicians)
       .catch(() => setTechnicians([]));
   }, [pointId, canManageOrderMeta]);
+
+  useEffect(() => {
+    if (!focusOrderId || expandedOrderId === focusOrderId) return;
+    const order = orders.find((item)=>item.id===focusOrderId);
+    if (!order) return;
+    setTab('ORDERS');
+    void toggleOrderHistory(order);
+    window.setTimeout(() => document.querySelector('[data-service-order-id="'+CSS.escape(focusOrderId)+'"]')?.scrollIntoView({behavior:'smooth',block:'center'}), 120);
+  }, [focusOrderId,orders]);
 
   const search = async () => {
     const clean = query.trim();
@@ -804,7 +814,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
               const canCancelHere = canCancelService && canOperateCurrentPoint && !order.openTransfer;
               return (
-                <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''} workflow-${(order.workflow?.attentionCode || 'ACTIVE').toLowerCase()}`}>
+                <article key={order.id} data-service-order-id={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''} workflow-${(order.workflow?.attentionCode || 'ACTIVE').toLowerCase()}`}>
                   <div className="service-order-row">
                     <div className="service-order-number"><strong>#{order.orderNumber}</strong><span>{new Date(order.receivedAt).toLocaleString('pl-PL')}</span></div>
                     <div className="service-order-main">

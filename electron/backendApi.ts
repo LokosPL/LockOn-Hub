@@ -24,6 +24,7 @@ export interface BackendUser {
   picture?: string | null;
   role: BackendUserRole | null;
   technicianSplitPercent?: number | null;
+  supportEnabled?: boolean;
   status: 'PENDING' | 'ACTIVE' | 'REJECTED';
   pointIds: string[];
   requestedPoint?: BackendRequestedPoint | null;
