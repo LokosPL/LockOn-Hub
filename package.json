@@ -25,7 +25,7 @@
     "build:server": "esbuild server/index.mjs --bundle --platform=node --format=cjs --target=node22 --outfile=dist-server/index.cjs"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.5.2",
+    "@vitejs/plugin-react": "^6.1.1",
     "electron-updater": "^6.6.2",
     "lucide-react": "^0.468.0",
     "react": "^19.1.0",
