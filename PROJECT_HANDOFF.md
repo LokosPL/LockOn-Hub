@@ -568,9 +568,21 @@ Dla każdego priorytetu:
 - Końcowy push na `main`: Verify ServiceOS #469 SUCCESS, CodeQL #244 SUCCESS.
 - Instalator: `LockOn-ServiceOS-Setup.exe`, SHA-256 `67a73b923df78fc73c413f67c7effaa817abc0787eb0788917a9da8bb8afb9a2`.
 - `latest.yml`, blockmap i `SHA256SUMS.txt` są opublikowane jako assets release.
-- Produkcyjny backend: Neon `lockonapi` **v27**, deployment completed.
+- Produkcyjny backend: Neon `lockonapi` **v29**, deployment completed.
 - Produkcyjnych testów destrukcyjnych/factory reset nie wykonywano.
 - Aktualny backlog **1–10 jest zakończony**. Dwa testy produkcyjne zależne od nieistniejących danych pozostają jawnie niewykonane: E2E roli USER (brak produkcyjnego USER) oraz realna wysyłka intake e-mail (pusty `notification_outbox`). Nie należy fabrykować danych produkcyjnych tylko dla tych testów.
+
+## Hotfix Gmail po backlogu 1–10 — 2026-09-19
+
+- Problem produkcyjny: punkt „Sklep LockOn” nie miał wcześniej aktywnego nadawcy Gmail, dlatego statusy zwracały `NO_SENDER`.
+- Konfiguracja powiadomień punktu jest aktywna dla wszystkich statusów serwisowych.
+- Nadawca firmowy jest teraz połączony: `nowogar@gmail.com`, status `ACTIVE`, refresh token zapisany szyfrowano po stronie backendu.
+- PR #43 scalony: statusy i przekazania są kolejkowane także wtedy, gdy Gmail jest chwilowo odłączony; po ponownym połączeniu ServiceOS odzyskuje wiadomości `FAILED` spowodowane brakiem nadawcy i próbuje wysłać je ponownie.
+- Verify Neon API bundle #9 SUCCESS, CodeQL #247 SUCCESS; po merge Build central API bundle #118 SUCCESS i CodeQL #248 SUCCESS.
+- Produkcyjny `lockonapi` wdrożony jako **v29**; v28 został odrzucony przed aktywacją z powodu niepełnego ZIP-a, więc produkcja bezpiecznie pozostała wtedy na v27. Poprawny v29 jest aktywny i completed.
+- Produkcyjny smoke po v29: `/health` 200; bez sesji `/me`, `/service/orders`, `/finance/revenues`, factory-reset preview, factory reset POST oraz status mutation POST zwracają 401. Nie wykonano żadnej operacji destrukcyjnej.
+- Po podłączeniu Gmail potwierdzono rzeczywiste wysyłki: 3 rekordy `SENT`, wszystkie 3 z `provider_message_id`; ostatnia wysyłka 2026-09-19T14:58:30Z.
+- Publiczny desktop pozostaje v0.18.0 — hotfix dotyczy wyłącznie centralnego backendu, a istniejący desktop ma już UI „Powiadomienia” / „Połącz Gmail”.
 
 ## Jak zacząć w nowym czacie
 
