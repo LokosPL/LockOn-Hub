@@ -74,6 +74,13 @@ contextBridge.exposeInMainWorld('lockOn', {
     getConversation: () => ipcRenderer.invoke('assistant:getConversation'),
     send: (message: string) => ipcRenderer.invoke('assistant:send', message)
   },
+  support: {
+    request: (pointId?: string, message?: string) => ipcRenderer.invoke('support:request', pointId, message),
+    listTickets: () => ipcRenderer.invoke('support:listTickets'),
+    take: (ticketId: string) => ipcRenderer.invoke('support:take', ticketId),
+    reply: (ticketId: string, message: string) => ipcRenderer.invoke('support:reply', ticketId, message),
+    close: (ticketId: string) => ipcRenderer.invoke('support:close', ticketId)
+  },
   website: {
     createAuthCode: () => ipcRenderer.invoke('website:createAuthCode')
   },
