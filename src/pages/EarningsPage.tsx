@@ -21,6 +21,7 @@ export function EarningsPage({ auth, effectiveRole }: Props) {
   const [notice,setNotice] = useState('');
 
   const technicianMode = actualRole === 'TECHNICIAN' && effectiveRole === 'TECHNICIAN';
+  const managementMode = effectiveRole === 'BOSS' || effectiveRole === 'OWNER';
   const parsedSplit = Number(splitInput.replace(',','.'));
   const validSplit = splitInput !== '' && Number.isFinite(parsedSplit) && parsedSplit >= 0 && parsedSplit <= 100;
 
@@ -84,7 +85,7 @@ export function EarningsPage({ auth, effectiveRole }: Props) {
       <div>
         <div className="eyebrow">ROZLICZENIA</div>
         <h1>{effectiveRole==='TECHNICIAN' ? 'Moje rozliczenia' : 'Rozliczenia'}</h1>
-        <p>Prosto: ustaw swój procent, sprawdź kwoty i historię zakończonych prac.</p>
+        <p>{managementMode ? 'Przychód firmy, udziały serwisantów i rozliczenia każdego punktu w jednym widoku.' : 'Ustaw swój procent, sprawdź kwoty i historię zakończonych prac.'}</p>
       </div>
       <button className="button secondary small" onClick={()=>void load()} disabled={busy}><RefreshCw className={busy?'spin':''} size={15}/> Odśwież</button>
     </section>
@@ -115,6 +116,34 @@ export function EarningsPage({ auth, effectiveRole }: Props) {
 
     {actualRole==='OWNER' && effectiveRole==='TECHNICIAN' && <div className="preview-info-card"><BadgeDollarSign size={18}/><div><strong>Podgląd serwisanta</strong><span>Ustawienie własnego procentu jest wyłączone w podglądzie roli OWNER.</span></div></div>}
 
+    {managementMode && <section className="panel-card boss-settlement-card">
+      <div className="settlement-section-head">
+        <div><span>PUNKTY</span><h2>Rozliczenia firmy per punkt</h2></div>
+        <small>Kwoty i procent przy każdym wpisie są snapshotem historycznym.</small>
+      </div>
+      <div className="boss-point-list">
+        {(data?.points ?? []).map((point)=><details key={point.pointId} className="boss-point-settlement">
+          <summary>
+            <div><strong>{point.pointName}</strong><span>{point.pointCity || 'Punkt ServiceOS'} · {point.entries.length} wpisów</span></div>
+            <div className="boss-point-totals">
+              <span>Przychód <strong>{money(point.approvedRevenue)}</strong></span>
+              <span>Serwisanci <strong>{money(point.technicianShare)}</strong></span>
+              <span>Firma / Szef <strong>{money(point.bossShare)}</strong></span>
+            </div>
+          </summary>
+          <div className="boss-point-entries">
+            {point.entries.map((entry)=><article key={entry.id}>
+              <div><strong>{entry.orderNumber != null ? `Zlecenie #${entry.orderNumber}` : 'Wpis ręczny'}</strong><span>{entry.technician?.name || 'Serwisant'} · {entry.workDate}</span></div>
+              <span>{money(entry.amount)}</span>
+              <span>{entry.splitTechnicianPercent}% / {entry.splitBossPercent}%</span>
+              <span>{money(entry.technicianShare)} / {money(entry.bossShare)}</span>
+            </article>)}
+          </div>
+        </details>)}
+        {(data?.points ?? []).length===0 && <div className="settlement-empty">Brak rozliczeń punktów.</div>}
+      </div>
+    </section>}
+
     <section className="panel-card settlement-history-card">
       <div className="settlement-section-head">
         <div><span>HISTORIA</span><h2>Ostatnie rozliczenia</h2></div>
@@ -125,7 +154,7 @@ export function EarningsPage({ auth, effectiveRole }: Props) {
           <div className="settlement-history-main">
             <strong>{money(entry.amount)}</strong>
             <span>{entry.point?.name || 'Punkt'} · {entry.workDate}</span>
-            <small>{entry.serviceOrderId ? 'Zlecenie serwisowe' : 'Wpis ręczny'} · {entry.splitTechnicianPercent}% / {entry.splitBossPercent}%</small>
+            <small>{entry.orderNumber != null ? `Zlecenie #${entry.orderNumber}` : entry.serviceOrderId ? 'Zlecenie serwisowe' : 'Wpis ręczny'} · {entry.splitTechnicianPercent}% / {entry.splitBossPercent}%</small>
           </div>
           <div className="settlement-history-share"><span>Serwisant</span><strong>{money(entry.technicianShare)}</strong></div>
           <div className="settlement-history-share"><span>Szef</span><strong>{money(entry.bossShare)}</strong></div>
