@@ -13,6 +13,7 @@ export interface BackendRequestedPoint {
   pointName: string;
   city: string;
   requestedRole: BackendUserRole;
+  technicianSplitPercent?: number | null;
   requestedAt: string;
 }
 
@@ -22,6 +23,7 @@ export interface BackendUser {
   name: string;
   picture?: string | null;
   role: BackendUserRole | null;
+  technicianSplitPercent?: number | null;
   status: 'PENDING' | 'ACTIVE' | 'REJECTED';
   pointIds: string[];
   requestedPoint?: BackendRequestedPoint | null;
