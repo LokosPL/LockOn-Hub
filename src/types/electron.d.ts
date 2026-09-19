@@ -39,7 +39,7 @@ export interface FinancePayload { entries: RevenueEntry[]; summary: { approvedRe
 export interface TechnicianSettlementSettings { configured:boolean; technicianPercent:number|null; bossPercent:number|null; }
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
-export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; issueDescription:string; status:string; receivedAt:string; }
+export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; handlingMode:'STANDARD'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
 export interface ServiceWorkflow {
   stageNumber:number; stageTotal:number; stageLabel:string;
   nextActionCode:string; nextAction:string;
@@ -124,7 +124,7 @@ declare global {
         listTransfers: (incoming?:boolean,status?:string) => Promise<ServiceTransfer[]>;
         transferOrder: (orderId:string,payload:{toPointId?:string;note?:string;kind?:ServiceTransfer['kind']}) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
         updateTransferStatus: (transferId:string,status:ServiceTransfer['status'],note?:string) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
-        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string}) => Promise<ServiceCreateOrderResult>;
+        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';handlingMode?:'STANDARD'|'TRANSFER_ONLY';assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string}) => Promise<ServiceCreateOrderResult>;
         listOrders: () => Promise<ServiceOrderSummary[]>;
         getHistory: (orderId:string) => Promise<ServiceStatusHistoryItem[]>;
         getNotes: (orderId:string) => Promise<ServiceOrderNote[]>;

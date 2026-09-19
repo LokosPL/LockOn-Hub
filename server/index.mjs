@@ -725,6 +725,7 @@ const handle = async (req, res) => {
     const deviceNotes = cleanText(body.deviceNotes, 1000);
     const issueDescription = cleanText(body.issueDescription, 2000);
     const orderType = String(body.orderType || 'REPAIR').toUpperCase();
+    const handlingMode = String(body.handlingMode || 'STANDARD').toUpperCase();
     const etaText = cleanText(body.estimatedCompletionAt, 64);
     let estimatedCompletionAt = null;
     if (etaText) {
@@ -768,6 +769,9 @@ const handle = async (req, res) => {
     }
     if (!['REPAIR', 'COMPLAINT'].includes(orderType)) {
       return json(res, 400, { error: 'ORDER_TYPE', message: 'Nieprawidłowy typ zlecenia.' });
+    }
+    if (!['STANDARD','TRANSFER_ONLY'].includes(handlingMode)) {
+      return json(res, 400, { error:'HANDLING_MODE', message:'Nieprawidłowy sposób obsługi zlecenia.' });
     }
 
     let customer = db.customers.find((candidate) =>
@@ -844,14 +848,15 @@ const handle = async (req, res) => {
       customerId: customer.id,
       deviceId: device.id,
       orderType,
+      handlingMode,
       issueDescription,
       status: 'RECEIVED',
-      assignedTechnicianId,
+      assignedTechnicianId: handlingMode === 'TRANSFER_ONLY' ? null : assignedTechnicianId,
       createdByUserId: user.id,
-      estimatedCost,
+      estimatedCost: handlingMode === 'TRANSFER_ONLY' ? null : estimatedCost,
       finalCost: null,
       currency: 'PLN',
-      estimatedCompletionAt,
+      estimatedCompletionAt: handlingMode === 'TRANSFER_ONLY' ? null : estimatedCompletionAt,
       receivedAt: nowIso(),
       createdAt: nowIso(),
       updatedAt: nowIso()
@@ -1043,6 +1048,9 @@ const handle = async (req, res) => {
     const status = String(body.status || '').toUpperCase();
     const allowed = ['RECEIVED', 'DIAGNOSIS', 'WAITING_PARTS', 'IN_REPAIR', 'REPAIR_DONE', 'READY', 'COMPLETED', 'CANCELLED', 'REJECTED'];
     if (!allowed.includes(status)) return json(res, 400, { error: 'STATUS' });
+    if ((order.handlingMode || 'STANDARD') === 'TRANSFER_ONLY' && status !== order.status && status !== 'CANCELLED') {
+      return json(res, 409, { error:'TRANSFER_ONLY_STATUS_LOCKED', message:'To zlecenie służy wyłącznie do przekazywania urządzenia. Możesz je tylko anulować.' });
+    }
     const previous = order.status;
     order.status = status;
     order.updatedAt = nowIso();

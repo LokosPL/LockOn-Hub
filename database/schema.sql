@@ -105,6 +105,10 @@ CREATE TABLE IF NOT EXISTS service_orders (
   customer_id text NOT NULL REFERENCES customers(id),
   device_id text NOT NULL REFERENCES devices(id),
   order_type text NOT NULL CHECK (order_type IN ('REPAIR','COMPLAINT','WARRANTY')),
+  handling_mode text NOT NULL DEFAULT 'STANDARD' CHECK (handling_mode IN ('STANDARD','TRANSFER_ONLY')),
+  tracking_token_hash text,
+  tracking_token_ciphertext text,
+  tracking_created_at timestamptz,
   original_order_id text REFERENCES service_orders(id),
   issue_description text NOT NULL,
   status text NOT NULL DEFAULT 'RECEIVED' CHECK (status IN ('RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','CANCELLED','REJECTED')),
@@ -669,5 +673,26 @@ ALTER TABLE revenue_entries
 
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-19-central-v14','Technician-defined settlement share stored on users, access requests and revenue snapshots')
+ON CONFLICT (version) DO NOTHING;
+
+-- 2026-09-19 central-v15: public customer tracking and transfer-only service records.
+ALTER TABLE service_orders
+  ADD COLUMN IF NOT EXISTS handling_mode text NOT NULL DEFAULT 'STANDARD',
+  ADD COLUMN IF NOT EXISTS tracking_token_hash text,
+  ADD COLUMN IF NOT EXISTS tracking_token_ciphertext text,
+  ADD COLUMN IF NOT EXISTS tracking_created_at timestamptz;
+
+ALTER TABLE service_orders
+  DROP CONSTRAINT IF EXISTS service_orders_handling_mode_check;
+ALTER TABLE service_orders
+  ADD CONSTRAINT service_orders_handling_mode_check
+  CHECK (handling_mode IN ('STANDARD','TRANSFER_ONLY'));
+
+CREATE UNIQUE INDEX IF NOT EXISTS service_orders_tracking_token_hash_uq
+  ON service_orders(tracking_token_hash)
+  WHERE tracking_token_hash IS NOT NULL;
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-19-central-v15','Secure public service tracking and transfer-only service handling mode')
 ON CONFLICT (version) DO NOTHING;
 

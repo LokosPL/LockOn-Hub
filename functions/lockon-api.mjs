@@ -17,6 +17,7 @@ const SITE_ORIGINS = new Set(
   ].filter(Boolean)
 );
 const GMAIL_TOKEN_KEY = String(process.env.LOCKON_GMAIL_TOKEN_KEY || '');
+const PUBLIC_PORTAL_URL = String(process.env.LOCKON_SITE_ORIGIN || 'https://app.serviceos.pl').trim().replace(/\/$/,'') || 'https://app.serviceos.pl';
 const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
@@ -417,6 +418,7 @@ const orderView = (row) => ({
   serialNumber: row.serial_number || null,
   deviceNotes: row.device_notes || null,
   orderType: row.order_type,
+  handlingMode: row.handling_mode || 'STANDARD',
   issueDescription: row.issue_description,
   status: row.status,
   statusLabel: STATUS_LABELS[row.status] || row.status,
@@ -435,7 +437,7 @@ const orderView = (row) => ({
 
 const orderViewForUser = (row, user) => {
   const view = orderView(row);
-  if (!SERVICE_MANAGE_ROLES.has(user.role_code)) {
+  if (!SERVICE_EDIT_ROLES.has(user.role_code)) {
     view.estimatedCost = null;
     view.finalCost = null;
   }
@@ -491,15 +493,6 @@ const deriveOrderWorkflow = (order, transfers, openTransfer, currentPointId, hom
     attentionLabel = 'Zamknięte';
     sortRank = 100;
     flags.push('CLOSED');
-  } else if (status === 'READY') {
-    stageNumber = 9;
-    stageLabel = 'Gotowe do odbioru';
-    nextActionCode = 'HANDOVER_CUSTOMER';
-    nextAction = 'Wydaj urządzenie klientowi i zakończ zlecenie.';
-    attentionCode = 'READY_FOR_PICKUP';
-    attentionLabel = 'Gotowe do odbioru';
-    sortRank = 30;
-    flags.push('READY_FOR_PICKUP','ACTION_NOW');
   } else if (openTransfer) {
     const returning = openTransfer.kind === 'RETURN_HOME';
     if (returning) {
@@ -522,23 +515,41 @@ const deriveOrderWorkflow = (order, transfers, openTransfer, currentPointId, hom
       }
     } else {
       stageNumber = 4;
-      stageLabel = openTransfer.status === 'DELIVERED' ? 'Czeka na przyjęcie w serwisie' : 'W drodze do serwisu';
+      stageLabel = openTransfer.status === 'DELIVERED' ? 'Czeka na przyjęcie przekazania' : 'Urządzenie w przekazaniu';
       if (openTransfer.status === 'DELIVERED') {
         nextActionCode = 'ACCEPT_EXTERNAL_SERVICE';
-        nextAction = 'Przyjmij urządzenie w serwisie docelowym.';
+        nextAction = 'Potwierdź fizyczne przyjęcie urządzenia w punkcie docelowym.';
         attentionCode = 'ACTION_NOW';
         attentionLabel = 'Wymaga działania teraz';
         sortRank = 10;
         flags.push('ACTION_NOW','WAITING_SERVICE');
       } else {
         nextActionCode = 'TRACK_EXTERNAL_SERVICE';
-        nextAction = 'Doprowadź przekazanie do serwisu i potwierdź dostarczenie.';
+        nextAction = 'Doprowadź przekazanie do punktu docelowego.';
         attentionCode = 'IN_TRANSIT';
         attentionLabel = 'W drodze';
         sortRank = 40;
         flags.push('IN_TRANSIT','WAITING_SERVICE');
       }
     }
+  } else if (order.handlingMode === 'TRANSFER_ONLY') {
+    stageNumber = 1;
+    stageLabel = 'Tylko przekazanie';
+    nextActionCode = 'FORWARD_DEVICE';
+    nextAction = 'Wybierz kolejny punkt i przekaż urządzenie. Status serwisowy pozostaje bez zmian.';
+    attentionCode = 'ACTION_NOW';
+    attentionLabel = 'Czeka na przekazanie';
+    sortRank = 12;
+    flags.push('ACTION_NOW','TRANSFER_ONLY');
+  } else if (status === 'READY') {
+    stageNumber = 9;
+    stageLabel = 'Gotowe do odbioru';
+    nextActionCode = 'HANDOVER_CUSTOMER';
+    nextAction = 'Wydaj urządzenie klientowi i zakończ zlecenie.';
+    attentionCode = 'READY_FOR_PICKUP';
+    attentionLabel = 'Gotowe do odbioru';
+    sortRank = 30;
+    flags.push('READY_FOR_PICKUP','ACTION_NOW');
   } else if (status === 'REPAIR_DONE') {
     stageNumber = 6;
     stageLabel = 'Naprawa zakończona';
@@ -786,6 +797,32 @@ const decryptSecret = (packed) => {
   return Buffer.concat([decipher.update(Buffer.from(parts[1], 'base64')), decipher.final()]).toString('utf8');
 };
 
+const ensureTrackingToken = async (orderId) => {
+  let row=(await q("SELECT tracking_token_hash,tracking_token_ciphertext FROM service_orders WHERE id=$1 LIMIT 1",[orderId])).rows[0];
+  if(!row)throw Object.assign(new Error('Nie znaleziono zlecenia.'),{status:404});
+  if(row.tracking_token_ciphertext){
+    return decryptSecret(row.tracking_token_ciphertext);
+  }
+  for(let attempt=0;attempt<3;attempt+=1){
+    const token=crypto.randomBytes(32).toString('base64url');
+    const hash=tokenHash(token);
+    const packed=encryptSecret(token);
+    const updated=(await q(
+      "UPDATE service_orders SET tracking_token_hash=$2,tracking_token_ciphertext=$3,tracking_created_at=COALESCE(tracking_created_at,now()),updated_at=now() WHERE id=$1 AND tracking_token_ciphertext IS NULL RETURNING tracking_token_ciphertext",
+      [orderId,hash,packed]
+    )).rows[0];
+    if(updated?.tracking_token_ciphertext)return token;
+    row=(await q("SELECT tracking_token_ciphertext FROM service_orders WHERE id=$1 LIMIT 1",[orderId])).rows[0];
+    if(row?.tracking_token_ciphertext)return decryptSecret(row.tracking_token_ciphertext);
+  }
+  throw new Error('Nie udało się utworzyć bezpiecznego linku śledzenia.');
+};
+
+const trackingUrlForOrder = async (orderId) => {
+  const token=await ensureTrackingToken(orderId);
+  return PUBLIC_PORTAL_URL + '/track.html#t=' + encodeURIComponent(token);
+};
+
 const refreshGmailAccess = async (refreshToken, legacyClientSecret = '') => {
   const clientSecret = GOOGLE_DESKTOP_CLIENT_SECRET || legacyClientSecret;
   if (!clientSecret) {
@@ -930,6 +967,7 @@ const renderStatusEmail = (item) => {
     '',
     'Urządzenie: ' + item.brand + ' ' + item.model,
     'Punkt prowadzący: ' + item.point_name,
+    item.tracking_url ? 'Śledź zlecenie: ' + item.tracking_url : '',
     '',
     footer,
     '',
@@ -955,6 +993,7 @@ const renderStatusEmail = (item) => {
             '<strong style="color:#e8ebef">' + escapeHtml(item.brand) + ' ' + escapeHtml(item.model) + '</strong><br>' +
             'Punkt prowadzący: ' + escapeHtml(item.point_name) +
           '</div>' +
+          (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:inline-block;margin-top:18px;padding:12px 16px;border-radius:10px;background:#ff7445;color:#fff;text-decoration:none;font-size:13px;font-weight:800">Śledź naprawę i historię urządzenia</a>' : '') +
           '<p style="margin:20px 0 0;font-size:12px;color:#818b97;line-height:1.5">' + escapeHtml(footer) + '</p>' +
         '</div>' +
       '</div>' +
@@ -1020,6 +1059,13 @@ const processNotification = async (notificationId) => {
       [notificationId, attempt, error, nextAttemptAt]
     );
     return { sent: false, reason: 'NO_SENDER', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
+  }
+
+  try{
+    item.tracking_url=await trackingUrlForOrder(item.service_order_id);
+  }catch(error){
+    console.error('[tracking link]',error);
+    item.tracking_url='';
   }
 
   const rendered = renderStatusEmail(item);
@@ -1303,6 +1349,62 @@ const route = async (request) => {
   }
 
   if (method === 'OPTIONS') return new Response(null, { status: 204, headers: secureHeaders(request) });
+
+  if(method==='GET'&&url.pathname==='/public/service-track'){
+    const token=String(url.searchParams.get('token')||'').trim();
+    if(!/^[A-Za-z0-9_-]{43}$/.test(token))return json(request,{error:'TRACKING_TOKEN',message:'Link śledzenia jest nieprawidłowy albo niepełny.'},404);
+    const hash=tokenHash(token);
+    const order=(await q(
+      "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_cost,s.final_cost,s.currency,s.estimated_completion_at,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,p.name AS point_name,hp.name AS home_point_name,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.tracking_token_hash=$1 LIMIT 1",
+      [hash]
+    )).rows[0];
+    if(!order)return json(request,{error:'TRACKING_NOT_FOUND',message:'Link śledzenia wygasł albo nie istnieje.'},404);
+    const [historyResult,transferResult]=await Promise.all([
+      q("SELECT from_status,to_status,created_at FROM service_order_status_history WHERE service_order_id=$1 ORDER BY created_at ASC,id ASC",[order.id]),
+      q("SELECT t.kind,t.status,t.requested_at,t.shipped_at,t.delivered_at,t.accepted_at,t.updated_at,fp.name AS from_point_name,tp.name AS to_point_name FROM service_order_transfers t JOIN points fp ON fp.id=t.from_point_id JOIN points tp ON tp.id=t.to_point_id WHERE t.service_order_id=$1 ORDER BY t.requested_at ASC,t.id ASC",[order.id])
+    ]);
+    return json(request,{
+      order:{
+        orderNumber:Number(order.order_number),
+        orderType:order.order_type,
+        handlingMode:order.handling_mode||'STANDARD',
+        issueDescription:order.issue_description,
+        status:order.status,
+        statusLabel:STATUS_LABELS[order.status]||order.status,
+        device:{brand:order.brand,model:order.model},
+        pointName:order.point_name,
+        homePointName:order.home_point_name||order.point_name,
+        currentPointName:order.current_point_name||null,
+        estimatedCost:order.estimated_cost==null?null:Number(order.estimated_cost),
+        finalCost:order.final_cost==null?null:Number(order.final_cost),
+        currency:String(order.currency||'PLN').trim(),
+        estimatedCompletionAt:order.estimated_completion_at||null,
+        receivedAt:order.received_at,
+        completedAt:order.completed_at||null,
+        createdAt:order.created_at,
+        updatedAt:order.updated_at
+      },
+      statusHistory:historyResult.rows.map(row=>({
+        fromStatus:row.from_status||null,
+        fromLabel:row.from_status?(STATUS_LABELS[row.from_status]||row.from_status):null,
+        toStatus:row.to_status,
+        toLabel:STATUS_LABELS[row.to_status]||row.to_status,
+        changedAt:row.created_at
+      })),
+      transfers:transferResult.rows.map(row=>({
+        kind:row.kind||'OUTBOUND_SERVICE',
+        status:row.status,
+        fromPointName:row.from_point_name,
+        toPointName:row.to_point_name,
+        requestedAt:row.requested_at,
+        shippedAt:row.shipped_at||null,
+        deliveredAt:row.delivered_at||null,
+        acceptedAt:row.accepted_at||null,
+        updatedAt:row.updated_at
+      }))
+    });
+  }
+
   if (method === 'GET' && url.pathname === '/health') return json(request, { ok: true, service: 'LockOn ServiceOS Central API', time: nowIso() });
 
   if (method === 'POST' && url.pathname === '/auth/google-code') {
@@ -1866,7 +1968,7 @@ const route = async (request) => {
   if(method==='POST'&&detailsMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji zlecenia.'),{status:403});
-    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
+    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,handling_mode,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
     const body=await readJson(request);
@@ -1880,8 +1982,8 @@ const route = async (request) => {
       if(conflict)return json(request,{error:'IMEI_CONFLICT',message:'Ten IMEI jest już przypisany do innego urządzenia.'},409);
     }
 
-    const etaText=cleanText(body.estimatedCompletionAt,64);
-    let estimatedCompletionAt=null;
+    const etaText=found.handling_mode==='TRANSFER_ONLY'?'':cleanText(body.estimatedCompletionAt,64);
+    let estimatedCompletionAt=found.handling_mode==='TRANSFER_ONLY'?found.estimated_completion_at:null;
     if(etaText){
       const date=new Date(etaText);
       if(Number.isNaN(date.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
@@ -1890,6 +1992,9 @@ const route = async (request) => {
 
     const canManageAssignment=SERVICE_MANAGE_ROLES.has(u.role_code);
     const canEditCosts=SERVICE_EDIT_ROLES.has(u.role_code);
+    if(found.handling_mode==='TRANSFER_ONLY'&&('assignedTechnicianId' in body||'estimatedCost' in body||'finalCost' in body)){
+      return json(request,{error:'TRANSFER_ONLY_DETAILS_LOCKED',message:'W trybie „Tylko przekazanie” nie ustawia się serwisanta ani cen naprawy.'},409);
+    }
     if(!canManageAssignment&&'assignedTechnicianId' in body){
       throw Object.assign(new Error('Tylko kierownictwo punktu może zmieniać przypisanego technika.'),{status:403});
     }
@@ -1947,7 +2052,7 @@ const route = async (request) => {
     const session=await requireActive(request),u=session.user,body=await readJson(request);
     if(!SERVICE_CREATE_ROLES.has(u.role_code)) throw Object.assign(new Error('Brak uprawnień do tworzenia zleceń.'),{status:403});
     const pointId=cleanText(body.pointId,80);await requirePoint(u,pointId);
-    const firstName=cleanText(body.firstName,80),lastName=cleanText(body.lastName,100),email=normalizeEmail(cleanText(body.email,180)),phone=cleanText(body.phone,50),phoneNorm=normalizePhone(phone),brand=cleanText(body.brand,80),model=cleanText(body.model,120),issue=cleanText(body.issueDescription,2000),orderType=String(body.orderType||'REPAIR').toUpperCase();
+    const firstName=cleanText(body.firstName,80),lastName=cleanText(body.lastName,100),email=normalizeEmail(cleanText(body.email,180)),phone=cleanText(body.phone,50),phoneNorm=normalizePhone(phone),brand=cleanText(body.brand,80),model=cleanText(body.model,120),issue=cleanText(body.issueDescription,2000),orderType=String(body.orderType||'REPAIR').toUpperCase(),handlingMode=String(body.handlingMode||'STANDARD').toUpperCase();
     const imei=cleanText(body.imei,32).replace(/\s+/g,''),serialNumber=cleanText(body.serialNumber,120),deviceNotes=cleanText(body.deviceNotes,1000);
     const etaText=cleanText(body.estimatedCompletionAt,64);
     let estimatedCompletionAt=null;
@@ -1967,6 +2072,7 @@ const route = async (request) => {
       throw Object.assign(new Error('Nie możesz przypisać zlecenia do innego technika.'),{status:403});
     }
     if(!firstName||!lastName||!brand||!model||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij dane klienta, urządzenia i usterki.'},400);
+    if(!['STANDARD','TRANSFER_ONLY'].includes(handlingMode))return json(request,{error:'HANDLING_MODE',message:'Nieprawidłowy sposób obsługi zlecenia.'},400);
     if(!email&&!phoneNorm)return json(request,{error:'CONTACT_REQUIRED',message:'Podaj adres e-mail lub numer telefonu klienta.'},400);
     if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json(request,{error:'EMAIL',message:'Adres e-mail klienta jest nieprawidłowy.'},400);
     if(phone&&phoneNorm.length<7)return json(request,{error:'PHONE',message:'Numer telefonu klienta jest zbyt krótki.'},400);
@@ -2008,7 +2114,7 @@ const route = async (request) => {
         did=makeId('dev');
         await client.query("INSERT INTO devices(id,customer_id,brand,model,imei,serial_number,notes) VALUES($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''))",[did,customer.id,brand,model,imei,serialNumber,deviceNotes]);
       }
-      const oid=makeId('srv');const order=(await client.query("INSERT INTO service_orders(id,point_id,home_point_id,current_point_id,customer_id,device_id,order_type,issue_description,status,assigned_technician_id,created_by_user_id,estimated_cost,estimated_completion_at) VALUES($1,$2,$2,$2,$3,$4,$5,$6,'RECEIVED',$7,$8,$9,$10) RETURNING *",[oid,pointId,customer.id,did,orderType,issue,assignedTechnicianId,u.id,estimatedCost,estimatedCompletionAt])).rows[0];
+      const oid=makeId('srv');const order=(await client.query("INSERT INTO service_orders(id,point_id,home_point_id,current_point_id,customer_id,device_id,order_type,handling_mode,issue_description,status,assigned_technician_id,created_by_user_id,estimated_cost,estimated_completion_at) VALUES($1,$2,$2,$2,$3,$4,$5,$6,$7,'RECEIVED',$8,$9,$10,$11) RETURNING *",[oid,pointId,customer.id,did,orderType,handlingMode,issue,handlingMode==='TRANSFER_ONLY'?null:assignedTechnicianId,u.id,handlingMode==='TRANSFER_ONLY'?null:estimatedCost,estimatedCompletionAt])).rows[0];
       await client.query("INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,changed_by_user_id) VALUES($1,$2,NULL,'RECEIVED',$3)",[makeId('hst'),oid,u.id]);
       await client.query('COMMIT');
 
@@ -2038,11 +2144,11 @@ const route = async (request) => {
       }
 
       try{
-        await audit(u.id,'SERVICE_ORDER_CREATED','service_order',oid,pointId,{orderType,notification});
+        await audit(u.id,'SERVICE_ORDER_CREATED','service_order',oid,pointId,{orderType,handlingMode,notification});
       }catch(auditError){
         console.error('[service order audit]',auditError);
       }
-      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,issueDescription:issue,status:'RECEIVED',assignedTechnicianId,estimatedCost,estimatedCompletionAt:order.estimated_completion_at||null,receivedAt:order.received_at},reusedCustomer:reused,reusedDevice,notification},201);
+      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,handlingMode,issueDescription:issue,status:'RECEIVED',assignedTechnicianId:handlingMode==='TRANSFER_ONLY'?null:assignedTechnicianId,estimatedCost:handlingMode==='TRANSFER_ONLY'?null:estimatedCost,estimatedCompletionAt:order.estimated_completion_at||null,receivedAt:order.received_at},reusedCustomer:reused,reusedDevice,notification},201);
     }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
   }
 
@@ -2053,9 +2159,13 @@ const route = async (request) => {
     const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500);
     if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
 
-    const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
+    const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
+
+    if(found.handling_mode==='TRANSFER_ONLY'&&next!==found.status&&next!=='CANCELLED'){
+      return json(request,{error:'TRANSFER_ONLY_STATUS_LOCKED',message:'To zlecenie działa w trybie „Tylko przekazanie”. Możesz obsługiwać logistykę urządzenia albo anulować zlecenie, ale nie zmieniać etapów naprawy.'},409);
+    }
 
     if(['READY','COMPLETED'].includes(next)){
       const homePointId=found.home_point_id||found.point_id;
@@ -2235,9 +2345,12 @@ const route = async (request) => {
   if(method==='POST'&&createTransferMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przekazywania zleceń.'),{status:403});
-    const order=(await q('SELECT id,point_id,home_point_id,current_point_id,status,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[createTransferMatch[1]])).rows[0];
+    const order=(await q('SELECT id,point_id,home_point_id,current_point_id,status,handling_mode,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[createTransferMatch[1]])).rows[0];
     if(!order)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,order.id);
+    if(['COMPLETED','CANCELLED','REJECTED'].includes(order.status)){
+      return json(request,{error:'ORDER_CLOSED',message:'Zamkniętego lub anulowanego zlecenia nie można dalej przekazywać.'},409);
+    }
 
     const body=await readJson(request);
     const kind=String(body.kind||'OUTBOUND_SERVICE').toUpperCase();
@@ -2301,9 +2414,15 @@ const route = async (request) => {
     const sourceAction=['IN_TRANSIT','CANCELLED'].includes(next);
     await requirePoint(u,sourceAction?transfer.from_point_id:transfer.to_point_id);
 
+    const orderMode=(await q('SELECT handling_mode,status FROM service_orders WHERE id=$1 LIMIT 1',[transfer.service_order_id])).rows[0];
+    if(!orderMode)return json(request,{error:'ORDER_NOT_FOUND'},404);
+    if(orderMode.status==='CANCELLED'&&next!=='CANCELLED'){
+      return json(request,{error:'ORDER_CANCELLED',message:'Zlecenie zostało anulowane. Nie można kontynuować przekazania.'},409);
+    }
+
     let acceptedBy=null;
     if(next==='ACCEPTED'){
-      if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))throw Object.assign(new Error('Brak uprawnień do przyjęcia naprawy.'),{status:403});
+      if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))throw Object.assign(new Error('Brak uprawnień do przyjęcia urządzenia.'),{status:403});
       acceptedBy=u.id;
     }
 
@@ -2317,7 +2436,7 @@ const route = async (request) => {
       : ['DELIVERED','ACCEPTED','REJECTED'].includes(next)
         ? transfer.to_point_id
         : null;
-    if(next==='ACCEPTED'&&transfer.kind==='OUTBOUND_SERVICE'&&u.role_code==='TECHNICIAN'){
+    if(next==='ACCEPTED'&&transfer.kind==='OUTBOUND_SERVICE'&&u.role_code==='TECHNICIAN'&&orderMode?.handling_mode!=='TRANSFER_ONLY'){
       await q('UPDATE service_orders SET current_point_id=$1,assigned_technician_id=$2,updated_at=now() WHERE id=$3',[physicalPointId,u.id,transfer.service_order_id]);
     }else{
       await q('UPDATE service_orders SET current_point_id=$1,updated_at=now() WHERE id=$2',[physicalPointId,transfer.service_order_id]);
