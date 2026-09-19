@@ -762,6 +762,7 @@ const registerIpc = () => {
     const token = requireSessionToken();
     return backendRequest('/support/request', { method:'POST', body:JSON.stringify({pointId:String(pointId ?? '').trim().slice(0,80),message:String(message ?? '').trim().slice(0,1500)}) }, token);
   });
+  secureHandle('support:presence', async () => backendRequest('/support/presence', {}, requireSessionToken()));
   secureHandle('support:listTickets', async () => backendRequest('/support/tickets', {}, requireSessionToken()));
   secureHandle('support:take', async (ticketId: string) => backendRequest('/support/tickets/' + encodeURIComponent(safeId(ticketId,'sup')) + '/take', {method:'POST',body:'{}'}, requireSessionToken()));
   secureHandle('support:reply', async (ticketId: string, message: string) => backendRequest('/support/tickets/' + encodeURIComponent(safeId(ticketId,'sup')) + '/reply', {method:'POST',body:JSON.stringify({message:String(message ?? '').trim().slice(0,2000)})}, requireSessionToken()));
