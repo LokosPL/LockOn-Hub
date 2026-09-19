@@ -1968,7 +1968,7 @@ const route = async (request) => {
   if(method==='POST'&&detailsMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji zlecenia.'),{status:403});
-    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
+    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,handling_mode,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
     const body=await readJson(request);
@@ -1982,8 +1982,8 @@ const route = async (request) => {
       if(conflict)return json(request,{error:'IMEI_CONFLICT',message:'Ten IMEI jest już przypisany do innego urządzenia.'},409);
     }
 
-    const etaText=cleanText(body.estimatedCompletionAt,64);
-    let estimatedCompletionAt=null;
+    const etaText=found.handling_mode==='TRANSFER_ONLY'?'':cleanText(body.estimatedCompletionAt,64);
+    let estimatedCompletionAt=found.handling_mode==='TRANSFER_ONLY'?found.estimated_completion_at:null;
     if(etaText){
       const date=new Date(etaText);
       if(Number.isNaN(date.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
@@ -1992,6 +1992,9 @@ const route = async (request) => {
 
     const canManageAssignment=SERVICE_MANAGE_ROLES.has(u.role_code);
     const canEditCosts=SERVICE_EDIT_ROLES.has(u.role_code);
+    if(found.handling_mode==='TRANSFER_ONLY'&&('assignedTechnicianId' in body||'estimatedCost' in body||'finalCost' in body)){
+      return json(request,{error:'TRANSFER_ONLY_DETAILS_LOCKED',message:'W trybie „Tylko przekazanie” nie ustawia się serwisanta ani cen naprawy.'},409);
+    }
     if(!canManageAssignment&&'assignedTechnicianId' in body){
       throw Object.assign(new Error('Tylko kierownictwo punktu może zmieniać przypisanego technika.'),{status:403});
     }
@@ -2411,9 +2414,15 @@ const route = async (request) => {
     const sourceAction=['IN_TRANSIT','CANCELLED'].includes(next);
     await requirePoint(u,sourceAction?transfer.from_point_id:transfer.to_point_id);
 
+    const orderMode=(await q('SELECT handling_mode,status FROM service_orders WHERE id=$1 LIMIT 1',[transfer.service_order_id])).rows[0];
+    if(!orderMode)return json(request,{error:'ORDER_NOT_FOUND'},404);
+    if(orderMode.status==='CANCELLED'&&next!=='CANCELLED'){
+      return json(request,{error:'ORDER_CANCELLED',message:'Zlecenie zostało anulowane. Nie można kontynuować przekazania.'},409);
+    }
+
     let acceptedBy=null;
     if(next==='ACCEPTED'){
-      if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))throw Object.assign(new Error('Brak uprawnień do przyjęcia naprawy.'),{status:403});
+      if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))throw Object.assign(new Error('Brak uprawnień do przyjęcia urządzenia.'),{status:403});
       acceptedBy=u.id;
     }
 
@@ -2427,10 +2436,6 @@ const route = async (request) => {
       : ['DELIVERED','ACCEPTED','REJECTED'].includes(next)
         ? transfer.to_point_id
         : null;
-    const orderMode=(await q('SELECT handling_mode,status FROM service_orders WHERE id=$1 LIMIT 1',[transfer.service_order_id])).rows[0];
-    if(orderMode?.status==='CANCELLED'&&next!=='CANCELLED'){
-      return json(request,{error:'ORDER_CANCELLED',message:'Zlecenie zostało anulowane. Nie można kontynuować przekazania.'},409);
-    }
     if(next==='ACCEPTED'&&transfer.kind==='OUTBOUND_SERVICE'&&u.role_code==='TECHNICIAN'&&orderMode?.handling_mode!=='TRANSFER_ONLY'){
       await q('UPDATE service_orders SET current_point_id=$1,assigned_technician_id=$2,updated_at=now() WHERE id=$3',[physicalPointId,u.id,transfer.service_order_id]);
     }else{
