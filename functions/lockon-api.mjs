@@ -820,7 +820,7 @@ const ensureTrackingToken = async (orderId) => {
 
 const trackingUrlForOrder = async (orderId) => {
   const token=await ensureTrackingToken(orderId);
-  return PUBLIC_PORTAL_URL + '/track.html?t=' + encodeURIComponent(token);
+  return PUBLIC_PORTAL_URL + '/track.html#t=' + encodeURIComponent(token);
 };
 
 const refreshGmailAccess = async (refreshToken, legacyClientSecret = '') => {
