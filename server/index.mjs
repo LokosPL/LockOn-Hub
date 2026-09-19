@@ -35,7 +35,7 @@ const BODY_LIMIT_BYTES = 64 * 1024;
 const googleVerifier = new OAuth2Client();
 
 const ROLES = ['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER'];
-const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
+const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
 const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
 const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
@@ -165,7 +165,11 @@ const publicUser = (user) => ({
   picture: user.picture,
   role: user.role ?? null,
   technicianSplitPercent: user.technicianSplitPercent ?? null,
+  supportEnabled: user.supportEnabled === true || user.role === 'SUPPORT' || user.role === 'OWNER',
   status: user.status,
+  blocked: Boolean(user.blockedAt),
+  blockedAt: user.blockedAt ?? null,
+  blockedReason: user.blockedReason ?? null,
   pointIds: Array.isArray(user.pointIds) ? user.pointIds : [],
   requestedPoint: user.requestedPoint ?? null,
   firstLoginAt: user.firstLoginAt,
@@ -198,6 +202,7 @@ const ensureOwner = (profile = {}) => {
       name: profile.name || 'Bartłomiej Motłoch',
       picture: profile.picture || null,
       role: 'OWNER',
+      supportEnabled: true,
       status: 'ACTIVE',
       pointIds: [],
       requestedPoint: null,
@@ -207,6 +212,9 @@ const ensureOwner = (profile = {}) => {
     db.users.push(owner);
   } else {
     owner.role = 'OWNER';
+    owner.supportEnabled = true;
+    owner.blockedAt = null;
+    owner.blockedReason = null;
     owner.status = 'ACTIVE';
     owner.pointIds = [];
     owner.googleSub = profile.sub || owner.googleSub || null;
@@ -316,6 +324,10 @@ const requireUser = (req, res) => {
     json(res, 401, { error: 'UNAUTHORIZED', message: 'Sesja wygasła albo jest nieprawidłowa.' });
     return null;
   }
+  if (user.blockedAt) {
+    json(res, 401, { error: 'ACCOUNT_BLOCKED', message: user.blockedReason ? 'Konto zostało zablokowane: '+user.blockedReason : 'Konto zostało zablokowane.' });
+    return null;
+  }
   return user;
 };
 
@@ -334,6 +346,17 @@ const requireRole = (req, res, roles) => {
   if (!user) return null;
   if (!roles.includes(user.role)) {
     json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do tej operacji.' });
+    return null;
+  }
+  return user;
+};
+
+const hasSupportAccess = (user) => user?.role === 'OWNER' || user?.role === 'SUPPORT' || user?.supportEnabled === true;
+const requireSupportAccess = (req, res) => {
+  const user = requireActive(req, res);
+  if (!user) return null;
+  if (!hasSupportAccess(user)) {
+    json(res,403,{error:'SUPPORT_FORBIDDEN',message:'Brak uprawnienia Wsparcie LockOn.'});
     return null;
   }
   return user;
@@ -384,6 +407,7 @@ const loginProfile = (profile) => {
       name: profile.name,
       picture: profile.picture || null,
       role: null,
+      supportEnabled: false,
       status: 'PENDING',
       pointIds: [],
       requestedPoint: null,
@@ -543,12 +567,15 @@ const handle = async (req, res) => {
     const users = db.users.map(publicUser);
     const logins = db.loginEvents.slice(0, 100);
     const pendingRevenue = db.revenueEntries.filter((r) => r.status === 'PENDING').map(revenueView);
+    const activeSessions=db.sessions.filter((session)=>Number(session.expiresAt)>Date.now()&&Number(session.absoluteExpiresAt||session.expiresAt)>Date.now()).length;
     return json(res, 200, {
       points: db.points.map(pointSummary),
       users,
-      pendingUsers,
+      pendingUsers: pendingUsers.filter((user)=>!user.blocked),
+      blockedUsers: users.filter((user)=>user.blocked),
       loginEvents: logins,
-      pendingRevenue
+      pendingRevenue,
+      system:{activeSessions,desktopSessions:activeSessions,webSessions:0,servicePoints:db.points.length,openTransfers:0,blockedUsers:users.filter((user)=>user.blocked).length}
     });
   }
 
@@ -609,7 +636,7 @@ const handle = async (req, res) => {
     if (!target) return json(res, 404, { error: 'NOT_FOUND', message: 'Nie znaleziono użytkownika.' });
     const body = await readBody(req);
     const role = String(body.role || target.requestedPoint?.requestedRole || 'USER');
-    if (!ROLES.includes(role) || role === 'OWNER') return json(res, 400, { error: 'ROLE', message: 'Nieprawidłowa rola.' });
+    if (!REQUESTABLE_ROLES.has(role)) return json(res, 400, { error: 'ROLE', message: 'Nieprawidłowa rola.' });
 
     let pointIds = Array.isArray(body.pointIds) ? body.pointIds.filter((value) => db.points.some((p) => p.id === value)) : [];
     if (body.createRequestedPoint === true && target.requestedPoint) {
@@ -627,6 +654,7 @@ const handle = async (req, res) => {
     }
 
     target.role = role;
+    target.supportEnabled = body.supportEnabled === true;
     if (role === 'TECHNICIAN' && target.requestedPoint?.requestedRole === 'TECHNICIAN') {
       target.technicianSplitPercent = target.requestedPoint.technicianSplitPercent ?? null;
     }
@@ -660,7 +688,7 @@ const handle = async (req, res) => {
     if (target.role === 'OWNER') return json(res, 400, { error: 'OWNER_PROTECTED', message: 'Nie można zmienić roli głównego właściciela.' });
     const body = await readBody(req);
     const role = String(body.role || target.role || 'USER');
-    if (!ROLES.includes(role) || role === 'OWNER') return json(res, 400, { error: 'ROLE' });
+    if (!REQUESTABLE_ROLES.has(role)) return json(res, 400, { error: 'ROLE' });
     const pointIds = Array.isArray(body.pointIds) ? body.pointIds.filter((value) => db.points.some((p) => p.id === value)) : [];
     if (!GLOBAL_ROLES.has(role) && pointIds.length === 0) return json(res, 400, { error: 'POINT_REQUIRED', message: 'Wybierz co najmniej jeden punkt.' });
     const technicianSplitPercent = role === 'TECHNICIAN'
@@ -668,14 +696,54 @@ const handle = async (req, res) => {
       : null;
     if (role === 'TECHNICIAN' && technicianSplitPercent === null) return json(res, 400, { error: 'TECHNICIAN_SPLIT', message: 'Ustaw procent rozliczenia serwisanta.' });
     target.role = role;
+    target.supportEnabled = body.supportEnabled === true;
     target.technicianSplitPercent = technicianSplitPercent;
     target.status = 'ACTIVE';
     target.pointIds = GLOBAL_ROLES.has(role) ? [] : pointIds;
     saveDb();
-    localAudit(owner,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent:target.technicianSplitPercent});
+    localAudit(owner,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent:target.technicianSplitPercent,supportEnabled:target.supportEnabled});
     return json(res, 200, authPayload(target));
   }
 
+
+  const blockUserMatch=url.pathname.match(/^\/admin\/users\/([^/]+)\/block$/);
+  if(method==='POST'&&blockUserMatch){
+    const owner=requireRole(req,res,['OWNER']);if(!owner)return;
+    const target=findUserById(blockUserMatch[1]);if(!target)return json(res,404,{error:'NOT_FOUND'});
+    if(target.role==='OWNER')return json(res,400,{error:'OWNER_PROTECTED',message:'Konta właściciela nie można zablokować.'});
+    const body=await readBody(req),blocked=body.blocked!==false;
+    if(blocked){
+      target.blockedAt=nowIso();target.blockedReason=cleanText(body.reason,500)||null;
+      db.sessions=db.sessions.filter((session)=>session.userId!==target.id);
+      localAudit(owner,'USER_BLOCKED','user',target.id,null,{reason:target.blockedReason});
+    }else{
+      target.blockedAt=null;target.blockedReason=null;
+      localAudit(owner,'USER_UNBLOCKED','user',target.id);
+    }
+    saveDb();
+    return json(res,200,publicUser(target));
+  }
+
+  const logoutUserMatch=url.pathname.match(/^\/admin\/users\/([^/]+)\/logout-all$/);
+  if(method==='POST'&&logoutUserMatch){
+    const owner=requireRole(req,res,['OWNER']);if(!owner)return;
+    const target=findUserById(logoutUserMatch[1]);if(!target)return json(res,404,{error:'NOT_FOUND'});
+    const before=db.sessions.length;
+    db.sessions=db.sessions.filter((session)=>session.userId!==target.id || target.id===owner.id);
+    const revoked=before-db.sessions.length;
+    saveDb();localAudit(owner,'USER_SESSIONS_REVOKED','user',target.id,null,{revoked});
+    return json(res,200,{ok:true,revoked});
+  }
+
+  if(method==='POST'&&url.pathname==='/admin/logout-all'){
+    const owner=requireRole(req,res,['OWNER']);if(!owner)return;
+    const before=db.sessions.length;
+    const currentOwnerIds=new Set(db.sessions.filter((session)=>session.userId===owner.id).map((session)=>session.tokenHash));
+    db.sessions=db.sessions.filter((session)=>session.userId===owner.id && currentOwnerIds.has(session.tokenHash));
+    const revoked=before-db.sessions.length;
+    saveDb();localAudit(owner,'ALL_SESSIONS_REVOKED','auth_session',null,null,{revoked});
+    return json(res,200,{ok:true,revoked,exceptCurrent:true});
+  }
 
   if (method === 'GET' && url.pathname === '/service/customers/search') {
     const user = requireActive(req, res);
@@ -781,7 +849,7 @@ const handle = async (req, res) => {
     const handlingMode = String(body.handlingMode || 'STANDARD').toUpperCase();
     const canEditWorkflow = SERVICE_EDIT_ROLES.has(user.role);
     const etaText = canEditWorkflow ? cleanText(body.estimatedCompletionAt, 64) : '';
-    let estimatedCompletionAt = canEditWorkflow ? null : order.estimatedCompletionAt;
+    let estimatedCompletionAt = null;
     if (etaText) {
       const eta = new Date(etaText);
       if (Number.isNaN(eta.getTime())) return json(res, 400, { error: 'ETA', message: 'Nieprawidłowy przewidywany termin.' });
