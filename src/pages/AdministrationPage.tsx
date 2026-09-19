@@ -19,7 +19,7 @@ import {
   XCircle
 } from 'lucide-react';
 import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
-import type { AdminOverview, AdminPoint, AdminUser } from '../types/electron';
+import type { AdminAuditEvent, AdminOverview, AdminPoint, AdminUser } from '../types/electron';
 
 const ASSIGNABLE_ROLES: UserRole[] = ['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER'];
 type AdminTab = 'PENDING' | 'ACTIVE' | 'SECURITY' | 'POINTS' | 'AUDIT';
@@ -33,12 +33,43 @@ function initials(name: string) {
   return name.split(' ').filter(Boolean).slice(0, 2).map((value) => value[0]).join('').toUpperCase() || '?';
 }
 
+function auditActionLabel(action: string) {
+  const labels: Record<string,string> = {
+    SERVICE_ORDER_CREATED:'Utworzono zlecenie',
+    SERVICE_STATUS_CHANGED:'Zmieniono status zlecenia',
+    SERVICE_TRANSFER_SENT:'Wysłano urządzenie',
+    SERVICE_RETURN_SENT:'Rozpoczęto zwrot do punktu macierzystego',
+    SERVICE_NOTE_ADDED:'Dodano notatkę serwisową',
+    NOTIFICATION_RETRIED:'Ponowiono wysyłkę wiadomości',
+    GMAIL_TEST_SENT:'Wysłano test Gmail',
+    USER_APPROVED:'Aktywowano konto',
+    USER_ACCESS_UPDATED:'Zmieniono uprawnienia konta',
+    USER_BLOCKED:'Zablokowano konto',
+    USER_UNBLOCKED:'Odblokowano konto',
+    SUPPORT_REQUESTED:'Poproszono konsultanta o pomoc',
+    SUPPORT_TAKEN:'Konsultant przejął zgłoszenie',
+    SUPPORT_REPLIED:'Konsultant odpowiedział',
+    SUPPORT_CLOSED:'Zamknięto zgłoszenie',
+    REVENUE_AUTO_APPROVED:'Dodano rozliczenie serwisowe'
+  };
+  return labels[action] ?? action.replaceAll('_',' ').toLocaleLowerCase('pl-PL');
+}
+
+function auditValue(value: unknown) {
+  if (value == null || value === '') return '—';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
 export function AdministrationPage() {
   const [data, setData] = useState<AdminOverview | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [tab, setTab] = useState<AdminTab>('PENDING');
   const [query, setQuery] = useState('');
+  const [auditEvents, setAuditEvents] = useState<AdminAuditEvent[]>([]);
+  const [auditBusy, setAuditBusy] = useState(false);
+  const [auditFilters, setAuditFilters] = useState({ userId:'', pointId:'', action:'', orderNumber:'', dateFrom:'', dateTo:'' });
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [drafts, setDrafts] = useState<Record<string, { role: UserRole; pointIds: string[]; useRequested: boolean; technicianSplitPercent: number | null }>>({});
@@ -55,6 +86,18 @@ export function AdministrationPage() {
       if (!silent) setNotice(error instanceof Error ? error.message : 'Nie udało się pobrać administracji.');
     } finally {
       if (!silent) setBusy(false);
+    }
+  };
+
+  const loadAudit = async () => {
+    setAuditBusy(true);
+    try {
+      const result = await window.lockOn.admin.getAudit(auditFilters);
+      setAuditEvents(result.events ?? []);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Nie udało się pobrać audytu.');
+    } finally {
+      setAuditBusy(false);
     }
   };
 
@@ -293,7 +336,7 @@ export function AdministrationPage() {
           <button className={tab === 'ACTIVE' ? 'active' : ''} onClick={() => setTab('ACTIVE')}><UsersRound size={15}/> Użytkownicy</button>
           <button className={tab === 'SECURITY' ? 'active' : ''} onClick={() => setTab('SECURITY')}><ShieldCheck size={15}/> Bezpieczeństwo</button>
           <button className={tab === 'POINTS' ? 'active' : ''} onClick={() => setTab('POINTS')}><Building2 size={15}/> Punkty / serwisy</button>
-          <button className={tab === 'AUDIT' ? 'active' : ''} onClick={() => setTab('AUDIT')}><Activity size={15}/> Audyt</button>
+          <button className={tab === 'AUDIT' ? 'active' : ''} onClick={() => { setTab('AUDIT'); void loadAudit(); }}><Activity size={15}/> Audyt</button>
         </div>
         <div className="admin-search"><Search size={15}/><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Szukaj po nazwie, e-mailu lub punkcie…" /></div>
         <small className="admin-last-refresh">{autoRefresh ? '● AUTO' : 'AUTO wyłączone'}{lastRefresh ? ` • ${lastRefresh.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}` : ''}</small>
@@ -459,15 +502,40 @@ export function AdministrationPage() {
 
       {tab === 'AUDIT' && (
         <section className="panel-card admin-section">
-          <div className="panel-heading"><div><span className="eyebrow">AUDYT</span><h2>Ostatnie działania</h2></div></div>
-          <div className="login-events audit-events">{(data?.recentAudit ?? []).filter((event)=>!normalizedQuery || `${event.actorName} ${event.action}`.toLowerCase().includes(normalizedQuery)).map((event) => (
-            <div key={event.id}>
-              <div><strong>{event.actorName}</strong><span>{event.action}</span></div>
-              <div className="login-event-access"><strong>{event.entityType}</strong><small>{event.entityId || event.pointId || '—'}</small></div>
-              <time>{formatDate(event.createdAt)}</time>
-            </div>
-          ))}
-          {(data?.recentAudit ?? []).length===0 && <div className="empty-admin">Brak danych audytu.</div>}
+          <div className="panel-heading"><div><span className="eyebrow">AUDYT OPERACYJNY</span><h2>Kto, co, kiedy i gdzie zmienił</h2><p>Filtruj działania po użytkowniku, punkcie, zdarzeniu, zleceniu i zakresie dat.</p></div></div>
+          <div className="audit-filter-grid">
+            <label><span>Użytkownik</span><select value={auditFilters.userId} onChange={(e)=>setAuditFilters({...auditFilters,userId:e.target.value})}><option value="">Wszyscy</option>{(data?.users ?? []).map((user)=><option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+            <label><span>Punkt</span><select value={auditFilters.pointId} onChange={(e)=>setAuditFilters({...auditFilters,pointId:e.target.value})}><option value="">Wszystkie</option>{(data?.points ?? []).map((point)=><option key={point.id} value={point.id}>{point.name}</option>)}</select></label>
+            <label><span>Typ zdarzenia</span><input value={auditFilters.action} onChange={(e)=>setAuditFilters({...auditFilters,action:e.target.value})} placeholder="np. SERVICE, SUPPORT"/></label>
+            <label><span>Numer zlecenia</span><input inputMode="numeric" value={auditFilters.orderNumber} onChange={(e)=>setAuditFilters({...auditFilters,orderNumber:e.target.value.replace(/\D/g,'')})} placeholder="np. 123"/></label>
+            <label><span>Od</span><input type="date" value={auditFilters.dateFrom} onChange={(e)=>setAuditFilters({...auditFilters,dateFrom:e.target.value})}/></label>
+            <label><span>Do</span><input type="date" value={auditFilters.dateTo} onChange={(e)=>setAuditFilters({...auditFilters,dateTo:e.target.value})}/></label>
+            <button className="button primary audit-filter-button" disabled={auditBusy} onClick={()=>void loadAudit()}><Search size={14}/>{auditBusy ? ' Pobieranie…' : ' Filtruj audyt'}</button>
+          </div>
+          <div className="operational-audit-list">
+            {auditEvents.map((event)=>(
+              <article key={event.id} className="operational-audit-row">
+                <div className="audit-event-head">
+                  <div><strong>{auditActionLabel(event.action)}</strong><span>{event.actorName} · {event.actorRole ? ROLE_DEFINITIONS[event.actorRole].label : 'System'}{event.clientType ? ` · ${event.clientType === 'WEB' ? 'WWW' : 'Desktop'}` : ''}</span></div>
+                  <time>{formatDate(event.createdAt)}</time>
+                </div>
+                <div className="audit-event-meta">
+                  {event.pointName && <span>Punkt: <strong>{event.pointName}</strong></span>}
+                  <span>Obiekt: <strong>{event.entityType}{event.entityId ? ` · ${event.entityId}` : ''}</strong></span>
+                  {event.orderNumber != null && <span>Zlecenie: <strong>#{event.orderNumber}</strong></span>}
+                  {event.customerSummary && <span>Klient: <strong>{event.customerSummary}</strong></span>}
+                  {event.deviceSummary && <span>Urządzenie: <strong>{event.deviceSummary}</strong></span>}
+                </div>
+                {(event.before != null || event.after != null) && <div className="audit-change"><span>{auditValue(event.before)}</span><b>→</b><span>{auditValue(event.after)}</span></div>}
+                <div className="audit-status-line">
+                  {event.notificationStatus && <span>E-mail: <strong>{event.notificationStatus}</strong></span>}
+                  {event.transferStatus && <span>Transfer: <strong>{event.transferStatus}</strong></span>}
+                  {event.settlementStatus && <span>Rozliczenie: <strong>{event.settlementStatus}</strong></span>}
+                </div>
+                <details className="audit-json"><summary>Szczegóły techniczne</summary><pre>{JSON.stringify(event.metadata,null,2)}</pre></details>
+              </article>
+            ))}
+            {!auditBusy && auditEvents.length===0 && <div className="empty-admin">Brak zdarzeń dla wybranych filtrów.</div>}
           </div>
         </section>
       )}
