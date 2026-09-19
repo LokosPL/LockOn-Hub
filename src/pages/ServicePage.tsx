@@ -108,6 +108,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const pointOptions = useMemo(() => auth.points, [auth.points]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
   const canEditStatus = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
+  const canEditCosts = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
   const canManageOrderMeta = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
   const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
   const gmailState = gmail?.connectionState ?? (
@@ -335,7 +336,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
         ...form,
         imei: cleanImei,
         pointId,
-        estimatedCost: canManageOrderMeta && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
+        estimatedCost: canEditCosts && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
         assignedTechnicianId: canManageOrderMeta ? form.assignedTechnicianId || undefined : undefined,
         estimatedCompletionAt: form.estimatedCompletionAt ? new Date(form.estimatedCompletionAt).toISOString() : undefined
       });
@@ -418,7 +419,9 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
         deviceNotes: draft.deviceNotes,
         estimatedCompletionAt: draft.estimatedCompletionAt ? new Date(draft.estimatedCompletionAt).toISOString() : null,
         ...(canManageOrderMeta ? {
-          assignedTechnicianId: draft.assignedTechnicianId || null,
+          assignedTechnicianId: draft.assignedTechnicianId || null
+        } : {}),
+        ...(canEditCosts ? {
           estimatedCost: draft.estimatedCost === '' ? null : Number(draft.estimatedCost),
           finalCost: draft.finalCost === '' ? null : Number(draft.finalCost)
         } : {})
@@ -667,10 +670,8 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               <label className="full"><span>Punkt</span><select value={pointId} onChange={(e)=>{setPointId(e.target.value);update('assignedTechnicianId','');}}>{pointOptions.map((p)=><option key={p.id} value={p.id}>{p.name}{p.city ? ' — ' + p.city : ''}</option>)}</select></label>
               <label><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Nowe zlecenie</option><option value="COMPLAINT">Zlecenie reklamacyjne</option></select></label>
               <label><span>Przewidywany termin</span><input type="datetime-local" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>
-              {canManageOrderMeta && <>
-                <label><span>Technik</span><select value={form.assignedTechnicianId} onChange={(e)=>update('assignedTechnicianId',e.target.value)}><option value="">Nieprzypisany</option>{technicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>
-                <label><span>Szacowany koszt (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>
-              </>}
+              {canManageOrderMeta && <label><span>Technik</span><select value={form.assignedTechnicianId} onChange={(e)=>update('assignedTechnicianId',e.target.value)}><option value="">Nieprzypisany</option>{technicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+              {canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>}
               <label className="full"><span>Uwagi do urządzenia</span><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Stan obudowy, hasło serwisowe przekazane osobno, akcesoria…"/></label>
               <label className="full"><span>Opis usterki</span><textarea rows={6} value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} /></label>
             </div>
@@ -729,7 +730,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                         <span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleString('pl-PL') : 'Brak terminu'}</span>
                         <span><MapPin size={11}/>Macierzysty: {order.homePointName || order.pointName}</span>
                         <span><Truck size={11}/>Lokalizacja: {order.currentLocationLabel || order.currentPointName || order.pointName}</span>
-                        {canManageOrderMeta && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
+                        {canEditCosts && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
                       </div>
                     </div>
                     <div className="service-order-actions">
@@ -760,8 +761,8 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                             <label><span>Numer seryjny</span><input disabled={!canEditStatus} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
                             <label><span>Przewidywany termin</span><input disabled={!canEditStatus} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>
                             {canManageOrderMeta && <label><span>Technik</span><select value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
-                            {canManageOrderMeta && <label><span>Koszt szacowany</span><input type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
-                            {canManageOrderMeta && <label><span>Koszt końcowy</span><input type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
+                            {canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
+                            {canEditCosts && <label><span>Cena końcowa (PLN)</span><input type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
                             <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditStatus} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
                           </div>
                           {canEditStatus && <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
