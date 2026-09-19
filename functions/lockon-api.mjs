@@ -128,7 +128,7 @@ const customerView = (row) => ({
 
 const loadRequestedPoint = async (userId) => {
   const { rows } = await q(
-    "SELECT point_name, city, requested_role_code, requested_at FROM access_requests WHERE user_id=$1 AND status='PENDING' ORDER BY requested_at DESC LIMIT 1",
+    "SELECT point_name, city, requested_role_code, technician_split_percent, requested_at FROM access_requests WHERE user_id=$1 AND status='PENDING' ORDER BY requested_at DESC LIMIT 1",
     [userId]
   );
   if (!rows[0]) return null;
@@ -136,13 +136,14 @@ const loadRequestedPoint = async (userId) => {
     pointName: rows[0].point_name,
     city: rows[0].city,
     requestedRole: rows[0].requested_role_code,
+    technicianSplitPercent: rows[0].technician_split_percent == null ? null : Number(rows[0].technician_split_percent),
     requestedAt: rows[0].requested_at
   };
 };
 
 const loadUser = async (userId) => {
   const { rows } = await q(
-    'SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 LIMIT 1',
+    'SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 LIMIT 1',
     [userId]
   );
   return rows[0] || null;
@@ -166,6 +167,7 @@ const publicUser = async (user) => ({
   name: user.name,
   picture: user.picture_url || null,
   role: user.role_code || null,
+  technicianSplitPercent: user.technician_split_percent == null ? null : Number(user.technician_split_percent),
   status: user.status,
   blocked: Boolean(user.blocked_at),
   blockedAt: user.blocked_at || null,
@@ -317,7 +319,7 @@ const exchangeDesktopAuthorizationCode = async (body, expectedPath) => {
 
 const loginProfile = async (profile, clientType, allowCreate) => {
   let result = await q(
-    'SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE google_sub=$1 OR lower(email)=lower($2) ORDER BY CASE WHEN google_sub=$1 THEN 0 ELSE 1 END LIMIT 1',
+    'SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE google_sub=$1 OR lower(email)=lower($2) ORDER BY CASE WHEN google_sub=$1 THEN 0 ELSE 1 END LIMIT 1',
     [profile.sub, profile.email]
   );
   let user = result.rows[0] || null;
@@ -1364,7 +1366,7 @@ const route = async (request) => {
         await client.query('ROLLBACK');
         return json(request, { error: 'CODE_EXPIRED', message: 'Kod jest nieprawidłowy, wykorzystany albo wygasł.' }, 401);
       }
-      const userResult = await client.query("SELECT id,google_sub,email,name,picture_url,role_code,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 AND status='ACTIVE'", [result.rows[0].user_id]);
+      const userResult = await client.query("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users WHERE id=$1 AND status='ACTIVE'", [result.rows[0].user_id]);
       if (!userResult.rows[0]) {
         await client.query('ROLLBACK');
         return json(request, { error: 'ACCOUNT_NOT_ACTIVE', message: 'Konto nie jest aktywne.' }, 403);
@@ -1392,11 +1394,18 @@ const route = async (request) => {
     const pointName = cleanText(body.pointName, 90);
     const city = cleanText(body.city, 90);
     const requestedRole = String(body.requestedRole || 'USER').toUpperCase();
+    const splitRaw = body.technicianSplitPercent;
+    const technicianSplitPercent = requestedRole === 'TECHNICIAN'
+      ? Number(splitRaw)
+      : null;
     if (!pointName || !city || !REQUESTABLE_ROLES.has(requestedRole)) return json(request, { error: 'VALIDATION', message: 'Nieprawidłowe zgłoszenie punktu.' }, 400);
+    if (requestedRole === 'TECHNICIAN' && (!Number.isFinite(technicianSplitPercent) || technicianSplitPercent < 0 || technicianSplitPercent > 100)) {
+      return json(request, { error: 'TECHNICIAN_SPLIT', message: 'Ustaw swój procent rozliczenia serwisanta od 0 do 100%.' }, 400);
+    }
     await q("UPDATE access_requests SET status='REJECTED',resolved_at=now(),note='Zastąpione nowszym zgłoszeniem' WHERE user_id=$1 AND status='PENDING'", [session.user.id]);
     await q(
-      "INSERT INTO access_requests(id,user_id,point_name,city,requested_role_code,status,requested_at) VALUES($1,$2,$3,$4,$5,'PENDING',now())",
-      [makeId('acr'), session.user.id, pointName, city, requestedRole]
+      "INSERT INTO access_requests(id,user_id,point_name,city,requested_role_code,technician_split_percent,status,requested_at) VALUES($1,$2,$3,$4,$5,$6,'PENDING',now())",
+      [makeId('acr'), session.user.id, pointName, city, requestedRole, technicianSplitPercent]
     );
     return json(request, await authPayload(await loadUser(session.user.id)));
   }
