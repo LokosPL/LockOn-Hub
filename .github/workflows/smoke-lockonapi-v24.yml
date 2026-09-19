@@ -1,0 +1,36 @@
+name: Smoke production lockonapi v24
+
+on:
+  push:
+    branches: ["ops/deploy-lockonapi-v24"]
+    paths:
+      - ".github/workflows/smoke-lockonapi-v24.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe health
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech'
+          body="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 --max-time 20 "$base/health")"
+          printf '%s' "$body" | jq -e '.ok == true and .service == "LockOn ServiceOS Central API"'
+      - name: Verify protected surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech'
+          for path in '/me' '/service/orders' '/admin/factory-reset/preview' '/finance/revenues'; do
+            code="$(curl --silent --output /tmp/out.json --write-out '%{http_code}' --max-time 20 "$base$path")"
+            test "$code" = "401"
+          done
+          code="$(curl --silent --output /tmp/status.json --write-out '%{http_code}' --max-time 20 -X POST -H 'Content-Type: application/json' -d '{"status":"READY","actingPointId":"nowogard"}' "$base/service/orders/srv_nonexistent/status")"
+          test "$code" = "401"
+          code="$(curl --silent --output /tmp/reset.json --write-out '%{http_code}' --max-time 20 -X POST -H 'Content-Type: application/json' -d '{"phrase":"USUŃ WSZYSTKIE DANE","confirmed":true}' "$base/admin/factory-reset")"
+          test "$code" = "401"
