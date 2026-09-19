@@ -2342,9 +2342,12 @@ const route = async (request) => {
   if(method==='POST'&&createTransferMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przekazywania zleceń.'),{status:403});
-    const order=(await q('SELECT id,point_id,home_point_id,current_point_id,status,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[createTransferMatch[1]])).rows[0];
+    const order=(await q('SELECT id,point_id,home_point_id,current_point_id,status,handling_mode,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[createTransferMatch[1]])).rows[0];
     if(!order)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,order.id);
+    if(['COMPLETED','CANCELLED','REJECTED'].includes(order.status)){
+      return json(request,{error:'ORDER_CLOSED',message:'Zamkniętego lub anulowanego zlecenia nie można dalej przekazywać.'},409);
+    }
 
     const body=await readJson(request);
     const kind=String(body.kind||'OUTBOUND_SERVICE').toUpperCase();
@@ -2424,7 +2427,11 @@ const route = async (request) => {
       : ['DELIVERED','ACCEPTED','REJECTED'].includes(next)
         ? transfer.to_point_id
         : null;
-    if(next==='ACCEPTED'&&transfer.kind==='OUTBOUND_SERVICE'&&u.role_code==='TECHNICIAN'){
+    const orderMode=(await q('SELECT handling_mode,status FROM service_orders WHERE id=$1 LIMIT 1',[transfer.service_order_id])).rows[0];
+    if(orderMode?.status==='CANCELLED'&&next!=='CANCELLED'){
+      return json(request,{error:'ORDER_CANCELLED',message:'Zlecenie zostało anulowane. Nie można kontynuować przekazania.'},409);
+    }
+    if(next==='ACCEPTED'&&transfer.kind==='OUTBOUND_SERVICE'&&u.role_code==='TECHNICIAN'&&orderMode?.handling_mode!=='TRANSFER_ONLY'){
       await q('UPDATE service_orders SET current_point_id=$1,assigned_technician_id=$2,updated_at=now() WHERE id=$3',[physicalPointId,u.id,transfer.service_order_id]);
     }else{
       await q('UPDATE service_orders SET current_point_id=$1,updated_at=now() WHERE id=$2',[physicalPointId,transfer.service_order_id]);
