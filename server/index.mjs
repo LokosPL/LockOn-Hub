@@ -1051,6 +1051,12 @@ const handle = async (req, res) => {
     if ((order.handlingMode || 'STANDARD') === 'TRANSFER_ONLY' && status !== order.status && status !== 'CANCELLED') {
       return json(res, 409, { error:'TRANSFER_ONLY_STATUS_LOCKED', message:'To zlecenie służy wyłącznie do przekazywania urządzenia. Możesz je tylko anulować.' });
     }
+    if (status === 'READY' && order.status !== 'REPAIR_DONE') {
+      return json(res, 409, { error:'REPAIR_DONE_REQUIRED', message:'Status „Gotowe do odbioru” można ustawić dopiero po zakończeniu naprawy.' });
+    }
+    if (status === 'COMPLETED' && order.status !== 'READY') {
+      return json(res, 409, { error:'READY_REQUIRED', message:'Zlecenie można zakończyć dopiero po statusie „Gotowe do odbioru”.' });
+    }
     const previous = order.status;
     order.status = status;
     order.updatedAt = nowIso();
