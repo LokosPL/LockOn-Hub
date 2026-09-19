@@ -491,53 +491,92 @@ Dla każdego priorytetu:
 8. Po wdrożeniu aktualizować ten plik i przechodzić od razu do kolejnego priorytetu, bez pytania użytkownika o zgodę na zwykłe prace developerskie.
 9. Jawne potwierdzenie użytkownika jest nadal wymagane, jeśli narzędzie wymaga go dla destrukcyjnej/produkcyjnej migracji lub innej nieodwracalnej operacji.
 
-## Stan realizacji aktualnego backlogu 1–5 — 2026-09-19
+## Stan realizacji aktualnego backlogu 1–10 — 2026-09-19
 
-- Priorytet 1: kod desktop/API i PWA scalony; regresje USER poprawione. Produkcja nie ma konta USER, więc nie tworzono sztucznego konta/danych tylko do testu roli.
-- Priorytet 2: scalone czytelne karty zleceń desktop/PWA oraz deterministyczne kolejkowanie e-mail po przyjęciu; wysyłka jest uznawana za SENT dopiero po provider message id, a błędy pozostają retryable w outbox.
-- Priorytet 3: scalone responsywne wiadomości klienta i spójna, privacy-safe publiczna karta śledzenia.
-- Priorytet 4: scalony punktowy workflow konsultanta; produkcyjny schemat ma point_id, assigned_support_user_id, taken_at i closed_at w support_conversations.
-- Priorytet 5: scalone PR Hub #37 i PWA #14; czytelne karty kont, jawne „Edytuj konto”, role/punkty/blokada/parametr rozliczenia technika; blokada nadal unieważnia sesje, OWNER chroniony.
-- P5 checks: Verify Neon API bundle #5 SUCCESS, Verify ServiceOS #444 SUCCESS, CodeQL #228 SUCCESS; PWA Verify #109 SUCCESS.
-- Zweryfikowany bundle API dla P1–P5: artifact lockon-central-api z run 35447335266, SHA-256 artifact digest 1f5f35c76a20e4039c9adec14b77393e08a0e72dcd89826457c8dc05b3101c91.
-- UWAGA wdrożeniowa: aktywny Neon lockonapi pozostaje v24 do czasu przesłania zweryfikowanego ZIP-a do deploy_function. Nie oznaczać backendowej części P1–P5 jako produkcyjnie zamkniętej przed nowym deploymentem i smoke.
+### Priorytet 1 — ZROBIONE i wdrożone
+- Desktop/API i PWA scalone; regresje ograniczonej roli USER poprawione.
+- Backend centralny zawierający P1 jest na produkcji w aktywnym `lockonapi` v27.
+- USER ma workflow: utworzenie zlecenia, edycja podstawowych danych przyjęcia, anulowanie i przekazanie; normalne statusy i finanse pozostają zabronione backendowo.
+- Produkcja ma obecnie tylko OWNER i TECHNICIAN — brak konta USER. Nie tworzono sztucznego konta ani sztucznych danych produkcyjnych wyłącznie do E2E roli.
 
-## Priorytet 6 — ZROBIONE produkcyjnie (2026-09-19)
+### Priorytet 2 — ZROBIONE i wdrożone
+- Czytelne karty zleceń desktop/PWA pokazują bez rozwijania numer, czas przyjęcia, klienta/urządzenie, punkt macierzysty, lokalizację, technika, etap, ETA i cenę dla uprawnionych.
+- E-mail przyjęcia jest najpierw zapisywany w outbox, a dopiero potem wysyłany; SENT oznacza zaakceptowanie przez provider i zapis `provider_message_id`; brak nadawcy/błąd pozostawia retryable stan kolejki.
+- Backend P2 jest zawarty w produkcyjnym `lockonapi` v27.
+- Aktualnie produkcyjny `notification_outbox` jest pusty, więc nie tworzono fikcyjnego klienta/zlecenia tylko dla testu wysyłki. Kod/CI weryfikuje rozróżnienie SENT vs queue/retry; brak danych produkcyjnych jest jawnie odnotowany.
 
+### Priorytet 3 — ZROBIONE i wdrożone
+- Responsywne wiadomości klienta i spójna privacy-safe publiczna karta śledzenia są scalone.
+- Token śledzenia jest przypisany do jednego zlecenia; publiczna odpowiedź ogranicza dane klienta/urządzenia i pokazuje właściwy status/lokalizację/historię.
+
+### Priorytet 4 — ZROBIONE i wdrożone
+- Punktowy workflow konsultanta działa end-to-end w desktop/API.
+- SUPPORT jest ograniczony do przypisanych punktów; utworzenie/przejęcie/odpowiedź/zamknięcie jest audytowane.
+- Produkcyjny schemat `support_conversations` zawiera `point_id`, `assigned_support_user_id`, `taken_at`, `closed_at`.
+
+### Priorytet 5 — ZROBIONE i wdrożone
+- Hub PR #37 i PWA PR #14 scalone.
+- Karty kont pokazują nazwę, e-mail, rolę, przypisane punkty, status i ostatnie logowanie.
+- OWNER ma jawne „Edytuj konto”, zmianę roli/punktów/blokady i parametru rozliczenia TECHNICIAN.
+- Blokada nadal unieważnia sesje; konto OWNER jest chronione.
+- Verify Neon API bundle #5 SUCCESS, Verify ServiceOS #444 SUCCESS, CodeQL #228 SUCCESS, PWA Verify #109 SUCCESS.
+
+### Priorytet 6 — ZROBIONE produkcyjnie
 - Hub PR #38 i PWA PR #15 scalone.
 - OWNER ma filterowalny audyt po użytkowniku, punkcie, typie zdarzenia, numerze zlecenia i zakresie dat.
 - Widok pokazuje aktora, rolę, punkt, obiekt/id, stary→nowy stan, numer zlecenia, bezpieczny skrót klienta/urządzenia, status e-mail/transfer/rozliczenie, czas i typ klienta WEB/Desktop, gdy jest dostępny.
-- JSON pozostaje opcjonalnym rozwijanym widokiem technicznym.
+- JSON pozostaje opcjonalnym widokiem technicznym.
 - Verify ServiceOS #453 SUCCESS, Verify Neon API bundle #7 SUCCESS, CodeQL #232 SUCCESS, PWA Verify #115 SUCCESS.
-- Neon lockonapi wdrożony jako v26 z artifact digest SHA-256 b4e896d7dd489b9434255d46cce23924dd5707cfd5345e4ed185bad155b45fb9.
-- Bez zmian schematu DB; produkcja ma istniejące zdarzenia audytu, a nowy endpoint czyta je bez destrukcyjnych testów.
+- Neon `lockonapi` był wdrożony jako v26 z artifact digest SHA-256 `b4e896d7dd489b9434255d46cce23924dd5707cfd5345e4ed185bad155b45fb9`.
 
-## Priorytet 7 — ZROBIONE produkcyjnie (2026-09-19)
-
+### Priorytet 7 — ZROBIONE produkcyjnie
 - Hub PR #39 i PWA PR #16 scalone.
-- BOSS/OWNER widzi łączny przychód firmy, łączny udział serwisantów, udział firmy/Szefa oraz rozbicie per punkt.
-- Punkt można rozwinąć do wpisów/zleceń z serwisantem, kwotą, snapshotem procentu i datą; wpisy ręczne i automatyczne są rozróżnione.
-- Model nie wraca do stałego 50/50: każdy wpis używa zapisanego `technician_percent`; historia zachowuje snapshot.
+- BOSS/OWNER widzi przychód firmy, udział serwisantów, udział firmy/Szefa i rozbicie per punkt z drilldown do wpisów/zleceń.
+- Rozliczenia korzystają ze snapshotu `technician_percent`; nie przywrócono stałego 50/50.
 - Verify ServiceOS #460 SUCCESS, Verify Neon API bundle #8 SUCCESS, CodeQL #235 SUCCESS, PWA Verify #120 SUCCESS.
-- Neon lockonapi wdrożony jako v27 z artifact digest SHA-256 5d60feed08bb57ec39385f31bda7a37d5e9a4f0e3f8d9cbf77cead99e69af11d.
+- Neon `lockonapi` wdrożony jako v27 z artifact digest SHA-256 `5d60feed08bb57ec39385f31bda7a37d5e9a4f0e3f8d9cbf77cead99e69af11d`.
 - Produkcyjny odczyt kontrolny: Sklep LockOn 1800 PLN przychodu / 900 PLN serwisant / 900 PLN firma.
-- Bez zmian schematu DB i bez destrukcyjnych testów.
 
-## Priorytet 8 — ZROBIONE produkcyjnie (2026-09-19)
-
+### Priorytet 8 — ZROBIONE produkcyjnie
 - Site PR #17 scalony; PWA Verify #125 SUCCESS.
-- Publiczna strona używa krótszego, prostego języka pracownika; kody ról OWNER/TECHNICIAN/COORDINATOR/SUPPORT/PENDING/ACTIVE usunięto ze zwykłej treści.
+- Publiczna strona używa prostszego języka, bez technicznych kodów ról/statusów dla zwykłego pracownika.
 - Komunikat dostępu: „Twoje konto musi zostać zaakceptowane przez osobę uprawnioną”.
-- Nie eksponuje już pracownikowi szczegółów factory reset ani technicznych mechanizmów uprawnień.
-- Regulamin i polityka prywatności pozostają w końcowej akceptacji; pobieranie aplikacji i łączenie telefonu pozostają zablokowane do akceptacji.
+- Regulamin/polityka pozostają na końcu procesu; pobranie aplikacji i łączenie telefonu są dostępne dopiero po akceptacji.
 - Podgląd nadal używa `preview-stage`, bez `window.scrollBy`; CSP/PWA nie zostały osłabione.
-- PWA cache: serviceos-shell-v13.
+- PWA cache: `serviceos-shell-v13`.
+
+### Priorytet 9 — ZROBIONE
+- Hub PR #40 scalony.
+- Po wyszukaniu referencji usunięto wyłącznie nieużywane jednorazowe artefakty operacyjne `source-bundle/README.md` i `source-bundle/part00.b64` … `part09.b64`.
+- Nie usuwano migracji historycznych, recovery ani aktywnych ścieżek deploy/build.
+- Repo strony po przeglądzie nie wymagało bezpiecznego cleanup delta — gałąź P9 była identyczna z `main`.
+- CodeQL #239 SUCCESS; zmiana P9 nie dotyka runtime.
+
+### Priorytet 10 — ZROBIONE
+- Hub PR #41 scalony.
+- Callback Google jest po polsku, bez ACTIVE/OWNER w zwykłym komunikacie; sukces mówi „Logowanie zakończone. Wracamy do ServiceOS.”.
+- Jest próba automatycznego powrotu przez `lockon-serviceos://login-complete`, przycisk „Wróć do aplikacji” i próba zamknięcia karty po ok. 5 s.
+- Custom protocol służy wyłącznie do aktywowania/focusu aplikacji i nie przenosi kodu, tokenu, state ani innych danych OAuth.
+- PKCE, loopback redirect validation i porównanie `state` pozostały bez zmian.
+- Callback CSP używa per-response nonce dla lokalnego skryptu.
+- Verify ServiceOS #464 SUCCESS (w tym compile Electron, package smoke i local API smoke); CodeQL #240 SUCCESS.
+
+## Końcowe wydanie backlogu 1–10
+- Release PR #42 scalony do `main`: commit `4bce5ea41d2646349d5f59f21f8132cde70309ff`.
+- Publiczne wydanie Windows: **v0.18.0**, opublikowane 2026-09-19.
+- Release workflow #38 SUCCESS: build aplikacji, instalator Windows, SHA-256, build provenance i publikacja GitHub Release.
+- Końcowy push na `main`: Verify ServiceOS #469 SUCCESS, CodeQL #244 SUCCESS.
+- Instalator: `LockOn-ServiceOS-Setup.exe`, SHA-256 `67a73b923df78fc73c413f67c7effaa817abc0787eb0788917a9da8bb8afb9a2`.
+- `latest.yml`, blockmap i `SHA256SUMS.txt` są opublikowane jako assets release.
+- Produkcyjny backend: Neon `lockonapi` **v27**, deployment completed.
+- Produkcyjnych testów destrukcyjnych/factory reset nie wykonywano.
+- Aktualny backlog **1–10 jest zakończony**. Dwa testy produkcyjne zależne od nieistniejących danych pozostają jawnie niewykonane: E2E roli USER (brak produkcyjnego USER) oraz realna wysyłka intake e-mail (pusty `notification_outbox`). Nie należy fabrykować danych produkcyjnych tylko dla tych testów.
 
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
 2. Sprawdź aktualny `main`, latest release, otwarte PR-y i wszystkie aktywne workflow w obu repozytoriach.
 3. Sprawdź Neon: projekt `wandering-field-13057181`, produkcyjną gałąź `br-steep-bonus-b1f1qh8u`, bazę `lockon`, aktywny deployment `lockonapi` oraz schemat.
-4. Historyczne priorytety 1–5 są wdrożone. **Aktualna praca zaczyna się od nowego Priorytetu 1 z sekcji „AKTUALNY BACKLOG — PRIORYTETY 1–10”.**
-5. Realizuj kolejno 1 → 10. Po zakończeniu jednego przechodź do następnego bez pytania użytkownika, chyba że konieczna operacja wymaga jawnego potwierdzenia.
+4. Aktualny backlog Priorytety 1–10 jest zakończony i wydany jako v0.18.0. Nie rozpoczynaj go ponownie.
+5. Przy kolejnej pracy najpierw sprawdź nowe wymagania użytkownika, aktualny main/release/Neon i dopiero utwórz następny backlog lub poprawkę.
 6. Pracuj samodzielnie przez GitHub i Neon; nie proś użytkownika o informacje, które można sprawdzić narzędziami.
