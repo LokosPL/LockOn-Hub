@@ -30,12 +30,17 @@ The first service workflow keeps the existing role/point model and introduces:
 
 ## Website authorization
 
-Planned one-time website login codes use `website_auth_codes`:
+Employee WWW/PWA access is code-only. The public website does not authenticate employees directly with Google.
+
+One-time website login codes use `website_auth_codes`:
+- generated only for an already authenticated, active desktop session;
 - cryptographically random value shown once;
 - only SHA-256 hash stored;
-- short TTL (target: 5 minutes);
+- short TTL: 5 minutes;
 - bound to one user and desktop session;
-- single-use via `consumed_at`.
+- single-use via `consumed_at`;
+- redeemed through `POST /website/redeem`;
+- `POST /auth/google-web` is intentionally disabled and returns `WEB_CODE_ONLY`.
 
 ## Email notifications
 
