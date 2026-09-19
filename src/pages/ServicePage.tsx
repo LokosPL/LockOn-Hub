@@ -370,7 +370,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
     setError('');
     setNotice('');
     try {
-      const updated = await window.lockOn.service.updateStatus(order.id, status);
+      const updated = await window.lockOn.service.updateStatus(order.id, status, undefined, pointId);
       setOrders((current) => current.map((item) => item.id === order.id ? updated.order : item));
       if (orderHistories[order.id]) {
         const history = await window.lockOn.service.getHistory(order.id);
@@ -710,7 +710,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               const notes = orderNotes[order.id] ?? [];
               const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
               const pointTechnicians = currentServicePointId ? (techniciansByPoint[currentServicePointId] ?? []) : [];
-              const canOperateCurrentPoint = Boolean(currentServicePointId) && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
+              const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
               const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
               return (
                 <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''} workflow-${(order.workflow?.attentionCode || 'ACTIVE').toLowerCase()}`}>
