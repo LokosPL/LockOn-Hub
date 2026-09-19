@@ -1245,6 +1245,7 @@ const handle = async (req, res) => {
   if (method === 'GET' && url.pathname === '/finance/revenues') {
     const user = requireActive(req, res);
     if (!user) return;
+    if (user.role === 'USER') return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do rozliczeń.' });
     const entries = db.revenueEntries.filter((entry) => revenueVisibleTo(user, entry)).map(revenueView);
     const approved = entries.filter((e) => e.status === 'APPROVED');
     const pending = entries.filter((e) => e.status === 'PENDING');
@@ -1321,6 +1322,7 @@ const handle = async (req, res) => {
   if (method === 'GET' && url.pathname === '/dashboard') {
     const user = requireActive(req, res);
     if (!user) return;
+    if (user.role === 'USER') return json(res, 200, { pointCount:0,activeUsers:0,pendingUsers:0,approvedRevenue:0,pendingRevenue:0,bossShare:0,technicianShare:0 });
     const visibleEntries = db.revenueEntries.filter((entry) => revenueVisibleTo(user, entry));
     const visiblePointIds = GLOBAL_ROLES.has(user.role) ? db.points.map((p) => p.id) : user.pointIds || [];
     const visibleUsers = GLOBAL_ROLES.has(user.role)
