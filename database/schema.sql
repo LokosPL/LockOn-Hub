@@ -590,6 +590,11 @@ SET notify_statuses = array_append(notify_statuses,'REPAIR_DONE'),
     updated_at = now()
 WHERE NOT ('REPAIR_DONE'=ANY(notify_statuses));
 
+UPDATE point_notification_settings
+SET notify_statuses = array_append(notify_statuses,'CANCELLED'),
+    updated_at = now()
+WHERE NOT ('CANCELLED'=ANY(notify_statuses));
+
 CREATE UNIQUE INDEX IF NOT EXISTS revenue_entries_service_order_unique_idx
   ON revenue_entries(service_order_id)
   WHERE service_order_id IS NOT NULL;
