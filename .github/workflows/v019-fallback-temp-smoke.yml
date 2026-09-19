@@ -1,0 +1,34 @@
+name: v0.19 quote fallback temp E2E
+
+on:
+  push:
+    paths:
+      - ".github/workflows/v019-fallback-temp-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE: https://br-curly-cloud-b1f49trt-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+      STAFF_TOKEN: test-v019-staff-token
+    steps:
+      - name: Verify fallback with no transfer history
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(curl -sS -o /tmp/health -w '%{http_code}' "$BASE/health")" = "200"
+          login="$(curl -sS -o /tmp/login.json -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{"customerId":"LK-WXYZ-2345-JKLM-6789"}' "$BASE/public/customer-portal/login")"
+          test "$login" = "200"
+          CUSTOMER_TOKEN="$(node -e "const x=require('/tmp/login.json');if(!x.sessionToken)process.exit(2);process.stdout.write(x.sessionToken)")"
+          create="$(curl -sS -o /tmp/create.json -w '%{http_code}' -X POST -H "authorization: Bearer $CUSTOMER_TOKEN" -H 'content-type: application/json' --data '{"requestedPointId":"pnt_01900000000000000000","deviceDescription":"iPhone 15","issueDescription":"Test fallback bez historii przekazań."}' "$BASE/public/customer-portal/quotes")"
+          test "$create" = "201"
+          REQUEST_ID="$(node -e "const x=require('/tmp/create.json');const q=x.quoteRequests?.find(q=>q.issueDescription.includes('fallback bez historii'));if(!q||q.routingReason!=='ACTIVE_TECHNICIAN_FALLBACK'||q.routedPointId==='pnt_01900000000000000000'||!q.assignedTechnicianName)process.exit(3);process.stdout.write(q.id)")"
+          staff="$(curl -sS -o /tmp/staff.json -w '%{http_code}' -H "authorization: Bearer $STAFF_TOKEN" "$BASE/service/customer-quotes")"
+          test "$staff" = "200"
+          node -e "const x=require('/tmp/staff.json');const q=x.find(q=>q.id===process.argv[1]);if(!q||q.routingReason!=='ACTIVE_TECHNICIAN_FALLBACK'||!q.assignedTechnicianName)process.exit(4)" "$REQUEST_ID"
+          echo "V019_FALLBACK_E2E_OK request=$REQUEST_ID"
