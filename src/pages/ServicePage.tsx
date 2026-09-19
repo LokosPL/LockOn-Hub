@@ -109,6 +109,10 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
   const pointOptions = useMemo(() => auth.points, [auth.points]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
   const canEditStatus = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
+  const canCreateService = canEditStatus || effectiveRole === 'USER';
+  const canEditIntake = canCreateService;
+  const canTransferService = canCreateService;
+  const canCancelService = canCreateService;
   const canEditCosts = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
   const canManageOrderMeta = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
   const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
@@ -679,7 +683,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               <label><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Nowe zlecenie</option><option value="COMPLAINT">Zlecenie reklamacyjne</option></select></label>
               <label className="full"><span>Sposób obsługi</span><select value={form.handlingMode} onChange={(e)=>update('handlingMode', e.target.value as 'STANDARD' | 'TRANSFER_ONLY')}><option value="STANDARD">Normalny serwis — statusy, diagnoza i naprawa</option><option value="TRANSFER_ONLY">Tylko przekazanie — logistyka bez zmiany statusów naprawy</option></select></label>
               {form.handlingMode === 'TRANSFER_ONLY' && <div className="service-mode-note full"><Truck size={16}/><div><strong>Tylko przekazanie</strong><span>To zlecenie służy wyłącznie do przekazywania urządzenia między punktami. Status naprawy pozostaje zablokowany; dostępne jest jedynie anulowanie zlecenia.</span></div></div>}
-              {form.handlingMode === 'STANDARD' && <label><span>Przewidywany termin</span><input type="datetime-local" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>}
+              {form.handlingMode === 'STANDARD' && canEditStatus && <label><span>Przewidywany termin</span><input type="datetime-local" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>}
               {form.handlingMode === 'STANDARD' && canManageOrderMeta && <label><span>Technik</span><select value={form.assignedTechnicianId} onChange={(e)=>update('assignedTechnicianId',e.target.value)}><option value="">Nieprzypisany</option>{technicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
               {form.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>}
               <label className="full"><span>Uwagi do urządzenia</span><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Stan obudowy, hasło serwisowe przekazane osobno, akcesoria…"/></label>
@@ -712,6 +716,9 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               const pointTechnicians = currentServicePointId ? (techniciansByPoint[currentServicePointId] ?? []) : [];
               const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
               const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
+              const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
+              const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
+              const canCancelHere = canCancelService && canOperateCurrentPoint && !order.openTransfer;
               return (
                 <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''} workflow-${(order.workflow?.attentionCode || 'ACTIVE').toLowerCase()}`}>
                   <div className="service-order-row">
@@ -776,15 +783,15 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                         <section className="service-workspace-card">
                           <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
                           <div className="service-details-grid">
-                            <label><span>IMEI</span><input disabled={!canEditOrderHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
-                            <label><span>Numer seryjny</span><input disabled={!canEditOrderHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
-                            {order.handlingMode === 'STANDARD' && <label><span>Przewidywany termin</span><input disabled={!canEditOrderHere} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>}
-                            {order.handlingMode === 'STANDARD' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditOrderHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
-                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
-                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
-                            <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditOrderHere} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
+                            <label><span>IMEI</span><input disabled={!canEditIntakeHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
+                            <label><span>Numer seryjny</span><input disabled={!canEditIntakeHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
+                            {order.handlingMode === 'STANDARD' && canEditStatus && <label><span>Przewidywany termin</span><input disabled={!canEditOrderHere} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>}
+                            {order.handlingMode === 'STANDARD' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditIntakeHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditIntakeHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
+                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditIntakeHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
+                            <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditIntakeHere} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
                           </div>
-                          {canEditOrderHere && <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
+                          {canEditIntakeHere && <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
                         </section>
                       )}
 
@@ -800,7 +807,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                             <small>{order.openTransfer.kind==='RETURN_HOME' ? 'Obowiązkowy zwrot do punktu macierzystego' : 'Wysłanie do zewnętrznego serwisu'} · {order.openTransfer.status==='IN_TRANSIT'?'w drodze':order.openTransfer.status==='DELIVERED'?'dostarczono, czeka na przyjęcie':'oczekuje'}</small>
                           </div>
                         ) : order.handlingMode === 'TRANSFER_ONLY' ? (
-                          canEditStatus && canOperateCurrentPoint ? (
+                          canTransferHere ? (
                             <div className="transfer-compose">
                               <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
                                 <option value="">Wybierz punkt docelowy…</option>
@@ -812,7 +819,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                             </div>
                           ) : <div className="service-history-empty">Przekazanie może rozpocząć użytkownik obsługujący aktualny punkt urządzenia.</div>
                         ) : order.returnRequired ? (
-                          canEditStatus && canOperateCurrentPoint && order.status==='REPAIR_DONE' ? (
+                          canTransferHere && canEditStatus && order.status==='REPAIR_DONE' ? (
                             <div className="transfer-compose">
                               <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów"/>
                               <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> Odeślij do punktu macierzystego</button>
@@ -824,7 +831,7 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                                 : 'Urządzenie jest poza punktem macierzystym. Po zakończeniu naprawy ustaw status „Naprawa zakończona”, a następnie rozpocznij obowiązkowy zwrot.'}
                             </div>
                           )
-                        ) : canEditStatus ? (
+                        ) : canTransferHere ? (
                           <div className="transfer-compose">
                             <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
                               <option value="">Wybierz serwis docelowy…</option>
