@@ -708,9 +708,10 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
               const draft = detailsDrafts[order.id];
               const card = customerCards[order.customerId];
               const notes = orderNotes[order.id] ?? [];
-              const currentServicePointId = order.currentPointId || order.homePointId || order.pointId;
-              const pointTechnicians = techniciansByPoint[currentServicePointId] ?? [];
-              const canOperateCurrentPoint = ['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId);
+              const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
+              const pointTechnicians = currentServicePointId ? (techniciansByPoint[currentServicePointId] ?? []) : [];
+              const canOperateCurrentPoint = Boolean(currentServicePointId) && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
+              const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
               return (
                 <article key={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''} workflow-${(order.workflow?.attentionCode || 'ACTIVE').toLowerCase()}`}>
                   <div className="service-order-row">
@@ -746,13 +747,18 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                     </div>
                     <div className="service-order-actions">
                       <div className="service-order-status">
-                        {canEditStatus && order.handlingMode === 'TRANSFER_ONLY' ? (
+                        {canEditOrderHere && order.handlingMode === 'TRANSFER_ONLY' ? (
                           <div className="transfer-only-status"><span className="status-badge">Tylko przekazanie</span>{order.status !== 'CANCELLED' && <button className="button small danger-soft" onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button>}</div>
-                        ) : canEditStatus ? (
+                        ) : canEditOrderHere ? (
                           <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
-                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && order.canMarkReady===false) || (value==='COMPLETED' && (order.canMarkReady===false || order.status!=='READY'))}>{label}</option>)}
+                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && (order.canMarkReady===false || order.status!=='REPAIR_DONE')) || (value==='COMPLETED' && order.status!=='READY')}>{label}</option>)}
                           </select>
-                        ) : <span className="status-badge">{order.statusLabel}</span>}
+                        ) : (
+                          <div className="service-status-readonly">
+                            <span className="status-badge">{order.handlingMode==='TRANSFER_ONLY' && order.status!=='CANCELLED' ? 'Tylko przekazanie' : order.statusLabel}</span>
+                            {canEditStatus && <small>{order.openTransfer ? 'Status zablokowany na czas transportu.' : 'Status zmienia punkt, w którym fizycznie znajduje się urządzenie.'}</small>}
+                          </div>
+                        )}
                       </div>
                       <button className="button small secondary service-history-button" onClick={() => void toggleOrderHistory(order)}>
                         <History size={13}/>
@@ -770,15 +776,15 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
                         <section className="service-workspace-card">
                           <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
                           <div className="service-details-grid">
-                            <label><span>IMEI</span><input disabled={!canEditStatus} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
-                            <label><span>Numer seryjny</span><input disabled={!canEditStatus} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
-                            {order.handlingMode === 'STANDARD' && <label><span>Przewidywany termin</span><input disabled={!canEditStatus} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>}
-                            {order.handlingMode === 'STANDARD' && canManageOrderMeta && <label><span>Technik</span><select value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
-                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
-                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
-                            <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditStatus} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
+                            <label><span>IMEI</span><input disabled={!canEditOrderHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
+                            <label><span>Numer seryjny</span><input disabled={!canEditOrderHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
+                            {order.handlingMode === 'STANDARD' && <label><span>Przewidywany termin</span><input disabled={!canEditOrderHere} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>}
+                            {order.handlingMode === 'STANDARD' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditOrderHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
+                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
+                            <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditOrderHere} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
                           </div>
-                          {canEditStatus && <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
+                          {canEditOrderHere && <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
                         </section>
                       )}
 
