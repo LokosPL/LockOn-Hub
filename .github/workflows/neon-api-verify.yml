@@ -31,6 +31,10 @@ jobs:
           grep -q '/support/presence' functions/lockon-api.mjs
           grep -q 'consultant_requested_at' functions/lockon-api.mjs
           grep -q 'customer_portal_code' functions/lockon-api.mjs
+          grep -q "error: 'WEB_CODE_ONLY'" functions/lockon-api.mjs
+          grep -q '/website/redeem' functions/lockon-api.mjs
+          ! grep -q 'GOOGLE_WEB_CLIENT_ID' functions/lockon-api.mjs
+          ! grep -q "loginProfile(profile, 'WEB'" functions/lockon-api.mjs
           grep -q "type:'SPEED_TEST'" functions/lockon-api.mjs
           grep -q "type:'CONNECTIVITY_TEST'" functions/lockon-api.mjs
           grep -q "type:'BROWSER_SEARCH'" functions/lockon-api.mjs
