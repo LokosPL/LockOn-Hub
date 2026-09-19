@@ -686,6 +686,19 @@ Dla każdego priorytetu:
 - Cache PWA podniesiony do `serviceos-shell-v18`; nowe assety UI są częścią shell cache.
 - Brak zmian backendu, schematu DB, ról, sesji i uprawnień. Produkcyjny Neon pozostaje `lockonapi` v32, a publiczny desktop pozostaje v0.20.1.
 
+## Strona pracownika — storytelling i instrukcja telefonu — 2026-09-20
+
+- Site PR #24 scalony do `lockon-serviceos-site/main`: commit `9949c3e040caf008d1c244966641db501f8167e2`.
+- Verify PR #176 SUCCESS; Verify po merge na `main` #177 SUCCESS; GitHub Pages deploy #92 SUCCESS.
+- Górna nawigacja strony pracownika została uproszczona do: „Jak działa”, „Poznaj aplikację”, „Połącz telefon” oraz głównych akcji Panel/Pobierz.
+- Hero i pierwsza część strony prowadzą pracownika jako prosty onboarding: zrozum proces → poznaj aplikację → połącz telefon → zaakceptuj zasady.
+- Sekcja „ZAKŁADKI I MODUŁY” jest teraz przewijanym storytellingiem: szczegółowy opis po jednej stronie i sticky podgląd aplikacji po drugiej; aktywny ekran zmienia się wraz z przewijanym opisem.
+- Zachowano interaktywny podgląd aplikacji jako osobny trening po sekcji opisowej.
+- Sekcja „Połącz telefon” ma pięć szczegółowych kroków, animowany podgląd telefonu, pionowy pasek postępu i czytelne wyjaśnienie bezpieczeństwa jednorazowego kodu WWW.
+- Nowe pliki: `assets/home-story.css` i `assets/home-story.js`. Animacje respektują `prefers-reduced-motion`.
+- Cache PWA podniesiony do `serviceos-shell-v19`.
+- Brak zmian backendu, bazy, ról, sesji i uprawnień. Produkcyjny Neon pozostaje `lockonapi` v32, publiczny desktop pozostaje v0.20.1.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
