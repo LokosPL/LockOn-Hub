@@ -351,6 +351,8 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
         setNotice('Zlecenie utworzone. Klient nie ma adresu e-mail, więc potwierdzenie nie zostało wysłane.');
       } else if (created.notification?.reason === 'AUTOMATIC_EMAIL_DISABLED' || created.notification?.reason === 'STATUS_NOT_ENABLED') {
         setNotice('Zlecenie utworzone. Automatyczne potwierdzenie przyjęcia jest wyłączone w ustawieniach punktu.');
+      } else if (created.notification?.reason === 'NO_SENDER') {
+        setNotice('Zlecenie utworzone, ale nie znaleziono aktywnego firmowego nadawcy Gmail.');
       }
       setForm(emptyForm);
       setMatches([]);
@@ -373,20 +375,25 @@ export function ServicePage({ auth, effectiveRole }: ServicePageProps) {
         setOrderHistories((current) => ({ ...current, [order.id]: history }));
       }
       const n = updated.notification;
+      const settlementText = updated.settlement
+        ? ` Rozliczenie ${updated.settlement.amount.toFixed(2)} ${updated.settlement.currency} zostało dodane automatycznie bez weryfikacji.`
+        : '';
       if (n.sent) {
-        setNotice('Status zapisany. Wiadomość e-mail została wysłana do klienta.');
+        setNotice('Status zapisany. Wiadomość e-mail została wysłana do klienta.' + settlementText);
       } else if (n.queued) {
-        setNotice(n.nextAttemptAt
+        setNotice((n.nextAttemptAt
           ? 'Status zapisany. Wysyłka nie powiodła się i została zaplanowana do ponowienia.'
-          : 'Status zapisany. Wiadomość czeka w kolejce.');
+          : 'Status zapisany. Wiadomość czeka w kolejce.') + settlementText);
       } else if (n.reason === 'AUTOMATIC_EMAIL_DISABLED') {
         setNotice('Status zapisany. Automatyczne wiadomości dla tego punktu są wyłączone.');
       } else if (n.reason === 'STATUS_NOT_ENABLED') {
         setNotice('Status zapisany. Dla tego statusu powiadomienia e-mail są wyłączone.');
       } else if (n.reason === 'NO_CUSTOMER_EMAIL') {
-        setNotice('Status zapisany. Klient nie ma adresu e-mail.');
+        setNotice('Status zapisany. Klient nie ma adresu e-mail.' + settlementText);
+      } else if (n.reason === 'NO_SENDER') {
+        setNotice('Status zapisany, ale nie znaleziono aktywnego firmowego nadawcy Gmail.' + settlementText);
       } else {
-        setNotice('Status zapisany.');
+        setNotice('Status zapisany.' + settlementText);
       }
       if (canManageGmail) void loadMailData(pointId);
     } catch (e) {

@@ -44,6 +44,7 @@ const STATUS_LABELS = {
   REJECTED: 'Odrzucone'
 };
 const SERVICE_STATUSES = new Set(Object.keys(STATUS_LABELS));
+const DEFAULT_NOTIFY_STATUSES = Object.freeze(['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','REJECTED','CANCELLED']);
 
 const nowIso = () => new Date().toISOString();
 const makeId = (prefix) => prefix + '_' + crypto.randomBytes(10).toString('hex');
@@ -823,6 +824,30 @@ const escapeHtml = (value) => String(value ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+const loadActiveMailSender = async (pointId) => {
+  const { rows } = await q(
+    "SELECT point_id AS sender_point_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,connected_at FROM point_email_senders WHERE status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN point_id=$1 THEN 0 ELSE 1 END,connected_at DESC NULLS LAST,updated_at DESC LIMIT 1",
+    [pointId]
+  );
+  const sender = rows[0] || null;
+  if (!sender) return null;
+  if (!GOOGLE_DESKTOP_CLIENT_SECRET && !sender.oauth_client_secret_ciphertext) return null;
+  return sender;
+};
+
+const mailSettingsForPoint = async (pointId) => {
+  const row = (await q(
+    "SELECT automatic_email_enabled,notify_statuses,sender_display_name,footer_text FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
+    [pointId]
+  )).rows[0];
+  return row || {
+    automatic_email_enabled:true,
+    notify_statuses:[...DEFAULT_NOTIFY_STATUSES],
+    sender_display_name:'LockOn ServiceOS',
+    footer_text:null
+  };
+};
+
 const renderStatusEmail = (item) => {
   const displayName = cleanText(item.sender_display_name || 'LockOn ServiceOS', 80).replace(/[\r\n]+/g, ' ');
   const footer = cleanText(item.footer_text || 'W razie pytań skontaktuj się bezpośrednio z punktem serwisowym.', 500);
@@ -964,7 +989,7 @@ const sendGmail = async (sender, recipient, subject, textBody, htmlBody, display
 
 const processNotification = async (notificationId) => {
   const { rows } = await q(
-    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,p.name AS point_name,c.first_name,d.brand,d.model,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.status AS sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN point_email_senders e ON e.point_id=s.point_id LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
+    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,p.name AS point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
     [notificationId]
   );
   const item = rows[0];
@@ -998,7 +1023,7 @@ const processNotification = async (notificationId) => {
       "UPDATE notification_outbox SET status='SENT',sent_at=now(),provider_message_id=$2,last_error=NULL,updated_at=now() WHERE id=$1",
       [notificationId, sent.id]
     );
-    await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1", [item.point_id]);
+    if(item.sender_point_id) await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1", [item.sender_point_id]);
     return { sent: true, status: 'SENT', messageId: sent.id, attempts: attempt };
   } catch (error) {
     const message = cleanText(error instanceof Error ? error.message : error, 500);
@@ -1007,9 +1032,9 @@ const processNotification = async (notificationId) => {
       [notificationId, message, nextAttemptAt]
     );
     if(isGmailReauthError(error)){
-      await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1", [item.point_id, message]);
+      if(item.sender_point_id) await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1", [item.sender_point_id, message]);
     }else{
-      await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1", [item.point_id, message]);
+      if(item.sender_point_id) await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1", [item.sender_point_id, message]);
     }
     return { sent: false, status: 'FAILED', reason: isGmailReauthError(error) ? 'GMAIL_REAUTH_REQUIRED' : 'SEND_FAILED', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
   }
@@ -1023,19 +1048,11 @@ const queueTransferNotification = async (actor, orderId, transfer, transferStatu
     )).rows[0];
     if (!orderData?.email) return { queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL' };
 
-    const settings = (await q(
-      "SELECT automatic_email_enabled FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
-      [orderData.point_id]
-    )).rows[0] || { automatic_email_enabled:true };
+    const settings = await mailSettingsForPoint(orderData.point_id);
     if (settings.automatic_email_enabled !== true) return { queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED' };
 
-    const sender = (await q(
-      "SELECT refresh_token_ciphertext,oauth_client_secret_ciphertext FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1",
-      [orderData.point_id]
-    )).rows[0];
-    if (!sender || (!GOOGLE_DESKTOP_CLIENT_SECRET && !sender.oauth_client_secret_ciphertext)) {
-      return { queued:false,sent:false,reason:'NO_SENDER' };
-    }
+    const sender = await loadActiveMailSender(orderData.point_id);
+    if (!sender) return { queued:false,sent:false,reason:'NO_SENDER' };
 
     const notificationId = makeId('ntf');
     await q(
@@ -1647,7 +1664,7 @@ const route = async (request) => {
     if(GLOBAL_ROLES.has(u.role_code)) rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id ORDER BY r.occurred_at DESC")).rows;
     else if(u.role_code==='TECHNICIAN') rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
     else rows=(await q("SELECT DISTINCT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id JOIN user_point_access a ON a.point_id=r.point_id AND a.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
-    const entries=rows.map((r)=>{const amount=Number(r.amount);const approved=r.status==='APPROVED'||r.status==='SETTLED';return{id:r.id,userId:r.user_id,pointId:r.point_id,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:50,splitBossPercent:50,technicianShare:approved?Math.round(amount*50)/100:0,bossShare:approved?Math.round(amount*50)/100:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}}});
+    const entries=rows.map((r)=>{const amount=Number(r.amount);const approved=r.status==='APPROVED'||r.status==='SETTLED';return{id:r.id,userId:r.user_id,pointId:r.point_id,serviceOrderId:r.service_order_id||null,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:50,splitBossPercent:50,technicianShare:approved?Math.round(amount*50)/100:0,bossShare:approved?Math.round(amount*50)/100:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}}});
     const approved=entries.filter((e)=>e.status==='APPROVED'||e.status==='SETTLED'),pending=entries.filter((e)=>e.status==='PENDING');
     return json(request,{entries,summary:{approvedRevenue:approved.reduce((s,e)=>s+e.amount,0),technicianShare:approved.reduce((s,e)=>s+e.technicianShare,0),bossShare:approved.reduce((s,e)=>s+e.bossShare,0),pendingRevenue:pending.reduce((s,e)=>s+e.amount,0)}});
   }
@@ -1656,8 +1673,11 @@ const route = async (request) => {
     const session=await requireActive(request);if(session.user.role_code!=='TECHNICIAN')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
     const body=await readJson(request),amount=Number(body.amount),pointId=String(body.pointId||''),note=cleanText(body.note,700),workDate=cleanText(body.workDate,20)||new Date().toISOString().slice(0,10);
     if(!Number.isFinite(amount)||amount<=0)return json(request,{error:'AMOUNT'},400);await requirePoint(session.user,pointId);
-    const id=makeId('rev');await q("INSERT INTO revenue_entries(id,point_id,user_id,amount,currency,category,status,note,occurred_at) VALUES($1,$2,$3,$4,'PLN','SERVICE','PENDING',$5,$6)",[id,pointId,session.user.id,Math.round(amount*100)/100,note,new Date(workDate+'T12:00:00Z')]);
-    return json(request,{id,userId:session.user.id,pointId,amount:Math.round(amount*100)/100,workDate,note,status:'PENDING',splitTechnicianPercent:50,splitBossPercent:50,technicianShare:0,bossShare:0,submittedAt:nowIso()},201);
+    const rounded=Math.round(amount*100)/100;
+    const id=makeId('rev');
+    const row=(await q("INSERT INTO revenue_entries(id,point_id,user_id,amount,currency,category,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,'PLN','SERVICE','APPROVED',$5,$6,$3,now()) RETURNING created_at,approved_at",[id,pointId,session.user.id,rounded,note,new Date(workDate+'T12:00:00Z')])).rows[0];
+    await audit(session.user.id,'REVENUE_AUTO_APPROVED','revenue',id,pointId,{amount:rounded,manual:true});
+    return json(request,{id,userId:session.user.id,pointId,serviceOrderId:null,amount:rounded,workDate,note,status:'APPROVED',splitTechnicianPercent:50,splitBossPercent:50,technicianShare:Math.round(rounded*50)/100,bossShare:Math.round(rounded*50)/100,submittedAt:row.created_at,reviewedAt:row.approved_at},201);
   }
 
   const review=url.pathname.match(/^\/finance\/revenues\/([^/]+)\/review$/);
@@ -1930,12 +1950,8 @@ const route = async (request) => {
 
       let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
       try{
-        const settingsResult=await q(
-          "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
-          [pointId]
-        );
-        const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
-        const senderReady=(await q("SELECT refresh_token_ciphertext,oauth_client_secret_ciphertext FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1",[pointId])).rows.some((sender)=>Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||sender.oauth_client_secret_ciphertext));
+        const settings=await mailSettingsForPoint(pointId);
+        const senderReady=Boolean(await loadActiveMailSender(pointId));
         if(!customer.email){
           notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
         }else if(settings.automatic_email_enabled!==true){
@@ -1973,7 +1989,7 @@ const route = async (request) => {
     const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500);
     if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
 
-    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,status,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
+    const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
 
@@ -1993,23 +2009,72 @@ const route = async (request) => {
       }
     }
 
+    const settlementAmount = next==='COMPLETED'
+      ? Number(found.final_cost ?? found.estimated_cost)
+      : null;
+    if(next==='COMPLETED'&&(!Number.isFinite(settlementAmount)||settlementAmount<=0)){
+      return json(request,{
+        error:'FINAL_COST_REQUIRED',
+        message:'Przed zakończeniem zlecenia wpisz koszt końcowy. Jeżeli koszt końcowy jest pusty, system może użyć zapisanej wyceny.'
+      },409);
+    }
+
     if(found.status===next){
       const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
       return json(request,{order:view,notification:{queued:false,sent:false,reason:'STATUS_UNCHANGED'}});
     }
 
-    await q("UPDATE service_orders SET status=$1,updated_at=now(),completed_at=CASE WHEN $1='COMPLETED' THEN now() ELSE completed_at END WHERE id=$2",[next,found.id]);
-    await q('INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,note,changed_by_user_id) VALUES($1,$2,$3,$4,$5,$6)',[makeId('hst'),found.id,found.status,next,note||null,u.id]);
+    let settlement=null;
+    const statusClient=await pool.connect();
+    try{
+      await statusClient.query('BEGIN');
+      await statusClient.query(
+        "UPDATE service_orders SET status=$1,updated_at=now(),completed_at=CASE WHEN $1='COMPLETED' THEN now() ELSE completed_at END,final_cost=CASE WHEN $1='COMPLETED' AND final_cost IS NULL THEN estimated_cost ELSE final_cost END WHERE id=$2",
+        [next,found.id]
+      );
+      await statusClient.query(
+        'INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,note,changed_by_user_id) VALUES($1,$2,$3,$4,$5,$6)',
+        [makeId('hst'),found.id,found.status,next,note||null,u.id]
+      );
+
+      if(next==='COMPLETED'){
+        const settlementPointId=found.home_point_id||found.point_id;
+        let revenueUserId=found.assigned_technician_id||null;
+        if(!revenueUserId){
+          revenueUserId=(await statusClient.query(
+            "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE a.point_id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL ORDER BY usr.name,usr.id LIMIT 1",
+            [settlementPointId]
+          )).rows[0]?.id||u.id;
+        }
+        const revenueId=makeId('rev');
+        const revenue=(await statusClient.query(
+          "INSERT INTO revenue_entries(id,point_id,user_id,service_order_id,amount,currency,category,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,$5,$6,'SERVICE','APPROVED',$7,now(),$8,now()) ON CONFLICT (service_order_id) WHERE service_order_id IS NOT NULL DO UPDATE SET point_id=EXCLUDED.point_id,user_id=EXCLUDED.user_id,amount=EXCLUDED.amount,currency=EXCLUDED.currency,status='APPROVED',note=EXCLUDED.note,approved_by_user_id=EXCLUDED.approved_by_user_id,approved_at=now() RETURNING id,point_id,user_id,service_order_id,amount,currency,status,approved_at",
+          [revenueId,settlementPointId,revenueUserId,found.id,Math.round(settlementAmount*100)/100,found.currency||'PLN','Automatyczne rozliczenie zakończonego zlecenia #'+found.order_number,u.id]
+        )).rows[0];
+        settlement={
+          id:revenue.id,
+          amount:Number(revenue.amount),
+          currency:String(revenue.currency||'PLN').trim(),
+          status:revenue.status,
+          serviceOrderId:revenue.service_order_id,
+          userId:revenue.user_id,
+          pointId:revenue.point_id,
+          approvedAt:revenue.approved_at
+        };
+      }
+      await statusClient.query('COMMIT');
+    }catch(error){
+      await statusClient.query('ROLLBACK').catch(()=>undefined);
+      throw error;
+    }finally{
+      statusClient.release();
+    }
 
     let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
     try{
       const customer=(await q('SELECT email FROM customers WHERE id=$1',[found.customer_id])).rows[0];
-      const settingsResult=await q(
-        "SELECT automatic_email_enabled,notify_statuses FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
-        [found.point_id]
-      );
-      const settings=settingsResult.rows[0]||{automatic_email_enabled:true,notify_statuses:['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']};
-      const senderReady=(await q("SELECT refresh_token_ciphertext,oauth_client_secret_ciphertext FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1",[found.point_id])).rows.some((sender)=>Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||sender.oauth_client_secret_ciphertext));
+      const settings=await mailSettingsForPoint(found.point_id);
+      const senderReady=Boolean(await loadActiveMailSender(found.point_id));
 
       if(!customer?.email){
         notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
@@ -2038,7 +2103,7 @@ const route = async (request) => {
       console.error('[service status audit]',auditError);
     }
     const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
-    return json(request,{order:view,notification});
+    return json(request,{order:view,notification,settlement});
   }
 
   if(method==='GET'&&url.pathname==='/service/service-points'){
@@ -2184,9 +2249,25 @@ const route = async (request) => {
     const session=await requireActive(request),pointId=cleanText(url.searchParams.get('pointId'),80);
     await requirePoint(session.user,pointId);
     const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,refresh_token_ciphertext,oauth_client_secret_ciphertext,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
-    const row=rows[0];
+    let row=rows[0]||null;
+    let inherited=false;
     const checkedAt=nowIso();
-    if(!row)return json(request,{connected:false,pointId,needsReconnect:false,connectionState:'NOT_CONNECTED',checkedAt});
+    if(!row){
+      const fallback=await loadActiveMailSender(pointId);
+      if(!fallback)return json(request,{connected:false,pointId,needsReconnect:false,connectionState:'NOT_CONNECTED',checkedAt});
+      row={
+        point_id:fallback.sender_point_id,
+        sender_email:fallback.sender_email,
+        status:fallback.status,
+        last_error:null,
+        connected_at:fallback.connected_at,
+        refresh_token_ciphertext:fallback.refresh_token_ciphertext,
+        oauth_client_secret_ciphertext:fallback.oauth_client_secret_ciphertext,
+        refresh_complete:Boolean(fallback.refresh_token_ciphertext),
+        legacy_secret_complete:Boolean(fallback.oauth_client_secret_ciphertext)
+      };
+      inherited=true;
+    }
 
     const credentialsComplete=row.refresh_complete===true&&Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||row.legacy_secret_complete);
     if(!credentialsComplete){
@@ -2194,7 +2275,9 @@ const route = async (request) => {
         connected:false,
         needsReconnect:true,
         connectionState:'REAUTH_REQUIRED',
-        pointId:row.point_id,
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
         email:row.sender_email,
         status:row.status,
         lastError:'Połączenie Gmail jest niekompletne i wymaga ponownej autoryzacji.',
@@ -2207,7 +2290,9 @@ const route = async (request) => {
         connected:false,
         needsReconnect:true,
         connectionState:'REAUTH_REQUIRED',
-        pointId:row.point_id,
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
         email:row.sender_email,
         status:row.status,
         lastError:row.last_error||'Zgoda Google dla Gmail wygasła albo została cofnięta.',
@@ -2221,13 +2306,15 @@ const route = async (request) => {
       const legacyClientSecret=row.oauth_client_secret_ciphertext?decryptSecret(row.oauth_client_secret_ciphertext):'';
       await refreshGmailAccess(refreshToken,legacyClientSecret);
       if(row.status!=='ACTIVE'||row.last_error){
-        await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1",[pointId]);
+        await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1",[row.point_id]);
       }
       return json(request,{
         connected:true,
         needsReconnect:false,
         connectionState:'CONNECTED',
-        pointId:row.point_id,
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
         email:row.sender_email,
         status:'ACTIVE',
         lastError:null,
@@ -2243,7 +2330,9 @@ const route = async (request) => {
           connected:false,
           needsReconnect:true,
           connectionState:'REAUTH_REQUIRED',
-          pointId:row.point_id,
+          pointId,
+        senderPointId:row.point_id,
+        inherited,
           email:row.sender_email,
           status:'REVOKED',
           lastError:message,
@@ -2255,7 +2344,9 @@ const route = async (request) => {
         connected:false,
         needsReconnect:false,
         connectionState:'TEMPORARY_ERROR',
-        pointId:row.point_id,
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
         email:row.sender_email,
         status:row.status,
         lastError:'Nie udało się teraz potwierdzić połączenia Gmail. ServiceOS spróbuje ponownie automatycznie.',

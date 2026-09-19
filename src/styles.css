@@ -970,3 +970,12 @@ input,textarea,select{line-height:1.45}
 .factory-reset-warning strong{font-size:13px}
 .factory-reset-warning span{font-size:11px;color:#a99191;line-height:1.45}
 
+
+
+/* Automatic settlement */
+.revenue-auto-card{border-color:rgba(100,216,154,.18);background:linear-gradient(155deg,rgba(100,216,154,.035),rgba(255,255,255,.015))}
+.auto-settlement-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.auto-settlement-strip>span{padding:12px 13px;border:1px solid rgba(255,255,255,.07);border-radius:11px;background:rgba(255,255,255,.025);color:#84908a;font-size:11px}
+.auto-settlement-strip strong{display:block;color:#eef1f3;font-size:20px;margin-bottom:2px}
+.revenue-history>div>div:first-child small{display:block;color:#68737e;margin-top:3px;font-size:10px}
+@media(max-width:760px){.auto-settlement-strip{grid-template-columns:1fr}.auto-settlement-strip>span{display:flex;align-items:center;gap:8px}.auto-settlement-strip strong{margin:0}}

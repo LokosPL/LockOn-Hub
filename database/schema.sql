@@ -145,6 +145,10 @@ CREATE TABLE IF NOT EXISTS revenue_entries (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS revenue_entries_service_order_unique_idx
+  ON revenue_entries(service_order_id)
+  WHERE service_order_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS settlements (
   id text PRIMARY KEY,
   point_id text REFERENCES points(id),
@@ -323,7 +327,7 @@ ON CONFLICT (version) DO NOTHING;
 CREATE TABLE IF NOT EXISTS point_notification_settings (
   point_id text PRIMARY KEY REFERENCES points(id) ON DELETE CASCADE,
   automatic_email_enabled boolean NOT NULL DEFAULT true,
-  notify_statuses text[] NOT NULL DEFAULT ARRAY['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']::text[],
+  notify_statuses text[] NOT NULL DEFAULT ARRAY['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','REJECTED','CANCELLED']::text[],
   sender_display_name text NOT NULL DEFAULT 'LockOn ServiceOS',
   footer_text text,
   updated_by_user_id text REFERENCES users(id),
@@ -352,7 +356,7 @@ ON CONFLICT (version) DO NOTHING;
 -- 2026-09-18 central-v5: configurable intake confirmation.
 ALTER TABLE point_notification_settings
   ALTER COLUMN notify_statuses
-  SET DEFAULT ARRAY['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','READY','COMPLETED','REJECTED']::text[];
+  SET DEFAULT ARRAY['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','REJECTED','CANCELLED']::text[];
 
 UPDATE point_notification_settings
 SET notify_statuses = array_prepend('RECEIVED', notify_statuses), updated_at=now()
@@ -574,5 +578,53 @@ CREATE INDEX IF NOT EXISTS system_reset_log_created_idx
 
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-19-central-v12','Technician-driven service availability and persistent factory-reset audit')
+ON CONFLICT (version) DO NOTHING;
+
+-- 2026-09-19 central-v13: reliable status mail fallback and automatic service settlement.
+ALTER TABLE point_notification_settings
+  ALTER COLUMN notify_statuses
+  SET DEFAULT ARRAY['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','REJECTED','CANCELLED']::text[];
+
+UPDATE point_notification_settings
+SET notify_statuses = array_append(notify_statuses,'REPAIR_DONE'),
+    updated_at = now()
+WHERE NOT ('REPAIR_DONE'=ANY(notify_statuses));
+
+UPDATE point_notification_settings
+SET notify_statuses = array_append(notify_statuses,'CANCELLED'),
+    updated_at = now()
+WHERE NOT ('CANCELLED'=ANY(notify_statuses));
+
+CREATE UNIQUE INDEX IF NOT EXISTS revenue_entries_service_order_unique_idx
+  ON revenue_entries(service_order_id)
+  WHERE service_order_id IS NOT NULL;
+
+INSERT INTO revenue_entries(
+  id,point_id,user_id,service_order_id,amount,currency,category,status,note,
+  occurred_at,approved_by_user_id,approved_at
+)
+SELECT
+  'rev_auto_' || substr(md5(s.id),1,20),
+  coalesce(s.home_point_id,s.point_id),
+  coalesce(s.assigned_technician_id,s.created_by_user_id),
+  s.id,
+  coalesce(s.final_cost,s.estimated_cost),
+  s.currency,
+  'SERVICE',
+  'APPROVED',
+  'Automatyczne rozliczenie zakończonego zlecenia #' || s.order_number,
+  coalesce(s.completed_at,s.updated_at,now()),
+  s.created_by_user_id,
+  coalesce(s.completed_at,s.updated_at,now())
+FROM service_orders s
+WHERE s.status='COMPLETED'
+  AND coalesce(s.final_cost,s.estimated_cost) > 0
+  AND NOT EXISTS (
+    SELECT 1 FROM revenue_entries r WHERE r.service_order_id=s.id
+  )
+ON CONFLICT DO NOTHING;
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-19-central-v13','Reliable status mail fallback and automatic approved service settlement')
 ON CONFLICT (version) DO NOTHING;
 

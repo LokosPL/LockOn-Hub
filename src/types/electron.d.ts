@@ -31,7 +31,7 @@ export interface AdminPoint {
   serviceNote?:string|null;
 }
 export interface LoginEvent { id: string; userId: string; email: string; name: string; role: UserRole | null; status: AccountStatus; pointIds: string[]; createdAt: string; }
-export interface RevenueEntry { id: string; userId: string; pointId: string; amount: number; workDate: string; note: string; status: 'PENDING'|'APPROVED'|'REJECTED'; splitTechnicianPercent: number; splitBossPercent: number; technicianShare: number; bossShare: number; submittedAt: string; reviewedAt?: string|null; technician?: {id:string;name:string;email:string}|null; point?: AdminPoint|null; }
+export interface RevenueEntry { id: string; userId: string; pointId: string; serviceOrderId?:string|null; amount: number; workDate: string; note: string; status: 'PENDING'|'APPROVED'|'REJECTED'|'SETTLED'; splitTechnicianPercent: number; splitBossPercent: number; technicianShare: number; bossShare: number; submittedAt: string; reviewedAt?: string|null; technician?: {id:string;name:string;email:string}|null; point?: AdminPoint|null; }
 export interface AdminAuditEvent { id:string; action:string; entityType:string; entityId?:string|null; pointId?:string|null; actorName:string; metadata:Record<string,unknown>; createdAt:string; }
 export interface AdminSystemSummary { activeSessions:number; desktopSessions:number; webSessions:number; servicePoints:number; openTransfers:number; blockedUsers:number; }
 export interface AdminOverview { points: AdminPoint[]; users: AdminUser[]; pendingUsers: AdminUser[]; blockedUsers?:AdminUser[]; loginEvents: LoginEvent[]; pendingRevenue: RevenueEntry[]; system?:AdminSystemSummary; transferSummary?:Record<string,number>; recentAudit?:AdminAuditEvent[]; }
@@ -58,7 +58,11 @@ export interface ServiceOrderSummary extends ServiceOrder {
   latestTransfer?:ServiceTransfer|null; transfers?:ServiceTransfer[];
 }
 export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; reusedDevice?:boolean; notification?:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; }
-export interface ServiceStatusResult { order:ServiceOrderSummary; notification:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; }
+export interface ServiceStatusResult {
+  order:ServiceOrderSummary;
+  notification:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string};
+  settlement?:{id:string;amount:number;currency:string;status:string;serviceOrderId:string;userId:string;pointId:string;approvedAt?:string|null}|null;
+}
 export interface ServiceStatusHistoryItem { id:string; fromStatus?:string|null; fromLabel?:string|null; toStatus:string; toLabel:string; note?:string|null; changedAt:string; changedByUserId?:string|null; changedByName:string; }
 export interface ServiceTechnician { id:string; name:string; email:string; }
 export interface ServiceOrderNote { id:string; body:string; createdAt:string; authorUserId:string; authorName:string; }
@@ -73,7 +77,7 @@ export interface ServiceTransfer {
   requestedAt:string; shippedAt?:string|null; deliveredAt?:string|null; acceptedAt?:string|null; updatedAt:string;
 }
 export interface ServiceCustomerDetail { customer:ServiceCustomer & {createdAt?:string;updatedAt?:string}; devices:ServiceCustomerDevice[]; orders:ServiceOrderSummary[]; totalVisibleOrders:number; }
-export interface GmailConnectionStatus { connected:boolean; needsReconnect?:boolean; connectionState?:'CONNECTED'|'NOT_CONNECTED'|'REAUTH_REQUIRED'|'TEMPORARY_ERROR'; pointId:string; email?:string; status?:string; lastError?:string|null; connectedAt?:string; checkedAt?:string; recoveredNotifications?:number; }
+export interface GmailConnectionStatus { connected:boolean; needsReconnect?:boolean; connectionState?:'CONNECTED'|'NOT_CONNECTED'|'REAUTH_REQUIRED'|'TEMPORARY_ERROR'; pointId:string; senderPointId?:string; inherited?:boolean; email?:string; status?:string; lastError?:string|null; connectedAt?:string; checkedAt?:string; recoveredNotifications?:number; }
 export interface NotificationSettings { pointId:string; automaticEmailEnabled:boolean; notifyStatuses:string[]; senderDisplayName:string; footerText:string; updatedAt?:string; }
 export interface NotificationHistoryItem { id:string; orderId?:string|null; orderNumber?:number|null; recipient:string; status:'PENDING'|'PROCESSING'|'SENT'|'FAILED'|'CANCELLED'; attempts:number; subject?:string|null; providerMessageId?:string|null; lastError?:string|null; availableAt:string; sentAt?:string|null; createdAt:string; updatedAt:string; customerName?:string|null; device?:string|null; }
 export interface GmailTestResult { ok:true; recipient:string; messageId:string; }
