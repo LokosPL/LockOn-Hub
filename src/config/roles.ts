@@ -64,7 +64,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   TECHNICIAN: {
     label: 'Serwisant',
     shortLabel: 'Serwisant',
-    description: 'Dostęp do pulpitu, serwisu, przeglądarki i własnych rozliczeń 50/50.',
+    description: 'Dostęp do pulpitu, serwisu, przeglądarki i własnych rozliczeń według indywidualnego procentu.',
     navigation: ['dashboard', 'service', 'browser', 'earnings', 'settings'],
     canManageUpdates: false,
     canManageSettings: false,
