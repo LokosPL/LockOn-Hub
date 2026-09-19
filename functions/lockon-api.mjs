@@ -1998,6 +1998,12 @@ const route = async (request) => {
     const found=(await q('SELECT id,point_id,home_point_id,current_point_id,handling_mode,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
+    const detailsOpenTransfer=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') LIMIT 1",[found.id])).rows[0]||null;
+    if(detailsOpenTransfer){
+      return json(request,{error:'DEVICE_IN_TRANSFER',message:'Szczegóły robocze zlecenia są zablokowane podczas transportu urządzenia.'},409);
+    }
+    const detailsCurrentPointId=found.current_point_id||found.home_point_id||found.point_id;
+    await requirePoint(u,detailsCurrentPointId);
     const body=await readJson(request);
     const imei=cleanText(body.imei,32).replace(/\s+/g,'');
     const serialNumber=cleanText(body.serialNumber,120);
