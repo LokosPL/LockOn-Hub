@@ -28,9 +28,11 @@ const WEBSITE_CODE_TTL_MS = 1000 * 60 * 5;
 const BODY_LIMIT = 64 * 1024;
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
 const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
-const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN']);
-const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
+const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_INTAKE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
+const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const googleVerifier = new OAuth2Client();
@@ -2044,7 +2046,7 @@ const route = async (request) => {
   const detailsMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
   if(method==='POST'&&detailsMatch){
     const session=await requireActive(request),u=session.user;
-    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji zlecenia.'),{status:403});
+    if(!SERVICE_INTAKE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji danych przyjęcia.'),{status:403});
     const found=(await q('SELECT id,point_id,home_point_id,current_point_id,handling_mode,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
@@ -2065,8 +2067,11 @@ const route = async (request) => {
       if(conflict)return json(request,{error:'IMEI_CONFLICT',message:'Ten IMEI jest już przypisany do innego urządzenia.'},409);
     }
 
-    const etaText=found.handling_mode==='TRANSFER_ONLY'?'':cleanText(body.estimatedCompletionAt,64);
-    let estimatedCompletionAt=found.handling_mode==='TRANSFER_ONLY'?found.estimated_completion_at:null;
+    const canEditWorkflow=SERVICE_EDIT_ROLES.has(u.role_code);
+    const etaText=canEditWorkflow&&found.handling_mode!=='TRANSFER_ONLY'?cleanText(body.estimatedCompletionAt,64):'';
+    let estimatedCompletionAt=canEditWorkflow
+      ? (found.handling_mode==='TRANSFER_ONLY'?found.estimated_completion_at:null)
+      : found.estimated_completion_at;
     if(etaText){
       const date=new Date(etaText);
       if(Number.isNaN(date.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
@@ -2075,11 +2080,17 @@ const route = async (request) => {
 
     const canManageAssignment=SERVICE_MANAGE_ROLES.has(u.role_code);
     const canEditCosts=SERVICE_EDIT_ROLES.has(u.role_code);
+    if(!canEditWorkflow&&('estimatedCompletionAt' in body)&&body.estimatedCompletionAt){
+      throw Object.assign(new Error('Rola USER nie może zmieniać terminu realizacji.'),{status:403});
+    }
     if(found.handling_mode==='TRANSFER_ONLY'&&('assignedTechnicianId' in body||'estimatedCost' in body||'finalCost' in body)){
       return json(request,{error:'TRANSFER_ONLY_DETAILS_LOCKED',message:'W trybie „Tylko przekazanie” nie ustawia się serwisanta ani cen naprawy.'},409);
     }
     if(!canManageAssignment&&'assignedTechnicianId' in body){
       throw Object.assign(new Error('Tylko kierownictwo punktu może zmieniać przypisanego technika.'),{status:403});
+    }
+    if(!canEditCosts&&('estimatedCost' in body||'finalCost' in body)){
+      throw Object.assign(new Error('Brak uprawnień do danych kosztowych zlecenia.'),{status:403});
     }
 
     let assignedTechnicianId=found.assigned_technician_id||null;
@@ -2238,8 +2249,10 @@ const route = async (request) => {
   const statusMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/status$/);
   if(method==='POST'&&statusMatch){
     const session=await requireActive(request),u=session.user;
-    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
     const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500),actingPointId=cleanText(body.actingPointId,80);
+    const canEditStatus=SERVICE_EDIT_ROLES.has(u.role_code);
+    const canCancelOnly=u.role_code==='USER'&&next==='CANCELLED';
+    if(!canEditStatus&&!canCancelOnly)throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
     if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
 
     const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
@@ -2443,7 +2456,7 @@ const route = async (request) => {
   const createTransferMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/transfer$/);
   if(method==='POST'&&createTransferMatch){
     const session=await requireActive(request),u=session.user;
-    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przekazywania zleceń.'),{status:403});
+    if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przekazywania zleceń.'),{status:403});
     const order=(await q('SELECT id,point_id,home_point_id,current_point_id,status,handling_mode,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[createTransferMatch[1]])).rows[0];
     if(!order)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,order.id);
