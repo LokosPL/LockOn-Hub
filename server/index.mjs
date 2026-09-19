@@ -1300,11 +1300,30 @@ const handle = async (req, res) => {
     const user = requireActive(req, res);
     if (!user) return;
     if (user.role === 'USER') return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do rozliczeń.' });
-    const entries = db.revenueEntries.filter((entry) => revenueVisibleTo(user, entry)).map(revenueView);
-    const approved = entries.filter((e) => e.status === 'APPROVED');
+    const entries = db.revenueEntries.filter((entry) => revenueVisibleTo(user, entry)).map((entry) => {
+      const view = revenueView(entry);
+      const order = entry.serviceOrderId ? db.serviceOrders.find((candidate)=>candidate.id===entry.serviceOrderId) : null;
+      return { ...view, orderNumber: order?.orderNumber ?? null };
+    });
+    const approved = entries.filter((e) => e.status === 'APPROVED' || e.status === 'SETTLED');
     const pending = entries.filter((e) => e.status === 'PENDING');
+    const pointMap = new Map();
+    for (const entry of entries) {
+      let bucket = pointMap.get(entry.pointId);
+      if (!bucket) {
+        bucket = { pointId:entry.pointId, pointName:entry.point?.name || 'Punkt', pointCity:entry.point?.city || '', approvedRevenue:0, technicianShare:0, bossShare:0, pendingRevenue:0, entries:[] };
+        pointMap.set(entry.pointId,bucket);
+      }
+      bucket.entries.push(entry);
+      if (entry.status === 'APPROVED' || entry.status === 'SETTLED') {
+        bucket.approvedRevenue += entry.amount;
+        bucket.technicianShare += entry.technicianShare;
+        bucket.bossShare += entry.bossShare;
+      } else if (entry.status === 'PENDING') bucket.pendingRevenue += entry.amount;
+    }
     return json(res, 200, {
       entries,
+      points:[...pointMap.values()].sort((a,b)=>a.pointName.localeCompare(b.pointName,'pl')),
       summary: {
         approvedRevenue: approved.reduce((sum, e) => sum + e.amount, 0),
         technicianShare: approved.reduce((sum, e) => sum + e.technicianShare, 0),
@@ -1370,6 +1389,7 @@ const handle = async (req, res) => {
       entry.bossShare = 0;
     }
     saveDb();
+    localAudit(reviewer,'REVENUE_REVIEWED','revenue',entry.id,entry.pointId,{after:entry.status,amount:entry.amount,technicianPercent:entry.splitTechnicianPercent,settlementStatus:entry.status});
     return json(res, 200, revenueView(entry));
   }
 
