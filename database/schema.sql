@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS points (
   name text NOT NULL,
   city text NOT NULL,
   active boolean NOT NULL DEFAULT true,
+  service_enabled boolean NOT NULL DEFAULT false,
+  accepts_external_repairs boolean NOT NULL DEFAULT false,
+  external_repairs_paused boolean NOT NULL DEFAULT false,
+  service_note text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -183,6 +187,17 @@ CREATE TABLE IF NOT EXISTS audit_log (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS system_reset_log (
+  id text PRIMARY KEY,
+  actor_email text NOT NULL,
+  actor_name text,
+  client_type text,
+  reason text,
+  deleted_counts jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS system_reset_log_created_idx ON system_reset_log(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS auth_sessions (
   id text PRIMARY KEY,
@@ -537,3 +552,24 @@ CREATE INDEX IF NOT EXISTS service_order_transfers_kind_idx
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-18-central-v11','Permanent home point, current physical location, return-home transfer kind and repair-done status')
 ON CONFLICT (version) DO NOTHING;
+
+-- 2026-09-19 central-v12: technician-driven service availability and persistent factory-reset audit.
+ALTER TABLE points
+  ADD COLUMN IF NOT EXISTS external_repairs_paused boolean NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS system_reset_log (
+  id text PRIMARY KEY,
+  actor_email text NOT NULL,
+  actor_name text,
+  client_type text,
+  reason text,
+  deleted_counts jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS system_reset_log_created_idx
+  ON system_reset_log(created_at DESC);
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-19-central-v12','Technician-driven service availability and persistent factory-reset audit')
+ON CONFLICT (version) DO NOTHING;
+
