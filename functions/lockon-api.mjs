@@ -1424,18 +1424,54 @@ const conversationPayload = async (userId) => {
   };
 };
 
-const roleSelfDescription = (role) => ({
-  OWNER: 'Masz rolę OWNER i globalny dostęp administracyjny.',
-  BOSS: 'Masz rolę BOSS: globalny dostęp operacyjny do punktów, napraw, przychodów i rozliczeń.',
-  COORDINATOR: 'Masz rolę COORDINATOR: pracujesz na przypisanych punktach.',
-  SUPPORT: 'Masz rolę SUPPORT: pracujesz na przypisanych punktach i w obszarze wsparcia.',
-  TECHNICIAN: 'Masz rolę TECHNICIAN: pracujesz na przypisanych punktach, naprawach i własnych przychodach.',
-  USER: 'Masz rolę USER: podstawowy dostęp do przypisanego punktu.'
-}[role] || 'Twoje konto nie ma jeszcze aktywnej roli.');
+const roleSelfDescription = (role, supportEnabled = false) => {
+  const base = ({
+    OWNER: 'Jesteś właścicielem ServiceOS. Masz pełny dostęp do administracji, punktów, serwisu, rozliczeń, audytu i bezpieczeństwa.',
+    BOSS: 'Jesteś Szefem. Masz globalny dostęp operacyjny do punktów, napraw, przychodów i rozliczeń.',
+    COORDINATOR: 'Jesteś Koordynatorem. Pracujesz na przypisanych punktach i możesz zarządzać ich obsługą serwisową.',
+    SUPPORT: 'Masz starszy profil Wsparcia LockOn. Po aktualizacji wsparcie jest dodatkowym uprawnieniem niezależnym od głównej roli.',
+    TECHNICIAN: 'Jesteś Serwisantem. Pracujesz na przypisanych punktach, zleceniach i własnych rozliczeniach.',
+    USER: 'Jesteś Pracownikiem punktu. Możesz przyjmować zlecenia, edytować dane przyjęcia, anulować je i przekazywać urządzenia.'
+  }[role] || 'Twoje konto nie ma jeszcze aktywnej roli.');
+  return base + (supportEnabled || role === 'SUPPORT' || role === 'OWNER'
+    ? ' Masz też uprawnienie Wsparcie LockOn i możesz dołączać do rozmów użytkowników, którzy poprosili konsultanta.'
+    : '');
+};
 
 const assistantReply = async (session, message) => {
   const user = session.user;
   const lower = message.toLocaleLowerCase('pl-PL');
+  const navAction = (target, label) => ({ type:'NAVIGATE', target, label });
+
+  if (lower.includes('audyt') || lower.includes('dziennik działa') || lower.includes('kto zmieni')) {
+    if (user.role_code !== 'OWNER') return { text:'Audyt jest dostępny właścicielowi systemu. Jeżeli potrzebujesz sprawdzić konkretną zmianę w swoim zleceniu, podaj numer zlecenia.', action:navAction('support','Otwórz pomoc') };
+    return { text:'W Administracji otwórz zakładkę Audyt. Możesz filtrować po pracowniku, punkcie, rodzaju działania, numerze zlecenia i dacie. Główny opis jest po polsku, a identyfikatory techniczne są schowane w szczegółach.', action:navAction('administration','Otwórz Administrację') };
+  }
+
+  if (lower.includes('zablok') || lower.includes('odblok') || lower.includes('konto pracownik') || lower.includes('uprawnieni') && lower.includes('konto')) {
+    if (user.role_code !== 'OWNER') return { text:'Zmiany kont, blokady i uprawnienia wykonuje właściciel ServiceOS.' };
+    return { text:'W Administracji → Konta i uprawnienia wybierz pracownika. Możesz zmienić główną rolę, przypisane punkty, dodatkowe Wsparcie LockOn, parametry serwisanta, zablokować konto albo wylogować jego urządzenia.', action:navAction('administration','Otwórz Konta i uprawnienia') };
+  }
+
+  if (lower.includes('przekazan') || lower.includes('gdzie jest telefon') || lower.includes('lokalizacj') && lower.includes('urządzen')) {
+    return { text:'Przekazania pokazują fizyczną drogę urządzenia między punktami. W karcie zlecenia zobaczysz punkt macierzysty, aktualną lokalizację i trwające przekazanie. Status naprawy jest blokowany podczas transportu.', action:navAction('service','Otwórz Serwis') };
+  }
+
+  if (lower.includes('rozlicz') || lower.includes('przychód') || lower.includes('przychod') || lower.includes('procent serwisant')) {
+    return { text:'Rozliczenia korzystają z procentu przypisanego do konkretnego serwisanta. Po zakończeniu zlecenia ServiceOS zapisuje snapshot procentu, dzięki czemu późniejsza zmiana ustawienia nie zmienia historii.', action:navAction('earnings','Otwórz Rozliczenia') };
+  }
+
+  if (lower.includes('gmail') || lower.includes('e-mail') || lower.includes('email') || lower.includes('powiadom')) {
+    return { text:'Wiadomości serwisowe są kolejkowane przed wysyłką. Za wysłaną uznajemy wiadomość dopiero po zaakceptowaniu jej przez Gmail i zapisaniu identyfikatora dostawcy. Przy błędzie działa kolejka ponowień.', action:navAction('service','Otwórz Powiadomienia w Serwisie') };
+  }
+
+  if (lower.includes('konsultant') || lower.includes('wsparcie') || lower.includes('pomoc człow') || lower.includes('pomoc czlow')) {
+    return { text:'Możesz najpierw korzystać z bota. Gdy potrzebujesz człowieka, wybierz „Poproś konsultanta”. Wsparcie LockOn zobaczy wtedy Twoją prośbę i może dołączyć do tej samej rozmowy. Samo używanie bota nie udostępnia rozmowy konsultantowi.', action:navAction('support','Otwórz Wsparcie') };
+  }
+
+  if (lower.includes('ustawien') || lower.includes('wygląd') || lower.includes('wyglad') || lower.includes('skala')) {
+    return { text:'W Ustawieniach możesz zmienić skalę interfejsu i sprawdzić informacje o aplikacji. Zakres funkcji wynika z Twojej głównej roli i dodatkowych uprawnień.', action:navAction('settings','Otwórz Ustawienia') };
+  }
 
   if ((lower.includes('kod') || lower.includes('autoryz')) && (lower.includes('stron') || lower.includes('www') || lower.includes('logow'))) {
     const code = await generateWebsiteCode(session);
@@ -1508,7 +1544,10 @@ const assistantReply = async (session, message) => {
         }
       }
 
-      return { text: lines.join('\n') };
+      return {
+        text: lines.join('\n'),
+        action: { type:'OPEN_ORDER', target:'service', orderId:order.id, orderNumber:order.orderNumber, label:'Otwórz zlecenie #' + order.orderNumber }
+      };
     }
   }
 
@@ -1540,7 +1579,12 @@ const assistantReply = async (session, message) => {
           lines.push('- #' + order.orderNumber + ' · ' + order.brand + ' ' + order.model + ' · ' + order.statusLabel + ' · ' + order.pointName);
         }
         if (!orders.length) lines.push('Brak zleceń w zakresie punktów dostępnych dla Twojego konta.');
-        return { text: lines.join('\n') };
+        return {
+          text: lines.join('\n'),
+          action: orders[0]
+            ? { type:'OPEN_ORDER', target:'service', orderId:orders[0].id, orderNumber:orders[0].orderNumber, label:'Otwórz ostatnie zlecenie #' + orders[0].orderNumber }
+            : navAction('service','Otwórz Serwis')
+        };
       }
 
       const lines = matches.slice(0, 5).map((customer) =>
@@ -1555,12 +1599,34 @@ const assistantReply = async (session, message) => {
     }
   }
 
+  if (user.role_code === 'OWNER' && (lower.includes('pracownik') || lower.includes('użytkownik') || lower.includes('uzytkownik') || lower.includes('konto'))) {
+    const term = cleanText(message
+      .replace(/znajdź|znajdz|wyszukaj|pokaż|pokaz|pracownika|pracownik|użytkownika|uzytkownika|użytkownik|uzytkownik|konto|konta/gi,' ')
+      .replace(/\s+/g,' ')
+      .trim(),120);
+    if (term.length >= 2) {
+      const matches=(await q(
+        "SELECT id,name,email,role_code,status,blocked_at,support_enabled FROM users WHERE lower(name||' '||email) LIKE '%'||lower($1)||'%' ORDER BY last_login_at DESC LIMIT 8",
+        [term]
+      )).rows;
+      if (!matches.length) return { text:'Nie znalazłem konta pasującego do „'+term+'”.', action:navAction('administration','Otwórz Konta i uprawnienia') };
+      const lines=matches.map(row=>'- '+row.name+' · '+row.email+' · '+(row.blocked_at?'zablokowane':row.status==='ACTIVE'?'aktywne':'oczekuje')+(row.support_enabled?' · Wsparcie LockOn':''));
+      const match=matches.length===1?matches[0]:null;
+      return {
+        text:'Znalazłem konta:\n'+lines.join('\n')+(matches.length>1?'\nDoprecyzuj imię lub e-mail, jeśli mam wskazać jedno konto.':''),
+        action: match
+          ? {type:'OPEN_USER',target:'administration',userId:match.id,label:'Otwórz konto '+match.name}
+          : navAction('administration','Otwórz Konta i uprawnienia')
+      };
+    }
+  }
+
   if (lower.includes('moja rola') || lower.includes('moje uprawn') || lower.includes('co mogę') || lower.includes('co moge')) {
-    return { text: roleSelfDescription(user.role_code) };
+    return { text: roleSelfDescription(user.role_code,user.support_enabled) };
   }
 
   if ((lower.includes('role') || lower.includes('uprawnienia')) && user.role_code !== 'OWNER') {
-    return { text: roleSelfDescription(user.role_code) + ' Pełny katalog wszystkich ról i uprawnień jest widoczny wyłącznie dla OWNER.' };
+    return { text: roleSelfDescription(user.role_code,user.support_enabled) + ' Pełny katalog wszystkich ról i uprawnień jest widoczny wyłącznie dla OWNER.' };
   }
 
   const audience = user.role_code === 'OWNER' ? ['ALL', 'OWNER'] : ['ALL'];
