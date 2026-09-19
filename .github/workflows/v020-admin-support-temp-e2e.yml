@@ -1,0 +1,91 @@
+name: v0.20 admin support temp E2E
+
+on:
+  push:
+    paths:
+      - ".github/workflows/v020-admin-support-temp-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE: https://br-frosty-water-b1vljc70-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+      OWNER_TOKEN: v020-owner-token
+      SUPPORT_TOKEN: v020-support-token
+      USER_TOKEN: v020-user-token
+      TEST_USER: usr_02000000000000000000
+      TECH_USER: usr_bfb3239a47fead96fb72
+      POINT: pnt_4e66398ed2bffa894cc4
+    steps:
+      - name: Verify v0.20 admin, assistant and consultant handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          code="$(curl -sS -o /tmp/health.json -w '%{http_code}' "$BASE/health")"
+          test "$code" = "200"
+
+          code="$(curl -sS -o /tmp/admin-before.json -w '%{http_code}' -H "authorization: Bearer $OWNER_TOKEN" "$BASE/admin/overview")"
+          test "$code" = "200"
+          node -e "const x=require('/tmp/admin-before.json');if(!x.users?.some(u=>u.id===process.env.TEST_USER&&u.status==='PENDING'))process.exit(2)"
+
+          code="$(curl -sS -o /tmp/approve.json -w '%{http_code}' -X POST             -H "authorization: Bearer $OWNER_TOKEN" -H 'content-type: application/json'             --data '{"role":"USER","pointIds":["'"$POINT"'"],"supportEnabled":false}'             "$BASE/admin/users/$TEST_USER/approve")"
+          test "$code" = "200"
+
+          code="$(curl -sS -o /tmp/tech-access.json -w '%{http_code}' -X POST             -H "authorization: Bearer $OWNER_TOKEN" -H 'content-type: application/json'             --data '{"role":"TECHNICIAN","pointIds":["'"$POINT"'"],"technicianSplitPercent":50,"supportEnabled":true}'             "$BASE/admin/users/$TECH_USER/access")"
+          test "$code" = "200"
+
+          code="$(curl -sS -o /tmp/me-user.json -w '%{http_code}' -H "authorization: Bearer $USER_TOKEN" "$BASE/me")"
+          test "$code" = "200"
+          node -e "const x=require('/tmp/me-user.json');if(x.user?.role!=='USER'||x.user?.supportEnabled!==false)process.exit(3)"
+
+          code="$(curl -sS -o /tmp/net.json -w '%{http_code}' -X POST             -H "authorization: Bearer $USER_TOKEN" -H 'content-type: application/json'             --data '{"message":"/net"}' "$BASE/assistant/chat")"
+          test "$code" = "200"
+          node -e "const x=require('/tmp/net.json');if(x.action?.type!=='SPEED_TEST')process.exit(4)"
+
+          code="$(curl -sS -o /tmp/video.json -w '%{http_code}' -X POST             -H "authorization: Bearer $USER_TOKEN" -H 'content-type: application/json'             --data '{"message":"/video Samsung S25 wymiana ekranu"}' "$BASE/assistant/chat")"
+          test "$code" = "200"
+          node -e "const x=require('/tmp/video.json');if(x.action?.type!=='BROWSER_SEARCH'||x.action?.provider!=='YOUTUBE'||!x.action?.query)process.exit(5)"
+
+          code="$(curl -sS -o /tmp/support-request.json -w '%{http_code}' -X POST             -H "authorization: Bearer $USER_TOKEN" -H 'content-type: application/json'             --data '{"pointId":"'"$POINT"'","message":"Potrzebuję konsultanta do testu v0.20."}'             "$BASE/support/request")"
+          test "$code" = "201"
+          node -e "const x=require('/tmp/support-request.json');if(x.consultantState!=='WAITING'||!x.conversationId)process.exit(6)"
+          CONV="$(node -e "process.stdout.write(require('/tmp/support-request.json').conversationId)")"
+
+          code="$(curl -sS -o /tmp/presence.json -w '%{http_code}' -H "authorization: Bearer $SUPPORT_TOKEN" "$BASE/support/presence")"
+          test "$code" = "200"
+          node -e "const x=require('/tmp/presence.json');const u=x.find(u=>u.userId===process.env.TEST_USER);if(!u||u.consultantState!=='WAITING'||u.conversationId!==process.argv[1])process.exit(7)" "$CONV"
+
+          code="$(curl -sS -o /tmp/tickets.json -w '%{http_code}' -H "authorization: Bearer $SUPPORT_TOKEN" "$BASE/support/tickets")"
+          test "$code" = "200"
+          node -e "const x=require('/tmp/tickets.json');if(!x.some(t=>t.id===process.argv[1]&&t.userId===process.env.TEST_USER))process.exit(8)" "$CONV"
+
+          code="$(curl -sS -o /tmp/take.json -w '%{http_code}' -X POST -H "authorization: Bearer $SUPPORT_TOKEN" -H 'content-type: application/json' --data '{}' "$BASE/support/tickets/$CONV/take")"
+          test "$code" = "200"
+
+          code="$(curl -sS -o /tmp/reply.json -w '%{http_code}' -X POST             -H "authorization: Bearer $SUPPORT_TOKEN" -H 'content-type: application/json'             --data '{"message":"Konsultant dołączył — odpowiedź testowa v0.20."}'             "$BASE/support/tickets/$CONV/reply")"
+          test "$code" = "200"
+
+          code="$(curl -sS -o /tmp/conversation.json -w '%{http_code}' -H "authorization: Bearer $USER_TOKEN" "$BASE/support/conversation")"
+          test "$code" = "200"
+          node -e "const x=require('/tmp/conversation.json');if(x.consultantState!=='JOINED'||!x.messages?.some(m=>m.author==='support'&&m.text.includes('odpowiedź testowa')))process.exit(9)"
+
+          code="$(curl -sS -o /tmp/block.json -w '%{http_code}' -X POST             -H "authorization: Bearer $OWNER_TOKEN" -H 'content-type: application/json'             --data '{"blocked":true,"reason":"E2E v0.20"}' "$BASE/admin/users/$TEST_USER/block")"
+          test "$code" = "200"
+
+          code="$(curl -sS -o /tmp/blocked-me.json -w '%{http_code}' -H "authorization: Bearer $USER_TOKEN" "$BASE/me")"
+          test "$code" = "401"
+
+          code="$(curl -sS -o /tmp/unblock.json -w '%{http_code}' -X POST             -H "authorization: Bearer $OWNER_TOKEN" -H 'content-type: application/json'             --data '{"blocked":false}' "$BASE/admin/users/$TEST_USER/block")"
+          test "$code" = "200"
+
+          code="$(curl -sS -o /tmp/admin-after.json -w '%{http_code}' -H "authorization: Bearer $OWNER_TOKEN" "$BASE/admin/overview")"
+          test "$code" = "200"
+          node -e "const x=require('/tmp/admin-after.json');const u=x.users?.find(u=>u.id===process.env.TECH_USER);if(!u||u.supportEnabled!==true)process.exit(10)"
+
+          echo "V020_ADMIN_SUPPORT_E2E_OK conversation=$CONV"
