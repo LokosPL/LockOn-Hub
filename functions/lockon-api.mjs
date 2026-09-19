@@ -1724,10 +1724,6 @@ const route = async (request) => {
   if(method==='POST'&&url.pathname==='/admin/factory-reset'){
     const session=await requireActive(request);
     if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Tylko OWNER może wykonać reset danych.'),{status:403,code:'OWNER_ONLY'});
-    const sessionAgeMs=Date.now()-new Date(session.createdAt||0).getTime();
-    if(!Number.isFinite(sessionAgeMs)||sessionAgeMs>10*60*1000){
-      throw Object.assign(new Error('Dla resetu danych wymagane jest świeże logowanie Google. Zaloguj się ponownie i powtórz operację.'),{status:428,code:'REAUTH_REQUIRED'});
-    }
     const body=await readJson(request);
     const phrase=String(body.phrase||'');
     const confirmed=body.confirmed===true;
@@ -1773,6 +1769,22 @@ const route = async (request) => {
       await remove('audit_log');
       await remove('users');
       await remove('points');
+
+      const remaining=(await client.query(
+        "SELECT jsonb_build_object(" +
+        "'points',(SELECT count(*) FROM points)," +
+        "'users',(SELECT count(*) FROM users)," +
+        "'service_orders',(SELECT count(*) FROM service_orders)," +
+        "'service_order_transfers',(SELECT count(*) FROM service_order_transfers)," +
+        "'customers',(SELECT count(*) FROM customers)," +
+        "'auth_sessions',(SELECT count(*) FROM auth_sessions)" +
+        ") AS counts"
+      )).rows[0]?.counts||{};
+      const leftovers=Object.entries(remaining).filter(([,value])=>Number(value)!==0);
+      if(leftovers.length){
+        throw new Error('Factory reset verification failed: '+leftovers.map(([key,value])=>key+'='+value).join(', '));
+      }
+
       await client.query('COMMIT');
     }catch(error){
       await client.query('ROLLBACK').catch(()=>undefined);
