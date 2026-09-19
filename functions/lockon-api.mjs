@@ -1309,9 +1309,11 @@ const processNotification = async (notificationId) => {
   }
 
   const rendered = renderStatusEmail(item);
-  const subject = item.subject || rendered.subject;
-  const textBody = item.body_text || rendered.text;
-  const htmlBody = item.body_html || rendered.html;
+  const subject = rendered.subject;
+  // Treść jest renderowana ponownie przy każdej próbie. Dzięki temu retry starej
+  // wiadomości nie zachowuje historycznego HTML-a bez kodu/linku portalu klienta.
+  const textBody = rendered.text;
+  const htmlBody = rendered.html;
 
   try {
     await q(
