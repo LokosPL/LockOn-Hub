@@ -35,6 +35,8 @@ const SERVICE_INTAKE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECH
 const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
+const CUSTOMER_QUOTE_STAFF_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const CUSTOMER_PORTAL_SESSION_TTL_MS = 1000 * 60 * 60 * 24;
 const googleVerifier = new OAuth2Client();
 
 const STATUS_LABELS = {
@@ -935,6 +937,155 @@ const mailSettingsForPoint = async (pointId) => {
   };
 };
 
+const CUSTOMER_PORTAL_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+const normalizeCustomerPortalCode = (value) => {
+  let raw = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if (raw.startsWith('LK')) raw = raw.slice(2);
+  if (!/^[A-Z0-9]{16}$/.test(raw)) return '';
+  return 'LK-' + raw.match(/.{4}/g).join('-');
+};
+
+const generateCustomerPortalCode = () => {
+  let raw = '';
+  for (let i = 0; i < 16; i += 1) raw += CUSTOMER_PORTAL_ALPHABET[crypto.randomInt(0, CUSTOMER_PORTAL_ALPHABET.length)];
+  return 'LK-' + raw.match(/.{4}/g).join('-');
+};
+
+const ensureCustomerPortalCode = async (customerId) => {
+  let row = (await q("SELECT portal_code_hash,portal_code_ciphertext FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
+  if (!row) throw Object.assign(new Error('Nie znaleziono klienta.'),{status:404});
+  if (row.portal_code_ciphertext) return { code: decryptSecret(row.portal_code_ciphertext), created:false };
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = generateCustomerPortalCode();
+    const hash = tokenHash(code);
+    const packed = encryptSecret(code);
+    try {
+      const updated = (await q(
+        "UPDATE customers SET portal_code_hash=$2,portal_code_ciphertext=$3,portal_code_created_at=COALESCE(portal_code_created_at,now()),updated_at=now() WHERE id=$1 AND portal_code_ciphertext IS NULL RETURNING portal_code_ciphertext",
+        [customerId,hash,packed]
+      )).rows[0];
+      if (updated?.portal_code_ciphertext) return { code, created:true };
+      row = (await q("SELECT portal_code_ciphertext FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
+      if (row?.portal_code_ciphertext) return { code: decryptSecret(row.portal_code_ciphertext), created:false };
+    } catch (error) {
+      if (String(error?.code || '') !== '23505') throw error;
+    }
+  }
+  throw new Error('Nie udało się utworzyć identyfikatora klienta.');
+};
+
+const createCustomerPortalSession = async (customerId) => {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + CUSTOMER_PORTAL_SESSION_TTL_MS);
+  await q("DELETE FROM customer_portal_sessions WHERE expires_at<=now()");
+  await q(
+    "INSERT INTO customer_portal_sessions(id,customer_id,token_hash,expires_at) VALUES($1,$2,$3,$4)",
+    [makeId('cps'),customerId,tokenHash(token),expiresAt]
+  );
+  return { token, expiresAt: expiresAt.toISOString() };
+};
+
+const requireCustomerPortal = async (request) => {
+  const auth = String(request.headers.get('authorization') || '');
+  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw Object.assign(new Error('Sesja klienta wygasła. Wpisz identyfikator ponownie.'),{status:401});
+  const row = (await q(
+    "SELECT s.id AS session_id,s.customer_id,s.expires_at,c.first_name,c.last_name,c.email,c.phone FROM customer_portal_sessions s JOIN customers c ON c.id=s.customer_id WHERE s.token_hash=$1 AND s.expires_at>now() LIMIT 1",
+    [tokenHash(token)]
+  )).rows[0];
+  if (!row) throw Object.assign(new Error('Sesja klienta wygasła. Wpisz identyfikator ponownie.'),{status:401});
+  await q("UPDATE customer_portal_sessions SET last_seen_at=now() WHERE id=$1",[row.session_id]);
+  return row;
+};
+
+const routeCustomerQuote = async (requestedPointId) => {
+  const local = (await q(
+    "SELECT u.id,u.name FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=$1 AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL ORDER BY (SELECT count(*) FROM service_orders s WHERE s.assigned_technician_id=u.id)::int DESC,u.last_login_at DESC LIMIT 1",
+    [requestedPointId]
+  )).rows[0];
+  if (local) return { routedPointId: requestedPointId, technicianId: local.id, routingReason: 'LOCAL_TECHNICIAN' };
+
+  let destination = (await q(
+    "SELECT t.to_point_id,count(*)::int AS transfer_count,max(t.requested_at) AS last_transfer FROM service_order_transfers t JOIN users su ON su.id=t.sent_by_user_id WHERE t.from_point_id=$1 AND t.kind='OUTBOUND_SERVICE' AND su.role_code='USER' AND EXISTS(SELECT 1 FROM user_point_access a JOIN users tu ON tu.id=a.user_id WHERE a.point_id=t.to_point_id AND tu.role_code='TECHNICIAN' AND tu.status='ACTIVE' AND tu.blocked_at IS NULL) GROUP BY t.to_point_id ORDER BY count(*) DESC,max(t.requested_at) DESC LIMIT 1",
+    [requestedPointId]
+  )).rows[0];
+  if (!destination) {
+    destination = (await q(
+      "SELECT t.to_point_id,count(*)::int AS transfer_count,max(t.requested_at) AS last_transfer FROM service_order_transfers t WHERE t.from_point_id=$1 AND t.kind='OUTBOUND_SERVICE' AND EXISTS(SELECT 1 FROM user_point_access a JOIN users tu ON tu.id=a.user_id WHERE a.point_id=t.to_point_id AND tu.role_code='TECHNICIAN' AND tu.status='ACTIVE' AND tu.blocked_at IS NULL) GROUP BY t.to_point_id ORDER BY count(*) DESC,max(t.requested_at) DESC LIMIT 1",
+      [requestedPointId]
+    )).rows[0];
+  }
+  if (!destination) return { routedPointId: requestedPointId, technicianId: null, routingReason: 'POINT_QUEUE_NO_TECHNICIAN' };
+
+  const tech = (await q(
+    "SELECT u.id,u.name FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=$1 AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL ORDER BY (SELECT count(*) FROM service_order_transfers t WHERE t.from_point_id=$2 AND t.to_point_id=$1 AND t.accepted_by_user_id=u.id)::int DESC,(SELECT count(*) FROM service_orders s WHERE s.assigned_technician_id=u.id)::int DESC,u.last_login_at DESC LIMIT 1",
+    [destination.to_point_id,requestedPointId]
+  )).rows[0];
+  return { routedPointId: destination.to_point_id, technicianId: tech?.id || null, routingReason: 'MOST_USED_TRANSFER_DESTINATION' };
+};
+
+const loadCustomerPortalPayload = async (customerId) => {
+  const customer = (await q("SELECT id,first_name,last_name,email,phone,created_at FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
+  const [ordersResult,quotesResult,pointsResult] = await Promise.all([
+    q(
+      "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_completion_at,s.estimated_cost,s.final_cost,s.currency,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,d.imei,d.serial_number,p.id AS point_id,p.name AS point_name,hp.id AS home_point_id,hp.name AS home_point_name,cp.id AS current_point_id,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.customer_id=$1 ORDER BY s.received_at DESC,s.order_number DESC",
+      [customerId]
+    ),
+    q(
+      "SELECT r.*,rp.name AS requested_point_name,rrp.name AS routed_point_name,u.name AS technician_name FROM customer_quote_requests r JOIN points rp ON rp.id=r.requested_point_id JOIN points rrp ON rrp.id=r.routed_point_id LEFT JOIN users u ON u.id=r.assigned_technician_id WHERE r.customer_id=$1 ORDER BY r.updated_at DESC",
+      [customerId]
+    ),
+    q("SELECT id,name,city FROM points WHERE active=true ORDER BY city,name")
+  ]);
+
+  const quoteIds = quotesResult.rows.map((row)=>row.id);
+  let messageRows = [];
+  if (quoteIds.length) {
+    messageRows = (await q(
+      "SELECT m.id,m.request_id,m.sender_kind,m.body,m.created_at,u.name AS sender_name FROM customer_quote_messages m LEFT JOIN users u ON u.id=m.sender_user_id WHERE m.request_id=ANY($1::text[]) ORDER BY m.created_at ASC",
+      [quoteIds]
+    )).rows;
+  }
+  const messagesByRequest = new Map();
+  for (const row of messageRows) {
+    const list = messagesByRequest.get(row.request_id) || [];
+    list.push({id:row.id,senderKind:row.sender_kind,senderName:row.sender_name||null,body:row.body,createdAt:row.created_at});
+    messagesByRequest.set(row.request_id,list);
+  }
+
+  return {
+    customer:{id:customer.id,firstName:customer.first_name,lastName:customer.last_name,email:customer.email||null,phone:customer.phone||null,customerSince:customer.created_at},
+    orders:ordersResult.rows.map((row)=>({
+      id:row.id,orderNumber:Number(row.order_number),orderType:row.order_type,handlingMode:row.handling_mode||'STANDARD',
+      issueDescription:row.issue_description,status:row.status,statusLabel:STATUS_LABELS[row.status]||row.status,
+      device:{brand:row.brand,model:row.model,imei:row.imei?('••••••••••'+String(row.imei).slice(-4)):null,serialNumber:row.serial_number?('••••'+String(row.serial_number).slice(-4)):null},
+      pointId:row.point_id,pointName:row.point_name,homePointId:row.home_point_id||row.point_id,homePointName:row.home_point_name||row.point_name,
+      currentPointId:row.current_point_id||null,currentPointName:row.current_point_name||null,
+      estimatedCompletionAt:row.estimated_completion_at||null,estimatedCost:row.estimated_cost==null?null:Number(row.estimated_cost),
+      finalCost:row.final_cost==null?null:Number(row.final_cost),currency:row.currency||'PLN',
+      receivedAt:row.received_at,completedAt:row.completed_at||null,createdAt:row.created_at,updatedAt:row.updated_at
+    })),
+    points:pointsResult.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
+    quoteRequests:quotesResult.rows.map((row)=>({
+      id:row.id,requestedPointId:row.requested_point_id,requestedPointName:row.requested_point_name,
+      routedPointId:row.routed_point_id,routedPointName:row.routed_point_name,assignedTechnicianName:row.technician_name||null,
+      serviceOrderId:row.service_order_id||null,deviceDescription:row.device_description,issueDescription:row.issue_description,
+      status:row.status,quoteAmount:row.quote_amount==null?null:Number(row.quote_amount),currency:row.currency||'PLN',
+      quoteNote:row.quote_note||null,routingReason:row.routing_reason,createdAt:row.created_at,updatedAt:row.updated_at,
+      quotedAt:row.quoted_at||null,closedAt:row.closed_at||null,messages:messagesByRequest.get(row.id)||[]
+    }))
+  };
+};
+
+const staffQuoteVisible = async (user, requestId) => {
+  const row = (await q(
+    "SELECT r.* FROM customer_quote_requests r WHERE r.id=$1 AND ($2::boolean OR r.assigned_technician_id=$3 OR EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$3 AND a.point_id IN (r.requested_point_id,r.routed_point_id))) LIMIT 1",
+    [requestId,GLOBAL_ROLES.has(user.role_code),user.id]
+  )).rows[0];
+  return row || null;
+};
+
 const renderStatusEmail = (item) => {
   const displayName = cleanText(item.sender_display_name || 'LockOn ServiceOS', 80).replace(/[\r\n]+/g, ' ');
   const transferStatus = String(item.payload?.transferStatus || '').toUpperCase();
@@ -1022,6 +1173,8 @@ const renderStatusEmail = (item) => {
     'Punkt prowadzący: ' + item.point_name,
     contactPoint ? 'Kontakt / lokalizacja operacyjna: ' + contactPoint : '',
     item.tracking_url ? 'Śledź zlecenie: ' + item.tracking_url : '',
+    item.customer_portal_code ? 'Twój stały identyfikator klienta: ' + item.customer_portal_code : '',
+    item.customer_portal_url ? 'Historia wszystkich serwisów i zapytania o wycenę: ' + item.customer_portal_url : '',
     '',
     footer,
     '',
@@ -1048,7 +1201,8 @@ const renderStatusEmail = (item) => {
             'Punkt prowadzący: ' + escapeHtml(item.point_name) +
             (contactPoint ? '<br>Kontakt / lokalizacja operacyjna: ' + escapeHtml(contactPoint) : '') +
           '</div>' +
-          (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:block;box-sizing:border-box;width:100%;margin-top:18px;padding:14px 16px;border-radius:10px;background:#ff7445;color:#fff;text-align:center;text-decoration:none;font-size:16px;line-height:1.35;font-weight:800">Śledź naprawę i historię urządzenia</a>' : '') +
+          (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:block;box-sizing:border-box;width:100%;margin-top:18px;padding:14px 16px;border-radius:10px;background:#ff7445;color:#fff;text-align:center;text-decoration:none;font-size:16px;line-height:1.35;font-weight:800">Śledź to zlecenie</a>' : '') +
+          (item.customer_portal_code ? '<div style="margin-top:16px;padding:16px;border-radius:12px;background:#101318;border:1px solid #333944"><div style="font-size:11px;color:#7f8995;text-transform:uppercase">Twój stały identyfikator klienta</div><div style="font-size:20px;font-weight:800;color:#eceff3;letter-spacing:.06em;margin-top:6px">' + escapeHtml(item.customer_portal_code) + '</div><p style="margin:8px 0 0;color:#8f99a5;font-size:12px;line-height:1.5">Zachowaj go. Dzięki niemu zobaczysz historię wszystkich swoich wizyt serwisowych i napiszesz do punktu o wycenę.</p>' + (item.customer_portal_url ? '<a href="' + escapeHtml(item.customer_portal_url) + '" style="display:inline-block;margin-top:10px;color:#ff9869;font-size:13px;font-weight:700;text-decoration:none">Otwórz portal klienta</a>' : '') + '</div>' : '') +
           '<p style="margin:20px 0 0;font-size:12px;color:#818b97;line-height:1.5">' + escapeHtml(footer) + '</p>' +
         '</div>' +
       '</div>' +
@@ -1097,7 +1251,7 @@ const sendGmail = async (sender, recipient, subject, textBody, htmlBody, display
 
 const processNotification = async (notificationId) => {
   const { rows } = await q(
-    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
+    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,s.customer_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
     [notificationId]
   );
   const item = rows[0];
@@ -1121,6 +1275,23 @@ const processNotification = async (notificationId) => {
   }catch(error){
     console.error('[tracking link]',error);
     item.tracking_url='';
+  }
+  if (
+    item.template_key === 'SERVICE_STATUS_CHANGED' &&
+    String(item.payload?.to || '').toUpperCase() === 'RECEIVED' &&
+    !item.payload?.from
+  ) {
+    try {
+      const portalIdentity = await ensureCustomerPortalCode(item.customer_id);
+      if (portalIdentity.created) {
+        item.customer_portal_code = portalIdentity.code;
+        item.customer_portal_url = PUBLIC_PORTAL_URL + '/klient.html';
+      }
+    } catch (error) {
+      console.error('[customer portal code]', error);
+      item.customer_portal_code = '';
+      item.customer_portal_url = '';
+    }
   }
 
   const rendered = renderStatusEmail(item);
@@ -1453,6 +1624,84 @@ const route = async (request) => {
         updatedAt:row.updated_at
       }))
     });
+  }
+
+  if (method === 'POST' && url.pathname === '/public/customer-portal/login') {
+    const body = await readJson(request);
+    const code = normalizeCustomerPortalCode(body.customerId || body.code);
+    if (!code) return json(request,{error:'CUSTOMER_ID',message:'Identyfikator klienta jest nieprawidłowy.'},400);
+    const customer = (await q("SELECT id FROM customers WHERE portal_code_hash=$1 LIMIT 1",[tokenHash(code)])).rows[0];
+    if (!customer) return json(request,{error:'CUSTOMER_ID',message:'Nie znaleziono klienta dla tego identyfikatora.'},401);
+    const session = await createCustomerPortalSession(customer.id);
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_PORTAL_LOGIN','customer',$2,$3::jsonb)",[makeId('aud'),customer.id,JSON.stringify({clientType:'CUSTOMER_PORTAL'})]);
+    return json(request,{sessionToken:session.token,expiresAt:session.expiresAt,...(await loadCustomerPortalPayload(customer.id))});
+  }
+
+  if (method === 'GET' && url.pathname === '/public/customer-portal/me') {
+    const customerSession = await requireCustomerPortal(request);
+    return json(request,await loadCustomerPortalPayload(customerSession.customer_id));
+  }
+
+  if (method === 'POST' && url.pathname === '/public/customer-portal/quotes') {
+    const customerSession = await requireCustomerPortal(request);
+    const body = await readJson(request);
+    let requestedPointId = cleanText(body.requestedPointId,80);
+    const serviceOrderId = cleanText(body.serviceOrderId,80) || null;
+    let deviceDescription = cleanText(body.deviceDescription,180);
+    const issueDescription = cleanText(body.issueDescription,2000);
+    if (!issueDescription) return json(request,{error:'ISSUE_REQUIRED',message:'Opisz urządzenie i problem, który mamy wycenić.'},400);
+
+    let linkedOrder = null;
+    if (serviceOrderId) {
+      linkedOrder = (await q(
+        "SELECT s.id,s.point_id,d.brand,d.model FROM service_orders s JOIN devices d ON d.id=s.device_id WHERE s.id=$1 AND s.customer_id=$2 LIMIT 1",
+        [serviceOrderId,customerSession.customer_id]
+      )).rows[0];
+      if (!linkedOrder) return json(request,{error:'ORDER_NOT_FOUND',message:'To zlecenie nie należy do Twojej historii.'},404);
+      if (!deviceDescription) deviceDescription=[linkedOrder.brand,linkedOrder.model].filter(Boolean).join(' ');
+      if (!requestedPointId) requestedPointId=linkedOrder.point_id;
+    }
+    if (!deviceDescription) return json(request,{error:'DEVICE_REQUIRED',message:'Podaj urządzenie, którego dotyczy wycena.'},400);
+
+    const requestedPoint = (await q("SELECT id,name,city FROM points WHERE id=$1 AND active=true LIMIT 1",[requestedPointId])).rows[0];
+    if (!requestedPoint) return json(request,{error:'POINT_NOT_FOUND',message:'Wybrany punkt jest niedostępny.'},400);
+    const routing = await routeCustomerQuote(requestedPoint.id);
+    const routedPoint = (await q("SELECT id,name,city FROM points WHERE id=$1 LIMIT 1",[routing.routedPointId])).rows[0] || requestedPoint;
+    const requestId = makeId('cqr');
+    await q(
+      "INSERT INTO customer_quote_requests(id,customer_id,requested_point_id,routed_point_id,assigned_technician_id,service_order_id,device_description,issue_description,routing_reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      [requestId,customerSession.customer_id,requestedPoint.id,routing.routedPointId,routing.technicianId,serviceOrderId,deviceDescription,issueDescription,routing.routingReason]
+    );
+    await q(
+      "INSERT INTO customer_quote_messages(id,request_id,sender_kind,body) VALUES($1,$2,'CUSTOMER',$3)",
+      [makeId('cqm'),requestId,issueDescription]
+    );
+    if (routing.routedPointId !== requestedPoint.id) {
+      await q(
+        "INSERT INTO customer_quote_messages(id,request_id,sender_kind,body) VALUES($1,$2,'SYSTEM',$3)",
+        [makeId('cqm'),requestId,'Zapytanie zostało automatycznie przekazane z punktu '+requestedPoint.name+' do serwisu '+routedPoint.name+'.']
+      );
+    }
+    await q(
+      "INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,point_id,metadata) VALUES($1,NULL,'CUSTOMER_QUOTE_CREATED','customer_quote_request',$2,$3,$4::jsonb)",
+      [makeId('aud'),requestId,requestedPoint.id,JSON.stringify({customerId:customerSession.customer_id,routedPointId:routing.routedPointId,assignedTechnicianId:routing.technicianId||null,routingReason:routing.routingReason,clientType:'CUSTOMER_PORTAL'})]
+    );
+    return json(request,{ok:true,requestId,routedPointName:routedPoint.name,...(await loadCustomerPortalPayload(customerSession.customer_id))},201);
+  }
+
+  const customerQuoteMessageMatch=url.pathname.match(/^\/public\/customer-portal\/quotes\/([^/]+)\/messages$/);
+  if(method==='POST'&&customerQuoteMessageMatch){
+    const customerSession=await requireCustomerPortal(request);
+    const body=await readJson(request);
+    const message=cleanText(body.message,1000);
+    if(!message)return json(request,{error:'MESSAGE_REQUIRED',message:'Wpisz wiadomość.'},400);
+    const quote=(await q("SELECT id,status,requested_point_id FROM customer_quote_requests WHERE id=$1 AND customer_id=$2 LIMIT 1",[customerQuoteMessageMatch[1],customerSession.customer_id])).rows[0];
+    if(!quote)return json(request,{error:'NOT_FOUND',message:'Nie znaleziono tego zapytania.'},404);
+    if(['CLOSED','CANCELLED'].includes(quote.status))return json(request,{error:'QUOTE_CLOSED',message:'To zapytanie jest już zamknięte.'},409);
+    await q("INSERT INTO customer_quote_messages(id,request_id,sender_kind,body) VALUES($1,$2,'CUSTOMER',$3)",[makeId('cqm'),quote.id,message]);
+    await q("UPDATE customer_quote_requests SET status='OPEN',updated_at=now() WHERE id=$1",[quote.id]);
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,point_id,metadata) VALUES($1,NULL,'CUSTOMER_QUOTE_MESSAGE','customer_quote_request',$2,$3,$4::jsonb)",[makeId('aud'),quote.id,quote.requested_point_id,JSON.stringify({clientType:'CUSTOMER_PORTAL'})]);
+    return json(request,{ok:true,...(await loadCustomerPortalPayload(customerSession.customer_id))});
   }
 
   if (method === 'GET' && url.pathname === '/health') return json(request, { ok: true, service: 'LockOn ServiceOS Central API', time: nowIso() });
@@ -2563,6 +2812,104 @@ const route = async (request) => {
     }
     const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
     return json(request,{order:view,notification,settlement});
+  }
+
+  if(method==='GET'&&url.pathname==='/service/customer-quotes'){
+    const session=await requireActive(request),u=session.user;
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do wycen klientów.'),{status:403});
+    const params=[];
+    let where=' WHERE 1=1';
+    if(!GLOBAL_ROLES.has(u.role_code)){
+      params.push(u.id);
+      where += " AND (r.assigned_technician_id=$" + params.length + " OR EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$" + params.length + " AND a.point_id IN (r.requested_point_id,r.routed_point_id)))";
+    }
+    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    if(pointId){
+      await requirePoint(u,pointId);
+      params.push(pointId);
+      where += " AND r.routed_point_id=$" + params.length;
+    }
+    const status=cleanText(url.searchParams.get('status'),30).toUpperCase();
+    if(status&&['OPEN','QUOTED','CLOSED','CANCELLED'].includes(status)){
+      params.push(status);
+      where += " AND r.status=$" + params.length;
+    }
+    const rows=(await q(
+      "SELECT r.*,c.first_name,c.last_name,c.email,c.phone,rp.name AS requested_point_name,rrp.name AS routed_point_name,u.name AS technician_name,s.order_number FROM customer_quote_requests r JOIN customers c ON c.id=r.customer_id JOIN points rp ON rp.id=r.requested_point_id JOIN points rrp ON rrp.id=r.routed_point_id LEFT JOIN users u ON u.id=r.assigned_technician_id LEFT JOIN service_orders s ON s.id=r.service_order_id"+where+" ORDER BY CASE WHEN r.status='OPEN' THEN 0 WHEN r.status='QUOTED' THEN 1 ELSE 2 END,r.updated_at DESC LIMIT 150",
+      params
+    )).rows;
+    const ids=rows.map((row)=>row.id);
+    let messages=[];
+    if(ids.length){
+      messages=(await q(
+        "SELECT m.id,m.request_id,m.sender_kind,m.body,m.created_at,u.name AS sender_name FROM customer_quote_messages m LEFT JOIN users u ON u.id=m.sender_user_id WHERE m.request_id=ANY($1::text[]) ORDER BY m.created_at ASC",
+        [ids]
+      )).rows;
+    }
+    const byRequest=new Map();
+    for(const row of messages){
+      const list=byRequest.get(row.request_id)||[];
+      list.push({id:row.id,senderKind:row.sender_kind,senderName:row.sender_name||null,body:row.body,createdAt:row.created_at});
+      byRequest.set(row.request_id,list);
+    }
+    return json(request,rows.map((row)=>({
+      id:row.id,customerId:row.customer_id,customerName:[row.first_name,row.last_name].filter(Boolean).join(' '),customerEmail:row.email||null,customerPhone:row.phone||null,
+      requestedPointId:row.requested_point_id,requestedPointName:row.requested_point_name,routedPointId:row.routed_point_id,routedPointName:row.routed_point_name,
+      assignedTechnicianId:row.assigned_technician_id||null,assignedTechnicianName:row.technician_name||null,
+      serviceOrderId:row.service_order_id||null,orderNumber:row.order_number?Number(row.order_number):null,
+      deviceDescription:row.device_description,issueDescription:row.issue_description,status:row.status,
+      quoteAmount:row.quote_amount==null?null:Number(row.quote_amount),currency:row.currency||'PLN',quoteNote:row.quote_note||null,
+      routingReason:row.routing_reason,createdAt:row.created_at,updatedAt:row.updated_at,quotedAt:row.quoted_at||null,closedAt:row.closed_at||null,
+      messages:byRequest.get(row.id)||[]
+    })));
+  }
+
+  const staffQuoteReplyMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/reply$/);
+  if(method==='POST'&&staffQuoteReplyMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do odpowiedzi klientowi.'),{status:403});
+    const quote=await staffQuoteVisible(u,staffQuoteReplyMatch[1]);
+    if(!quote)return json(request,{error:'NOT_FOUND'},404);
+    if(['CLOSED','CANCELLED'].includes(quote.status))return json(request,{error:'QUOTE_CLOSED',message:'To zapytanie jest zamknięte.'},409);
+    const body=await readJson(request),message=cleanText(body.message,1000);
+    if(!message)return json(request,{error:'MESSAGE_REQUIRED',message:'Wpisz odpowiedź dla klienta.'},400);
+    await q("INSERT INTO customer_quote_messages(id,request_id,sender_kind,sender_user_id,body) VALUES($1,$2,'STAFF',$3,$4)",[makeId('cqm'),quote.id,u.id,message]);
+    await q("UPDATE customer_quote_requests SET assigned_technician_id=CASE WHEN assigned_technician_id IS NULL AND $2='TECHNICIAN' THEN $3 ELSE assigned_technician_id END,updated_at=now() WHERE id=$1",[quote.id,u.role_code,u.id]);
+    await audit(session,'CUSTOMER_QUOTE_REPLIED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id});
+    return json(request,{ok:true});
+  }
+
+  const staffQuotePriceMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/quote$/);
+  if(method==='POST'&&staffQuotePriceMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do wyceny.'),{status:403});
+    const quote=await staffQuoteVisible(u,staffQuotePriceMatch[1]);
+    if(!quote)return json(request,{error:'NOT_FOUND'},404);
+    if(['CLOSED','CANCELLED'].includes(quote.status))return json(request,{error:'QUOTE_CLOSED',message:'To zapytanie jest zamknięte.'},409);
+    const body=await readJson(request);
+    const amount=Number(body.amount);
+    const note=cleanText(body.note,1000);
+    if(!Number.isFinite(amount)||amount<0||amount>1000000)return json(request,{error:'QUOTE_AMOUNT',message:'Podaj prawidłową kwotę wyceny.'},400);
+    const rounded=Math.round(amount*100)/100;
+    await q(
+      "UPDATE customer_quote_requests SET quote_amount=$2,quote_note=NULLIF($3,''),status='QUOTED',quoted_at=now(),updated_at=now(),assigned_technician_id=CASE WHEN assigned_technician_id IS NULL AND $4='TECHNICIAN' THEN $5 ELSE assigned_technician_id END WHERE id=$1",
+      [quote.id,rounded,note,u.role_code,u.id]
+    );
+    const message='Wycena zdalna: '+rounded.toFixed(2)+' PLN'+(note?' · '+note:'');
+    await q("INSERT INTO customer_quote_messages(id,request_id,sender_kind,sender_user_id,body) VALUES($1,$2,'STAFF',$3,$4)",[makeId('cqm'),quote.id,u.id,message]);
+    await audit(session,'CUSTOMER_QUOTE_PRICED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id,amount:rounded,currency:'PLN'});
+    return json(request,{ok:true,amount:rounded,currency:'PLN'});
+  }
+
+  const staffQuoteCloseMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/close$/);
+  if(method==='POST'&&staffQuoteCloseMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zamknięcia zapytania.'),{status:403});
+    const quote=await staffQuoteVisible(u,staffQuoteCloseMatch[1]);
+    if(!quote)return json(request,{error:'NOT_FOUND'},404);
+    await q("UPDATE customer_quote_requests SET status='CLOSED',closed_at=now(),updated_at=now() WHERE id=$1",[quote.id]);
+    await audit(session,'CUSTOMER_QUOTE_CLOSED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id});
+    return json(request,{ok:true});
   }
 
   if(method==='GET'&&url.pathname==='/service/service-points'){
