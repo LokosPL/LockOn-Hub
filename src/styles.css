@@ -1045,3 +1045,27 @@ input,textarea,select{line-height:1.45}
 .service-status-readonly{display:flex;flex-direction:column;align-items:flex-end;gap:5px;max-width:250px}
 .service-status-readonly small{font-size:10px;line-height:1.35;color:#7f8993;text-align:right}
 @media(max-width:760px){.service-status-readonly{align-items:flex-start;max-width:none}.service-status-readonly small{text-align:left}}
+
+
+/* operational audit */
+.audit-filter-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0 18px}
+.audit-filter-grid label{display:flex;flex-direction:column;gap:6px}
+.audit-filter-grid label>span{font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#707986}
+.audit-filter-grid input,.audit-filter-grid select{height:38px;border:1px solid var(--line);border-radius:10px;background:#0d1014;color:#eef1f4;padding:0 10px}
+.audit-filter-button{align-self:end;justify-content:center}
+.operational-audit-list{display:flex;flex-direction:column;gap:8px}
+.operational-audit-row{padding:13px 14px;border:1px solid var(--line);border-radius:12px;background:#101318}
+.audit-event-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.audit-event-head>div{min-width:0;display:flex;flex-direction:column;gap:3px}
+.audit-event-head strong{font-size:12px}
+.audit-event-head span,.audit-event-head time{font-size:9px;color:#707a86}
+.audit-event-meta,.audit-status-line{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
+.audit-event-meta span,.audit-status-line span{font-size:9px;color:#747e8a;padding:4px 7px;border:1px solid var(--line);border-radius:7px;background:#0d1014}
+.audit-event-meta strong,.audit-status-line strong{color:#dce1e6}
+.audit-change{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:8px;align-items:center;margin-top:9px}
+.audit-change span{padding:7px 9px;border-radius:8px;background:#0d1014;border:1px solid var(--line);font-size:10px;overflow-wrap:anywhere}
+.audit-change b{color:#ff7c48}
+.audit-json{margin-top:9px}
+.audit-json summary{cursor:pointer;font-size:9px;color:#707a86}
+.audit-json pre{margin:8px 0 0;padding:10px;border-radius:9px;background:#0a0c10;white-space:pre-wrap;overflow-wrap:anywhere;font-size:9px;color:#89939e}
+@media(max-width:900px){.audit-filter-grid{grid-template-columns:1fr 1fr}}

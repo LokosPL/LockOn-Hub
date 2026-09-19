@@ -435,6 +435,16 @@ const registerIpc = () => {
     const token = requireSessionToken();
     return backendRequest('/admin/overview', {}, token);
   });
+  secureHandle('admin:getAudit', async (filters: { userId?: unknown; pointId?: unknown; action?: unknown; orderNumber?: unknown; dateFrom?: unknown; dateTo?: unknown } = {}) => {
+    const token = requireSessionToken();
+    const params = new URLSearchParams();
+    for (const key of ['userId','pointId','action','orderNumber','dateFrom','dateTo'] as const) {
+      const value = String(filters?.[key] ?? '').trim().slice(0, 120);
+      if (value) params.set(key, value);
+    }
+    const suffix = params.toString() ? '?' + params.toString() : '';
+    return backendRequest('/admin/audit' + suffix, {}, token);
+  });
   secureHandle('admin:createPoint', async (payload: { name?: unknown; city?: unknown; serviceEnabled?: unknown; acceptsExternalRepairs?: unknown; serviceNote?: unknown }) => {
     const token = requireSessionToken();
     return backendRequest('/admin/points', {

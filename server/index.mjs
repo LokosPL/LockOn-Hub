@@ -85,6 +85,7 @@ const initialDb = () => ({
     }
   ],
   loginEvents: [],
+  auditLog: [],
   revenueEntries: [],
   customers: [],
   devices: [],
@@ -114,6 +115,7 @@ const loadDb = () => {
       users: Array.isArray(raw.users) ? raw.users : [],
       points: Array.isArray(raw.points) && raw.points.length ? raw.points : initialDb().points,
       loginEvents: Array.isArray(raw.loginEvents) ? raw.loginEvents : [],
+      auditLog: Array.isArray(raw.auditLog) ? raw.auditLog : [],
       revenueEntries: Array.isArray(raw.revenueEntries) ? raw.revenueEntries : [],
       customers: Array.isArray(raw.customers) ? raw.customers : [],
       devices: Array.isArray(raw.devices) ? raw.devices : [],
@@ -142,6 +144,16 @@ const saveDb = () => {
   const tmp = `${DATA_FILE}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
   fs.renameSync(tmp, DATA_FILE);
+};
+
+const localAudit = (actor, action, entityType, entityId = null, pointId = null, metadata = {}) => {
+  db.auditLog.unshift({
+    id:id('aud'), actorUserId:actor?.id || null, actorName:actor?.name || actor?.email || 'System',
+    actorRole:actor?.role || null, action, entityType, entityId, pointId,
+    metadata:{...metadata,clientType:metadata.clientType || 'DESKTOP'}, createdAt:nowIso()
+  });
+  db.auditLog = db.auditLog.slice(0, 500);
+  saveDb();
 };
 
 const pointSummary = (point) => ({ id: point.id, name: point.name, city: point.city, active: point.active !== false });
@@ -540,6 +552,40 @@ const handle = async (req, res) => {
     });
   }
 
+  if (method === 'GET' && url.pathname === '/admin/audit') {
+    const owner = requireRole(req, res, ['OWNER']);
+    if (!owner) return;
+    const userId = cleanText(url.searchParams.get('userId') || '',80);
+    const pointId = cleanText(url.searchParams.get('pointId') || '',80);
+    const action = cleanText(url.searchParams.get('action') || '',120).toLowerCase();
+    const orderNumber = Number(url.searchParams.get('orderNumber') || 0);
+    const dateFrom = url.searchParams.get('dateFrom') ? new Date(url.searchParams.get('dateFrom')) : null;
+    const dateTo = url.searchParams.get('dateTo') ? new Date(url.searchParams.get('dateTo') + 'T23:59:59.999Z') : null;
+    const events = (db.auditLog || []).filter((event) => {
+      if (userId && event.actorUserId !== userId) return false;
+      if (pointId && event.pointId !== pointId) return false;
+      if (action && !String(event.action || '').toLowerCase().includes(action)) return false;
+      if (Number.isFinite(orderNumber) && orderNumber > 0 && Number(event.metadata?.orderNumber || 0) !== orderNumber) return false;
+      const time = new Date(event.createdAt).getTime();
+      if (dateFrom && !Number.isNaN(dateFrom.getTime()) && time < dateFrom.getTime()) return false;
+      if (dateTo && !Number.isNaN(dateTo.getTime()) && time > dateTo.getTime()) return false;
+      return true;
+    }).slice(0,300).map((event) => ({
+      ...event,
+      actorEmail:null, pointName:db.points.find((point)=>point.id===event.pointId)?.name || null,
+      before:event.metadata?.before ?? event.metadata?.from ?? null,
+      after:event.metadata?.after ?? event.metadata?.to ?? null,
+      orderNumber:event.metadata?.orderNumber ?? null,
+      customerSummary:event.metadata?.customerSummary ?? null,
+      deviceSummary:event.metadata?.deviceSummary ?? null,
+      notificationStatus:event.metadata?.notification?.status ?? null,
+      transferStatus:event.metadata?.transferStatus ?? null,
+      settlementStatus:event.metadata?.settlementStatus ?? null,
+      clientType:event.metadata?.clientType ?? 'DESKTOP'
+    }));
+    return json(res,200,{events});
+  }
+
   if (method === 'POST' && url.pathname === '/admin/points') {
     const owner = requireRole(req, res, ['OWNER']);
     if (!owner) return;
@@ -626,6 +672,7 @@ const handle = async (req, res) => {
     target.status = 'ACTIVE';
     target.pointIds = GLOBAL_ROLES.has(role) ? [] : pointIds;
     saveDb();
+    localAudit(owner,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent:target.technicianSplitPercent});
     return json(res, 200, authPayload(target));
   }
 

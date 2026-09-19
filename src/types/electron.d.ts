@@ -32,7 +32,8 @@ export interface AdminPoint {
 }
 export interface LoginEvent { id: string; userId: string; email: string; name: string; role: UserRole | null; status: AccountStatus; pointIds: string[]; createdAt: string; }
 export interface RevenueEntry { id: string; userId: string; pointId: string; serviceOrderId?:string|null; amount: number; workDate: string; note: string; status: 'PENDING'|'APPROVED'|'REJECTED'|'SETTLED'; splitTechnicianPercent: number; splitBossPercent: number; technicianShare: number; bossShare: number; submittedAt: string; reviewedAt?: string|null; technician?: {id:string;name:string;email:string}|null; point?: AdminPoint|null; }
-export interface AdminAuditEvent { id:string; action:string; entityType:string; entityId?:string|null; pointId?:string|null; actorName:string; metadata:Record<string,unknown>; createdAt:string; }
+export interface AdminAuditEvent { id:string; action:string; entityType:string; entityId?:string|null; pointId?:string|null; pointName?:string|null; actorUserId?:string|null; actorName:string; actorEmail?:string|null; actorRole?:UserRole|null; before?:unknown; after?:unknown; orderNumber?:number|null; customerSummary?:string|null; deviceSummary?:string|null; notificationStatus?:string|null; transferStatus?:string|null; settlementStatus?:string|null; clientType?:string|null; metadata:Record<string,unknown>; createdAt:string; }
+export interface AdminAuditFilters { userId?:string; pointId?:string; action?:string; orderNumber?:string; dateFrom?:string; dateTo?:string; }
 export interface AdminSystemSummary { activeSessions:number; desktopSessions:number; webSessions:number; servicePoints:number; openTransfers:number; blockedUsers:number; }
 export interface AdminOverview { points: AdminPoint[]; users: AdminUser[]; pendingUsers: AdminUser[]; blockedUsers?:AdminUser[]; loginEvents: LoginEvent[]; pendingRevenue: RevenueEntry[]; system?:AdminSystemSummary; transferSummary?:Record<string,number>; recentAudit?:AdminAuditEvent[]; }
 export interface FinancePayload { entries: RevenueEntry[]; summary: { approvedRevenue:number; technicianShare:number; bossShare:number; pendingRevenue:number; }; }
@@ -100,6 +101,7 @@ declare global {
       access: { requestPoint: (payload:{pointName:string;city:string;requestedRole:UserRole;technicianSplitPercent?:number|null}) => Promise<AuthState>; };
       admin: {
         getOverview: () => Promise<AdminOverview>;
+        getAudit: (filters?:AdminAuditFilters) => Promise<{events:AdminAuditEvent[]}>;
         createPoint: (payload:{name:string;city:string;serviceEnabled?:boolean;acceptsExternalRepairs?:boolean;serviceNote?:string}) => Promise<AdminPoint>;
         updatePointService: (pointId:string,payload:{serviceEnabled:boolean;acceptsExternalRepairs:boolean;externalRepairsPaused?:boolean;serviceNote?:string}) => Promise<AdminPoint>;
         approveUser: (userId:string,payload:{role:UserRole;pointIds:string[];createRequestedPoint?:boolean}) => Promise<unknown>;

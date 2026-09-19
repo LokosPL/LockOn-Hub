@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('lockOn', {
   },
   admin: {
     getOverview: () => ipcRenderer.invoke('admin:getOverview'),
+    getAudit: (filters?: unknown) => ipcRenderer.invoke('admin:getAudit', filters),
     createPoint: (payload: unknown) => ipcRenderer.invoke('admin:createPoint', payload),
     updatePointService: (pointId: string, payload: unknown) => ipcRenderer.invoke('admin:updatePointService', pointId, payload),
     approveUser: (userId: string, payload: unknown) => ipcRenderer.invoke('admin:approveUser', userId, payload),
