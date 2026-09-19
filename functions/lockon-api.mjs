@@ -1016,7 +1016,15 @@ const routeCustomerQuote = async (requestedPointId) => {
       [requestedPointId]
     )).rows[0];
   }
-  if (!destination) return { routedPointId: requestedPointId, technicianId: null, routingReason: 'POINT_QUEUE_NO_TECHNICIAN' };
+  if (!destination) {
+    const fallback = (await q(
+      "SELECT a.point_id AS to_point_id,u.id AS technician_id FROM user_point_access a JOIN users u ON u.id=a.user_id JOIN points p ON p.id=a.point_id WHERE u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL AND p.active=true ORDER BY (SELECT count(*) FROM service_order_transfers t WHERE t.to_point_id=a.point_id AND t.kind='OUTBOUND_SERVICE') DESC,u.last_login_at DESC,p.name,u.id LIMIT 1"
+    )).rows[0];
+    if (fallback) {
+      return { routedPointId: fallback.to_point_id, technicianId: fallback.technician_id, routingReason: 'ACTIVE_TECHNICIAN_FALLBACK' };
+    }
+    return { routedPointId: requestedPointId, technicianId: null, routingReason: 'POINT_QUEUE_NO_TECHNICIAN' };
+  }
 
   const tech = (await q(
     "SELECT u.id,u.name FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=$1 AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL ORDER BY (SELECT count(*) FROM service_order_transfers t WHERE t.from_point_id=$2 AND t.to_point_id=$1 AND t.accepted_by_user_id=u.id)::int DESC,(SELECT count(*) FROM service_orders s WHERE s.assigned_technician_id=u.id)::int DESC,u.last_login_at DESC LIMIT 1",
