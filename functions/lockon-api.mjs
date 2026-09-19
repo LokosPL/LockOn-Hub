@@ -28,9 +28,11 @@ const WEBSITE_CODE_TTL_MS = 1000 * 60 * 5;
 const BODY_LIMIT = 64 * 1024;
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
 const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
-const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN']);
-const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
+const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_INTAKE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
+const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const googleVerifier = new OAuth2Client();
@@ -1263,7 +1265,7 @@ const assistantReply = async (session, message) => {
         else lines.push('Twoja rola nie ma dostępu do danych kosztowych zlecenia.');
       }
 
-      if (lower.includes('notatk')) {
+      if (lower.includes('notatk') && SERVICE_EDIT_ROLES.has(user.role_code)) {
         const { rows } = await q(
           'SELECT n.body,n.created_at,usr.name AS author_name,usr.email AS author_email FROM service_order_notes n JOIN users usr ON usr.id=n.author_user_id WHERE n.service_order_id=$1 ORDER BY n.created_at DESC LIMIT 3',
           [order.id]
@@ -1889,6 +1891,7 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/finance/revenues'){
     const session=await requireActive(request);const u=session.user;
+    if(u.role_code==='USER')throw Object.assign(new Error('Brak uprawnień do rozliczeń.'),{status:403});
     let rows;
     if(GLOBAL_ROLES.has(u.role_code)) rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id ORDER BY r.occurred_at DESC")).rows;
     else if(u.role_code==='TECHNICIAN') rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
@@ -1924,7 +1927,9 @@ const route = async (request) => {
   }
 
   if(method==='GET'&&url.pathname==='/dashboard'){
-    const session=await requireActive(request),u=session.user,ids=await visiblePointIds(u);
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code==='USER')return json(request,{pointCount:0,activeUsers:0,pendingUsers:0,approvedRevenue:0,pendingRevenue:0,bossShare:0,technicianShare:0});
+    const ids=await visiblePointIds(u);
     const revenue=(await q("SELECT amount,status,user_id,technician_percent FROM revenue_entries WHERE point_id=ANY($1::text[])",[ids])).rows;
     const users=(await q("SELECT COUNT(DISTINCT u.id)::int AS count FROM users u LEFT JOIN user_point_access a ON a.user_id=u.id WHERE u.status='ACTIVE' AND ($2::boolean OR a.point_id=ANY($1::text[]))",[ids,GLOBAL_ROLES.has(u.role_code)])).rows[0].count;
     const approved=revenue.filter((r)=>r.status==='APPROVED'||r.status==='SETTLED'),pending=revenue.filter((r)=>r.status==='PENDING');
@@ -2019,6 +2024,7 @@ const route = async (request) => {
     await requireOrder(u,order.id);
 
     if(method==='GET'){
+      if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do notatek wewnętrznych zlecenia.'),{status:403});
       const {rows}=await q(
         'SELECT n.id,n.body,n.created_at,n.author_user_id,usr.name AS author_name,usr.email AS author_email FROM service_order_notes n JOIN users usr ON usr.id=n.author_user_id WHERE n.service_order_id=$1 ORDER BY n.created_at DESC,n.id DESC',
         [order.id]
@@ -2044,7 +2050,7 @@ const route = async (request) => {
   const detailsMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
   if(method==='POST'&&detailsMatch){
     const session=await requireActive(request),u=session.user;
-    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji zlecenia.'),{status:403});
+    if(!SERVICE_INTAKE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji danych przyjęcia.'),{status:403});
     const found=(await q('SELECT id,point_id,home_point_id,current_point_id,handling_mode,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
@@ -2065,8 +2071,11 @@ const route = async (request) => {
       if(conflict)return json(request,{error:'IMEI_CONFLICT',message:'Ten IMEI jest już przypisany do innego urządzenia.'},409);
     }
 
-    const etaText=found.handling_mode==='TRANSFER_ONLY'?'':cleanText(body.estimatedCompletionAt,64);
-    let estimatedCompletionAt=found.handling_mode==='TRANSFER_ONLY'?found.estimated_completion_at:null;
+    const canEditWorkflow=SERVICE_EDIT_ROLES.has(u.role_code);
+    const etaText=canEditWorkflow&&found.handling_mode!=='TRANSFER_ONLY'?cleanText(body.estimatedCompletionAt,64):'';
+    let estimatedCompletionAt=canEditWorkflow
+      ? (found.handling_mode==='TRANSFER_ONLY'?found.estimated_completion_at:null)
+      : found.estimated_completion_at;
     if(etaText){
       const date=new Date(etaText);
       if(Number.isNaN(date.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
@@ -2075,11 +2084,17 @@ const route = async (request) => {
 
     const canManageAssignment=SERVICE_MANAGE_ROLES.has(u.role_code);
     const canEditCosts=SERVICE_EDIT_ROLES.has(u.role_code);
+    if(!canEditWorkflow&&('estimatedCompletionAt' in body)&&body.estimatedCompletionAt){
+      throw Object.assign(new Error('Rola USER nie może zmieniać terminu realizacji.'),{status:403});
+    }
     if(found.handling_mode==='TRANSFER_ONLY'&&('assignedTechnicianId' in body||'estimatedCost' in body||'finalCost' in body)){
       return json(request,{error:'TRANSFER_ONLY_DETAILS_LOCKED',message:'W trybie „Tylko przekazanie” nie ustawia się serwisanta ani cen naprawy.'},409);
     }
     if(!canManageAssignment&&'assignedTechnicianId' in body){
       throw Object.assign(new Error('Tylko kierownictwo punktu może zmieniać przypisanego technika.'),{status:403});
+    }
+    if(!canEditCosts&&('estimatedCost' in body||'finalCost' in body)){
+      throw Object.assign(new Error('Brak uprawnień do danych kosztowych zlecenia.'),{status:403});
     }
 
     let assignedTechnicianId=found.assigned_technician_id||null;
@@ -2137,7 +2152,8 @@ const route = async (request) => {
     const pointId=cleanText(body.pointId,80);await requirePoint(u,pointId);
     const firstName=cleanText(body.firstName,80),lastName=cleanText(body.lastName,100),email=normalizeEmail(cleanText(body.email,180)),phone=cleanText(body.phone,50),phoneNorm=normalizePhone(phone),brand=cleanText(body.brand,80),model=cleanText(body.model,120),issue=cleanText(body.issueDescription,2000),orderType=String(body.orderType||'REPAIR').toUpperCase(),handlingMode=String(body.handlingMode||'STANDARD').toUpperCase();
     const imei=cleanText(body.imei,32).replace(/\s+/g,''),serialNumber=cleanText(body.serialNumber,120),deviceNotes=cleanText(body.deviceNotes,1000);
-    const etaText=cleanText(body.estimatedCompletionAt,64);
+    const canSetIntakeEta=SERVICE_EDIT_ROLES.has(u.role_code);
+    const etaText=canSetIntakeEta?cleanText(body.estimatedCompletionAt,64):'';
     let estimatedCompletionAt=null;
     if(etaText){
       const eta=new Date(etaText);
@@ -2147,7 +2163,8 @@ const route = async (request) => {
     const canManage=SERVICE_MANAGE_ROLES.has(u.role_code);
     let assignedTechnicianId=u.role_code==='TECHNICIAN'?u.id:(canManage?(cleanText(body.assignedTechnicianId,80)||null):null);
     let estimatedCost=null;
-    if(body.estimatedCost!==undefined&&body.estimatedCost!==''){
+    if(!SERVICE_EDIT_ROLES.has(u.role_code)&&body.estimatedCost!==undefined&&body.estimatedCost!=='')throw Object.assign(new Error('Brak uprawnień do danych kosztowych zlecenia.'),{status:403});
+    if(SERVICE_EDIT_ROLES.has(u.role_code)&&body.estimatedCost!==undefined&&body.estimatedCost!==''){
       estimatedCost=Number(body.estimatedCost);
       if(!Number.isFinite(estimatedCost)||estimatedCost<0)return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
     }
@@ -2231,15 +2248,17 @@ const route = async (request) => {
       }catch(auditError){
         console.error('[service order audit]',auditError);
       }
-      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,handlingMode,issueDescription:issue,status:'RECEIVED',assignedTechnicianId:handlingMode==='TRANSFER_ONLY'?null:assignedTechnicianId,estimatedCost:handlingMode==='TRANSFER_ONLY'?null:estimatedCost,estimatedCompletionAt:order.estimated_completion_at||null,receivedAt:order.received_at},reusedCustomer:reused,reusedDevice,notification},201);
+      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,handlingMode,issueDescription:issue,status:'RECEIVED',assignedTechnicianId:handlingMode==='TRANSFER_ONLY'?null:assignedTechnicianId,estimatedCost:SERVICE_EDIT_ROLES.has(u.role_code)&&handlingMode!=='TRANSFER_ONLY'?estimatedCost:null,estimatedCompletionAt:order.estimated_completion_at||null,receivedAt:order.received_at},reusedCustomer:reused,reusedDevice,notification},201);
     }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
   }
 
   const statusMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/status$/);
   if(method==='POST'&&statusMatch){
     const session=await requireActive(request),u=session.user;
-    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
     const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500),actingPointId=cleanText(body.actingPointId,80);
+    const canEditStatus=SERVICE_EDIT_ROLES.has(u.role_code);
+    const canCancelOnly=u.role_code==='USER'&&next==='CANCELLED';
+    if(!canEditStatus&&!canCancelOnly)throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
     if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
 
     const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
@@ -2443,7 +2462,7 @@ const route = async (request) => {
   const createTransferMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/transfer$/);
   if(method==='POST'&&createTransferMatch){
     const session=await requireActive(request),u=session.user;
-    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przekazywania zleceń.'),{status:403});
+    if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przekazywania zleceń.'),{status:403});
     const order=(await q('SELECT id,point_id,home_point_id,current_point_id,status,handling_mode,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[createTransferMatch[1]])).rows[0];
     if(!order)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,order.id);
@@ -2495,7 +2514,7 @@ const route = async (request) => {
   const transferStatusMatch=url.pathname.match(/^\/service\/transfers\/([^/]+)\/status$/);
   if(method==='POST'&&transferStatusMatch){
     const session=await requireActive(request),u=session.user;
-    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do obsługi przekazania.'),{status:403});
+    if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do obsługi przekazania.'),{status:403});
     const transfer=(await q('SELECT * FROM service_order_transfers WHERE id=$1 LIMIT 1',[transferStatusMatch[1]])).rows[0];
     if(!transfer)return json(request,{error:'NOT_FOUND'},404);
 

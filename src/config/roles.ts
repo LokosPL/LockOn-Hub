@@ -75,8 +75,8 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
   USER: {
     label: 'Użytkownik',
     shortLabel: 'Użytkownik',
-    description: 'Podstawowy dostęp do przypisanego punktu i przeglądarki.',
-    navigation: ['dashboard', 'browser', 'settings'],
+    description: 'Przyjmowanie zleceń, podstawowa obsługa klienta i przekazania urządzeń w przypisanym punkcie.',
+    navigation: ['dashboard', 'service', 'browser', 'settings'],
     canManageUpdates: false,
     canManageSettings: false,
     canUseSupportDesk: false,

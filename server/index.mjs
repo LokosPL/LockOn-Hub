@@ -37,9 +37,10 @@ const googleVerifier = new OAuth2Client();
 const ROLES = ['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER'];
 const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
-const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN']);
-const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
+const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const SERVICE_INTAKE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 
 const nowIso = () => new Date().toISOString();
@@ -726,8 +727,9 @@ const handle = async (req, res) => {
     const issueDescription = cleanText(body.issueDescription, 2000);
     const orderType = String(body.orderType || 'REPAIR').toUpperCase();
     const handlingMode = String(body.handlingMode || 'STANDARD').toUpperCase();
-    const etaText = cleanText(body.estimatedCompletionAt, 64);
-    let estimatedCompletionAt = null;
+    const canEditWorkflow = SERVICE_EDIT_ROLES.has(user.role);
+    const etaText = canEditWorkflow ? cleanText(body.estimatedCompletionAt, 64) : '';
+    let estimatedCompletionAt = canEditWorkflow ? null : order.estimatedCompletionAt;
     if (etaText) {
       const eta = new Date(etaText);
       if (Number.isNaN(eta.getTime())) return json(res, 400, { error: 'ETA', message: 'Nieprawidłowy przewidywany termin.' });
@@ -738,7 +740,8 @@ const handle = async (req, res) => {
       ? user.id
       : (canManage ? (cleanText(body.assignedTechnicianId, 80) || null) : null);
     let estimatedCost = null;
-    if (body.estimatedCost !== undefined && body.estimatedCost !== '') {
+    if (!SERVICE_EDIT_ROLES.has(user.role) && body.estimatedCost !== undefined && body.estimatedCost !== '') return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do danych kosztowych zlecenia.' });
+    if (SERVICE_EDIT_ROLES.has(user.role) && body.estimatedCost !== undefined && body.estimatedCost !== '') {
       estimatedCost = Number(body.estimatedCost);
       if (!Number.isFinite(estimatedCost) || estimatedCost < 0) return json(res, 400, { error: 'ESTIMATED_COST', message: 'Nieprawidłowy koszt szacowany.' });
     }
@@ -942,6 +945,7 @@ const handle = async (req, res) => {
     if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
 
     if (method === 'GET') {
+      if (!SERVICE_EDIT_ROLES.has(user.role)) return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do notatek wewnętrznych zlecenia.' });
       const notes = db.serviceOrderNotes
         .filter((item) => item.serviceOrderId === order.id)
         .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
@@ -972,7 +976,7 @@ const handle = async (req, res) => {
   if (method === 'POST' && localDetailsMatch) {
     const user = requireActive(req, res);
     if (!user) return;
-    if (!SERVICE_EDIT_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
+    if (!SERVICE_INTAKE_EDIT_ROLES.has(user.role)) return json(res, 403, { error: 'FORBIDDEN' });
     const order = db.serviceOrders.find((item) => item.id === localDetailsMatch[1]);
     if (!order) return json(res, 404, { error: 'NOT_FOUND' });
     if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
@@ -987,7 +991,7 @@ const handle = async (req, res) => {
     const otherDevice = imei ? db.devices.find((item) => item.imei === imei && item.id !== device.id) : null;
     if (otherDevice) return json(res, 409, { error: 'IMEI_CONFLICT', message: 'Ten IMEI jest już przypisany do innego urządzenia.' });
 
-    const etaText = cleanText(body.estimatedCompletionAt, 64);
+    const etaText = SERVICE_EDIT_ROLES.has(user.role) ? cleanText(body.estimatedCompletionAt, 64) : '';
     let estimatedCompletionAt = null;
     if (etaText) {
       const eta = new Date(etaText);
@@ -996,6 +1000,9 @@ const handle = async (req, res) => {
     }
 
     const canManageAssignment = SERVICE_MANAGE_ROLES.has(user.role);
+    const canEditCosts = SERVICE_EDIT_ROLES.has(user.role);
+    if (!canEditWorkflow && 'estimatedCompletionAt' in body && body.estimatedCompletionAt) return json(res, 403, { error:'FORBIDDEN', message:'Rola USER nie może zmieniać terminu realizacji.' });
+    if (!canEditCosts && ('estimatedCost' in body || 'finalCost' in body)) return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do danych kosztowych zlecenia.' });
     if (!canManageAssignment && 'assignedTechnicianId' in body) {
       return json(res, 403, { error: 'FORBIDDEN', message: 'Tylko kierownictwo punktu może zmieniać przypisanego technika.' });
     }
@@ -1013,12 +1020,12 @@ const handle = async (req, res) => {
       }
       order.assignedTechnicianId = assignedTechnicianId;
     }
-    if ('estimatedCost' in body) {
+    if (canEditCosts && 'estimatedCost' in body) {
       const estimatedCost = body.estimatedCost == null || body.estimatedCost === '' ? null : Number(body.estimatedCost);
       if (estimatedCost != null && (!Number.isFinite(estimatedCost) || estimatedCost < 0)) return json(res, 400, { error: 'ESTIMATED_COST' });
       order.estimatedCost = estimatedCost;
     }
-    if ('finalCost' in body) {
+    if (canEditCosts && 'finalCost' in body) {
       const finalCost = body.finalCost == null || body.finalCost === '' ? null : Number(body.finalCost);
       if (finalCost != null && (!Number.isFinite(finalCost) || finalCost < 0)) return json(res, 400, { error: 'FINAL_COST' });
       order.finalCost = finalCost;
@@ -1038,14 +1045,14 @@ const handle = async (req, res) => {
   if (method === 'POST' && serviceStatusMatch) {
     const user = requireActive(req, res);
     if (!user) return;
-    if (!SERVICE_EDIT_ROLES.has(user.role)) {
-      return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do zmiany statusu.' });
-    }
     const order = db.serviceOrders.find((item) => item.id === serviceStatusMatch[1]);
     if (!order) return json(res, 404, { error: 'NOT_FOUND' });
     if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
     const body = await readBody(req);
     const status = String(body.status || '').toUpperCase();
+    if (!SERVICE_EDIT_ROLES.has(user.role) && !(user.role === 'USER' && status === 'CANCELLED')) {
+      return json(res, 403, { error: 'FORBIDDEN', message: 'Brak uprawnień do zmiany statusu.' });
+    }
     const allowed = ['RECEIVED', 'DIAGNOSIS', 'WAITING_PARTS', 'IN_REPAIR', 'REPAIR_DONE', 'READY', 'COMPLETED', 'CANCELLED', 'REJECTED'];
     if (!allowed.includes(status)) return json(res, 400, { error: 'STATUS' });
     if ((order.handlingMode || 'STANDARD') === 'TRANSFER_ONLY' && status !== order.status && status !== 'CANCELLED') {
@@ -1240,6 +1247,7 @@ const handle = async (req, res) => {
   if (method === 'GET' && url.pathname === '/finance/revenues') {
     const user = requireActive(req, res);
     if (!user) return;
+    if (user.role === 'USER') return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do rozliczeń.' });
     const entries = db.revenueEntries.filter((entry) => revenueVisibleTo(user, entry)).map(revenueView);
     const approved = entries.filter((e) => e.status === 'APPROVED');
     const pending = entries.filter((e) => e.status === 'PENDING');
@@ -1316,6 +1324,7 @@ const handle = async (req, res) => {
   if (method === 'GET' && url.pathname === '/dashboard') {
     const user = requireActive(req, res);
     if (!user) return;
+    if (user.role === 'USER') return json(res, 200, { pointCount:0,activeUsers:0,pendingUsers:0,approvedRevenue:0,pendingRevenue:0,bossShare:0,technicianShare:0 });
     const visibleEntries = db.revenueEntries.filter((entry) => revenueVisibleTo(user, entry));
     const visiblePointIds = GLOBAL_ROLES.has(user.role) ? db.points.map((p) => p.id) : user.pointIds || [];
     const visibleUsers = GLOBAL_ROLES.has(user.role)
