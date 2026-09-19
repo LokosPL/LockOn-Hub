@@ -2464,26 +2464,30 @@ const route = async (request) => {
     if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do testowania Gmail.'),{status:403});
     const body=await readJson(request),pointId=cleanText(body.pointId,80);
     await requirePoint(u,pointId);
-    const sender=(await q(
-      "SELECT e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,p.name AS point_name FROM point_email_senders e JOIN points p ON p.id=e.point_id LEFT JOIN point_notification_settings ns ON ns.point_id=e.point_id WHERE e.point_id=$1 LIMIT 1",
-      [pointId]
-    )).rows[0];
-    if(!sender||sender.status!=='ACTIVE')return json(request,{error:'NO_SENDER',message:'Najpierw połącz aktywne konto Gmail z tym punktem.'},409);
+    const senderBase=await loadActiveMailSender(pointId);
+    if(!senderBase)return json(request,{error:'NO_SENDER',message:'Brak aktywnego firmowego nadawcy Gmail.'},409);
+    const point=(await q("SELECT name FROM points WHERE id=$1 LIMIT 1",[pointId])).rows[0];
+    const settings=await mailSettingsForPoint(pointId);
+    const sender={
+      ...senderBase,
+      sender_display_name:settings.sender_display_name||'LockOn ServiceOS',
+      point_name:point?.name||pointId
+    };
     const recipient=normalizeEmail(u.email);
     const subject='LockOn ServiceOS · test powiadomień · '+sender.point_name;
     const textBody='To jest wiadomość testowa z LockOn ServiceOS.\n\nPunkt: '+sender.point_name+'\nNadawca: '+sender.sender_email+'\n\nJeżeli ją widzisz, integracja Gmail działa poprawnie.';
     const htmlBody='<!doctype html><html lang="pl"><body style="background:#111318;color:#eceff3;font-family:Arial,sans-serif;padding:28px"><div style="max-width:600px;margin:auto;border:1px solid #2a2f37;border-radius:16px;background:#171a20;padding:22px"><div style="color:#ff7b45;font-size:12px;font-weight:700">LOCKON SERVICEOS</div><h2 style="margin:8px 0 12px">Test powiadomień Gmail</h2><p>Integracja dla punktu <strong>'+escapeHtml(sender.point_name)+'</strong> działa poprawnie.</p><p style="color:#89939e">Nadawca: '+escapeHtml(sender.sender_email)+'</p></div></body></html>';
     try{
       const sent=await sendGmail(sender,recipient,subject,textBody,htmlBody,sender.sender_display_name);
-      await q("UPDATE point_email_senders SET last_error=NULL,status='ACTIVE',updated_at=now() WHERE point_id=$1",[pointId]);
-      await audit(u.id,'GMAIL_TEST_SENT','point',pointId,pointId,{recipient,messageId:sent.id});
+      await q("UPDATE point_email_senders SET last_error=NULL,status='ACTIVE',updated_at=now() WHERE point_id=$1",[sender.sender_point_id]);
+      await audit(u.id,'GMAIL_TEST_SENT','point',pointId,pointId,{recipient,messageId:sent.id,senderPointId:sender.sender_point_id,inherited:sender.sender_point_id!==pointId});
       return json(request,{ok:true,recipient,messageId:sent.id});
     }catch(error){
       const message=cleanText(error instanceof Error?error.message:error,500);
       if(isGmailReauthError(error)){
-        await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1",[pointId,message]);
+        await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1",[sender.sender_point_id,message]);
       }else{
-        await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1",[pointId,message]);
+        await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1",[sender.sender_point_id,message]);
       }
       throw Object.assign(new Error(message),{status:502,code:isGmailReauthError(error)?'GMAIL_REAUTH_REQUIRED':'GMAIL_TEST_FAILED'});
     }
