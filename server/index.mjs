@@ -944,6 +944,7 @@ const handle = async (req, res) => {
     if (!canSeePoint(user, order.pointId)) return json(res, 403, { error: 'POINT' });
 
     if (method === 'GET') {
+      if (!SERVICE_EDIT_ROLES.has(user.role)) return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do notatek wewnętrznych zlecenia.' });
       const notes = db.serviceOrderNotes
         .filter((item) => item.serviceOrderId === order.id)
         .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
