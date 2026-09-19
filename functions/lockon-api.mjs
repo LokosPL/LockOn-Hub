@@ -394,7 +394,8 @@ const orderView = (row) => ({
   estimatedCompletionAt: row.estimated_completion_at || null,
   receivedAt: row.received_at,
   completedAt: row.completed_at || null,
-  createdAt: row.created_at
+  createdAt: row.created_at,
+  updatedAt: row.updated_at || row.created_at
 });
 
 const orderViewForUser = (row, user) => {
@@ -427,6 +428,176 @@ const transferView = (row) => ({
   deliveredAt: row.delivered_at || null,
   acceptedAt: row.accepted_at || null,
   updatedAt: row.updated_at
+});
+
+const WORKFLOW_STAGE_TOTAL = 10;
+const CLOSED_ORDER_STATUSES = new Set(['COMPLETED','CANCELLED','REJECTED']);
+
+const deriveOrderWorkflow = (order, transfers, openTransfer, currentPointId, homePointId, returnRequired, canMarkReady) => {
+  const status = String(order.status || 'RECEIVED').toUpperCase();
+  const now = Date.now();
+  const dueAtMs = order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).getTime() : NaN;
+  const dueInMinutes = Number.isFinite(dueAtMs) ? Math.round((dueAtMs - now) / 60000) : null;
+  const flags = [];
+  let stageNumber = 1;
+  let stageLabel = order.statusLabel || status;
+  let nextActionCode = 'REVIEW_ORDER';
+  let nextAction = 'Sprawdź zlecenie i wybierz kolejny etap.';
+  let attentionCode = 'ACTIVE';
+  let attentionLabel = 'W toku';
+  let sortRank = 70;
+
+  if (CLOSED_ORDER_STATUSES.has(status)) {
+    stageNumber = 10;
+    stageLabel = status === 'COMPLETED' ? 'Zakończone' : (order.statusLabel || status);
+    nextActionCode = 'NONE';
+    nextAction = 'Brak dalszych działań.';
+    attentionCode = 'CLOSED';
+    attentionLabel = 'Zamknięte';
+    sortRank = 100;
+    flags.push('CLOSED');
+  } else if (status === 'READY') {
+    stageNumber = 9;
+    stageLabel = 'Gotowe do odbioru';
+    nextActionCode = 'HANDOVER_CUSTOMER';
+    nextAction = 'Wydaj urządzenie klientowi i zakończ zlecenie.';
+    attentionCode = 'READY_FOR_PICKUP';
+    attentionLabel = 'Gotowe do odbioru';
+    sortRank = 30;
+    flags.push('READY_FOR_PICKUP','ACTION_NOW');
+  } else if (openTransfer) {
+    const returning = openTransfer.kind === 'RETURN_HOME';
+    if (returning) {
+      stageNumber = openTransfer.status === 'DELIVERED' ? 8 : 7;
+      stageLabel = openTransfer.status === 'DELIVERED' ? 'Dostarczone do punktu macierzystego' : 'Zwrot do punktu macierzystego';
+      if (openTransfer.status === 'DELIVERED') {
+        nextActionCode = 'ACCEPT_RETURN_HOME';
+        nextAction = 'Przyjmij urządzenie w punkcie macierzystym.';
+        attentionCode = 'ACTION_NOW';
+        attentionLabel = 'Wymaga działania teraz';
+        sortRank = 10;
+        flags.push('ACTION_NOW','RETURN_HOME');
+      } else {
+        nextActionCode = 'TRACK_RETURN_HOME';
+        nextAction = 'Doprowadź zwrot do punktu macierzystego i potwierdź dostarczenie.';
+        attentionCode = 'IN_TRANSIT';
+        attentionLabel = 'W drodze';
+        sortRank = 40;
+        flags.push('IN_TRANSIT','RETURN_HOME');
+      }
+    } else {
+      stageNumber = 4;
+      stageLabel = openTransfer.status === 'DELIVERED' ? 'Czeka na przyjęcie w serwisie' : 'W drodze do serwisu';
+      if (openTransfer.status === 'DELIVERED') {
+        nextActionCode = 'ACCEPT_EXTERNAL_SERVICE';
+        nextAction = 'Przyjmij urządzenie w serwisie docelowym.';
+        attentionCode = 'ACTION_NOW';
+        attentionLabel = 'Wymaga działania teraz';
+        sortRank = 10;
+        flags.push('ACTION_NOW','WAITING_SERVICE');
+      } else {
+        nextActionCode = 'TRACK_EXTERNAL_SERVICE';
+        nextAction = 'Doprowadź przekazanie do serwisu i potwierdź dostarczenie.';
+        attentionCode = 'IN_TRANSIT';
+        attentionLabel = 'W drodze';
+        sortRank = 40;
+        flags.push('IN_TRANSIT','WAITING_SERVICE');
+      }
+    }
+  } else if (status === 'REPAIR_DONE') {
+    stageNumber = 6;
+    stageLabel = 'Naprawa zakończona';
+    if (returnRequired || (currentPointId && currentPointId !== homePointId)) {
+      nextActionCode = 'RETURN_HOME';
+      nextAction = 'Odeślij urządzenie do punktu macierzystego.';
+      flags.push('ACTION_NOW','WAITING_SERVICE','RETURN_HOME');
+    } else {
+      nextActionCode = 'MARK_READY';
+      nextAction = 'Oznacz urządzenie jako gotowe do odbioru.';
+      flags.push('ACTION_NOW');
+    }
+    attentionCode = 'ACTION_NOW';
+    attentionLabel = 'Wymaga działania teraz';
+    sortRank = 10;
+  } else if (status === 'IN_REPAIR') {
+    stageNumber = 5;
+    stageLabel = 'W naprawie';
+    nextActionCode = 'COMPLETE_REPAIR';
+    nextAction = 'Dokończ naprawę i ustaw „Naprawa zakończona”.';
+    attentionCode = 'ACTIVE';
+    attentionLabel = 'W naprawie';
+    sortRank = 60;
+    flags.push('ACTIVE_REPAIR');
+  } else if (status === 'WAITING_PARTS') {
+    stageNumber = 4;
+    stageLabel = 'Oczekiwanie na części';
+    nextActionCode = 'RESUME_REPAIR';
+    nextAction = 'Sprawdź części i wznow naprawę, gdy będą dostępne.';
+    attentionCode = 'WAITING_PARTS';
+    attentionLabel = 'Czeka na części';
+    sortRank = 55;
+    flags.push('WAITING_PARTS');
+  } else if (status === 'DIAGNOSIS') {
+    stageNumber = 3;
+    stageLabel = 'Diagnoza';
+    nextActionCode = 'FINISH_DIAGNOSIS';
+    nextAction = 'Zakończ diagnozę i rozpocznij naprawę albo ustaw oczekiwanie na części.';
+    attentionCode = 'ACTION_NOW';
+    attentionLabel = 'Wymaga działania teraz';
+    sortRank = 10;
+    flags.push('ACTION_NOW');
+  } else {
+    stageNumber = 1;
+    stageLabel = 'Przyjęte';
+    nextActionCode = 'START_DIAGNOSIS';
+    nextAction = currentPointId && currentPointId !== homePointId
+      ? 'Rozpocznij diagnozę w aktualnym serwisie.'
+      : 'Rozpocznij diagnozę urządzenia.';
+    attentionCode = currentPointId && currentPointId !== homePointId ? 'WAITING_SERVICE' : 'ACTION_NOW';
+    attentionLabel = currentPointId && currentPointId !== homePointId ? 'Czeka na serwis' : 'Wymaga działania teraz';
+    sortRank = currentPointId && currentPointId !== homePointId ? 50 : 10;
+    flags.push(attentionCode);
+  }
+
+  if (!CLOSED_ORDER_STATUSES.has(status) && dueInMinutes != null) {
+    if (dueInMinutes < 0) {
+      flags.unshift('OVERDUE');
+      attentionCode = 'OVERDUE';
+      attentionLabel = 'Po terminie';
+      sortRank = 0;
+    } else if (dueInMinutes <= 24 * 60) {
+      flags.unshift('DUE_SOON');
+      attentionCode = 'DUE_SOON';
+      attentionLabel = 'Kończy się termin';
+      sortRank = Math.min(sortRank, 5);
+    }
+  }
+
+  return {
+    stageNumber,
+    stageTotal: WORKFLOW_STAGE_TOTAL,
+    stageLabel,
+    nextActionCode,
+    nextAction,
+    attentionCode,
+    attentionLabel,
+    flags: [...new Set(flags)],
+    dueAt: Number.isFinite(dueAtMs) ? new Date(dueAtMs).toISOString() : null,
+    dueInMinutes,
+    progressPercent: Math.round((stageNumber / WORKFLOW_STAGE_TOTAL) * 100),
+    sortRank,
+    canMarkReady
+  };
+};
+
+const sortOrdersByWorkflow = (orders) => [...orders].sort((a,b) => {
+  const rankA = Number(a.workflow?.sortRank ?? 80);
+  const rankB = Number(b.workflow?.sortRank ?? 80);
+  if (rankA !== rankB) return rankA - rankB;
+  const dueA = a.workflow?.dueAt ? new Date(a.workflow.dueAt).getTime() : Number.POSITIVE_INFINITY;
+  const dueB = b.workflow?.dueAt ? new Date(b.workflow.dueAt).getTime() : Number.POSITIVE_INFINITY;
+  if (dueA !== dueB) return dueA - dueB;
+  return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime();
 });
 
 const loadTransfersForOrders = async (orderIds) => {
@@ -494,7 +665,8 @@ const attachTransfers = async (orders) => {
       canMarkReady,
       openTransfer,
       latestTransfer,
-      transfers
+      transfers,
+      workflow: deriveOrderWorkflow(order, transfers, openTransfer, currentPointId, homePointId, returnRequired, canMarkReady)
     };
   });
 };
@@ -534,13 +706,13 @@ const listVisibleOrders = async (user) => {
     const { rows } = await q(
       "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150"
     );
-    return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
+    return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
   }
   const { rows } = await q(
     "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150",
     [user.id]
   );
-  return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
+  return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
 };
 
 const listVisibleCustomerOrders = async (user, customerId) => {
