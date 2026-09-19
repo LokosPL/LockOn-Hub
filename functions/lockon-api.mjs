@@ -276,10 +276,22 @@ const requirePoint = async (user, pointId) => {
   if (!(await canSeePoint(user, pointId))) throw Object.assign(new Error('Brak dostępu do wybranego punktu.'), { status: 403, code: 'POINT_FORBIDDEN' });
 };
 
-const audit = async (actorUserId, action, entityType, entityId = null, pointId = null, metadata = {}) => {
+const audit = async (actor, action, entityType, entityId = null, pointId = null, metadata = {}) => {
+  const actorUserId = typeof actor === 'string'
+    ? actor
+    : actor?.user?.id || actor?.id || null;
+  const actorRole = typeof actor === 'object'
+    ? actor?.user?.role_code || actor?.role_code || null
+    : null;
+  const clientType = typeof actor === 'object' ? actor?.clientType || null : null;
+  const enrichedMetadata = {
+    ...(metadata && typeof metadata === 'object' ? metadata : {}),
+    ...(actorRole ? { actorRole } : {}),
+    ...(clientType ? { clientType } : {})
+  };
   await q(
     'INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,point_id,metadata) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)',
-    [makeId('aud'), actorUserId || null, action, entityType, entityId, pointId, JSON.stringify(metadata)]
+    [makeId('aud'), actorUserId, action, entityType, entityId, pointId, JSON.stringify(enrichedMetadata)]
   );
 };
 
@@ -384,7 +396,7 @@ const loginProfile = async (profile, clientType, allowCreate) => {
   }
 
   const token = await createSession(user.id, clientType);
-  await audit(user.id, 'LOGIN_' + clientType, 'user', user.id, null, {});
+  await audit({ user, clientType }, 'LOGIN_' + clientType, 'user', user.id, null, {});
   return { token, ...(await authPayload(user)) };
 };
 
@@ -1180,7 +1192,7 @@ const generateWebsiteCode = async (session) => {
     'INSERT INTO website_auth_codes(id,user_id,code_hash,expires_at,created_from_session_id) VALUES($1,$2,$3,$4,$5)',
     [makeId('wac'), session.user.id, tokenHash(code), expiresAt, session.sessionId]
   );
-  await audit(session.user.id, 'WEBSITE_CODE_CREATED', 'user', session.user.id, null, {});
+  await audit(session, 'WEBSITE_CODE_CREATED', 'user', session.user.id, null, {});
   return { code: pretty, expiresAt: expiresAt.toISOString() };
 };
 
@@ -1606,7 +1618,14 @@ const route = async (request) => {
     });
   }
 
-  if (method === 'POST' && url.pathname === '/admin/points') {
+  if (method === 'GET' && url.pathname === '/admin/audit') {
+    const session = await requireActive(request);
+    if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
+    const params = [];
+    const where = [];
+    const addFilter = (value, expression) => {
+      params.push(value);
+      where.push(expression.replace('?', '
     const session = await requireActive(request);
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
     const body = await readJson(request);
@@ -1619,7 +1638,7 @@ const route = async (request) => {
     if (result.rows[0]) return json(request, pointView(result.rows[0]));
     const pointId=makeId('pnt');
     result=await q("INSERT INTO points(id,name,city,active,service_enabled,accepts_external_repairs,external_repairs_paused,service_note) VALUES($1,$2,$3,true,$4,$5,false,NULLIF($6,'')) RETURNING id,name,city,active,service_enabled,accepts_external_repairs,external_repairs_paused,service_note",[pointId,name,city,serviceEnabled,acceptsExternalRepairs,serviceNote]);
-    await audit(session.user.id,'POINT_CREATED','point',pointId,pointId,{serviceEnabled,acceptsExternalRepairs});
+    await audit(session,'POINT_CREATED','point',pointId,pointId,{serviceEnabled,acceptsExternalRepairs});
     return json(request, pointView(result.rows[0]), 201);
   }
 
@@ -1661,7 +1680,7 @@ const route = async (request) => {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
     } finally{client.release();}
-    await audit(session.user.id,'USER_APPROVED','user',target.id,null,{role,pointIds,technicianSplitPercent});
+    await audit(session,'USER_APPROVED','user',target.id,null,{role,pointIds,technicianSplitPercent});
     return json(request, await authPayload(await loadUser(target.id)));
   }
 
@@ -1672,7 +1691,7 @@ const route = async (request) => {
     await q("UPDATE users SET role_code=NULL,status='REJECTED',updated_at=now() WHERE id=$1",[target.id]);
     await q('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);
     await q("UPDATE access_requests SET status='REJECTED',resolved_at=now(),resolved_by_user_id=$2 WHERE user_id=$1 AND status='PENDING'",[target.id,session.user.id]);
-    await audit(session.user.id,'USER_REJECTED','user',target.id);
+    await audit(session,'USER_REJECTED','user',target.id);
     return json(request,{ok:true});
   }
 
@@ -1683,7 +1702,7 @@ const route = async (request) => {
     const body=await readJson(request);const role=String(body.role||target.role_code||'USER').toUpperCase();const pointIds=Array.isArray(body.pointIds)?body.pointIds.map(String):[];const technicianSplitPercent=role==='TECHNICIAN'?normalizeTechnicianPercent(body.technicianSplitPercent):null;
     if(!REQUESTABLE_ROLES.has(role))return json(request,{error:'ROLE'},400);if(!GLOBAL_ROLES.has(role)&&pointIds.length===0)return json(request,{error:'POINT_REQUIRED'},400);if(role==='TECHNICIAN'&&technicianSplitPercent===null)return json(request,{error:'TECHNICIAN_SPLIT',message:'Ustaw procent rozliczenia serwisanta od 0 do 100%.'},400);
     const client=await pool.connect();try{await client.query('BEGIN');await client.query("UPDATE users SET role_code=$1,technician_split_percent=CASE WHEN $1='TECHNICIAN' THEN $3 ELSE technician_split_percent END,status='ACTIVE',updated_at=now() WHERE id=$2",[role,target.id,technicianSplitPercent]);await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);if(!GLOBAL_ROLES.has(role))for(const pointId of pointIds)await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK').catch(()=>undefined);throw error;}finally{client.release();}
-    await audit(session.user.id,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent});
+    await audit(session,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent});
     return json(request,await authPayload(await loadUser(target.id)));
   }
 
@@ -1703,7 +1722,7 @@ const route = async (request) => {
     row.active_technician_count=techCount;
     row.effective_service_enabled=row.service_enabled===true||techCount>0;
     row.effective_accepts_external_repairs=row.external_repairs_paused!==true&&(techCount>0||(row.service_enabled===true&&row.accepts_external_repairs===true));
-    await audit(session.user.id,'POINT_SERVICE_UPDATED','point',row.id,row.id,{serviceEnabled,acceptsExternalRepairs,externalRepairsPaused:row.external_repairs_paused,activeTechnicianCount:techCount});
+    await audit(session,'POINT_SERVICE_UPDATED','point',row.id,row.id,{serviceEnabled,acceptsExternalRepairs,externalRepairsPaused:row.external_repairs_paused,activeTechnicianCount:techCount});
     return json(request,pointView(row));
   }
 
@@ -1718,10 +1737,10 @@ const route = async (request) => {
     if(blocked){
       await q("UPDATE users SET blocked_at=now(),blocked_reason=NULLIF($1,''),blocked_by_user_id=$2,updated_at=now() WHERE id=$3",[reason,session.user.id,target.id]);
       await q("UPDATE auth_sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE user_id=$1 AND revoked_at IS NULL",[target.id]);
-      await audit(session.user.id,'USER_BLOCKED','user',target.id,null,{reason:reason||null});
+      await audit(session,'USER_BLOCKED','user',target.id,null,{reason:reason||null});
     }else{
       await q("UPDATE users SET blocked_at=NULL,blocked_reason=NULL,blocked_by_user_id=NULL,updated_at=now() WHERE id=$1",[target.id]);
-      await audit(session.user.id,'USER_UNBLOCKED','user',target.id);
+      await audit(session,'USER_UNBLOCKED','user',target.id);
     }
     return json(request,await publicUser(await loadUser(target.id)));
   }
@@ -1736,7 +1755,7 @@ const route = async (request) => {
     const result=keepCurrent
       ? await q("UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL AND id<>$2",[target.id,keepCurrent])
       : await q("UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL",[target.id]);
-    await audit(session.user.id,'USER_SESSIONS_REVOKED','user',target.id,null,{revoked:Number(result.rowCount||0)});
+    await audit(session,'USER_SESSIONS_REVOKED','user',target.id,null,{revoked:Number(result.rowCount||0)});
     return json(request,{ok:true,revoked:Number(result.rowCount||0)});
   }
 
@@ -1748,7 +1767,7 @@ const route = async (request) => {
     const result=exceptCurrent
       ? await q("UPDATE auth_sessions SET revoked_at=now() WHERE revoked_at IS NULL AND id<>$1",[session.sessionId])
       : await q("UPDATE auth_sessions SET revoked_at=now() WHERE revoked_at IS NULL");
-    await audit(session.user.id,'ALL_SESSIONS_REVOKED','session',null,null,{revoked:Number(result.rowCount||0),exceptCurrent});
+    await audit(session,'ALL_SESSIONS_REVOKED','session',null,null,{revoked:Number(result.rowCount||0),exceptCurrent});
     return json(request,{ok:true,revoked:Number(result.rowCount||0),exceptCurrent});
   }
 
@@ -1883,7 +1902,7 @@ const route = async (request) => {
     const technicianPercent=normalizeTechnicianPercent(body.technicianPercent);
     if(technicianPercent===null)return json(request,{error:'TECHNICIAN_SPLIT',message:'Ustaw procent serwisanta od 0 do 100%.'},400);
     await q("UPDATE users SET technician_split_percent=$1,updated_at=now() WHERE id=$2",[technicianPercent,u.id]);
-    await audit(u.id,'TECHNICIAN_SETTLEMENT_UPDATED','user',u.id,null,{technicianPercent,bossPercent:Math.round((100-technicianPercent)*100)/100});
+    await audit(session,'TECHNICIAN_SETTLEMENT_UPDATED','user',u.id,null,{technicianPercent,bossPercent:Math.round((100-technicianPercent)*100)/100});
     return json(request,{configured:true,technicianPercent,bossPercent:Math.round((100-technicianPercent)*100)/100});
   }
 
@@ -1910,7 +1929,7 @@ const route = async (request) => {
     const split=splitRevenueAmount(rounded,technicianPercent);
     const id=makeId('rev');
     const row=(await q("INSERT INTO revenue_entries(id,point_id,user_id,amount,currency,category,technician_percent,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,'PLN','SERVICE',$5,'APPROVED',$6,$7,$3,now()) RETURNING created_at,approved_at",[id,pointId,session.user.id,rounded,technicianPercent,note,new Date(workDate+'T12:00:00Z')])).rows[0];
-    await audit(session.user.id,'REVENUE_AUTO_APPROVED','revenue',id,pointId,{amount:rounded,manual:true,technicianPercent});
+    await audit(session,'REVENUE_AUTO_APPROVED','revenue',id,pointId,{amount:rounded,manual:true,technicianPercent});
     return json(request,{id,userId:session.user.id,pointId,serviceOrderId:null,amount:rounded,workDate,note,status:'APPROVED',splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:split.technicianShare,bossShare:split.bossShare,submittedAt:row.created_at,reviewedAt:row.approved_at},201);
   }
 
@@ -2041,7 +2060,7 @@ const route = async (request) => {
     if(!note)return json(request,{error:'NOTE_REQUIRED',message:'Notatka nie może być pusta.'},400);
     const id=makeId('not');
     await q('INSERT INTO service_order_notes(id,service_order_id,author_user_id,body) VALUES($1,$2,$3,$4)',[id,order.id,u.id,note]);
-    await audit(u.id,'SERVICE_NOTE_ADDED','service_order',order.id,order.point_id,{length:note.length});
+    await audit(session,'SERVICE_NOTE_ADDED','service_order',order.id,order.point_id,{length:note.length});
     return json(request,{id,body:note,createdAt:nowIso(),authorUserId:u.id,authorName:u.name||u.email},201);
   }
 
@@ -2132,7 +2151,7 @@ const route = async (request) => {
       throw error;
     }finally{client.release();}
 
-    await audit(u.id,'SERVICE_ORDER_DETAILS_UPDATED','service_order',found.id,found.point_id,{
+    await audit(session,'SERVICE_ORDER_DETAILS_UPDATED','service_order',found.id,found.point_id,{
       assignedTechnicianId,
       estimatedCost,
       finalCost,
@@ -2239,7 +2258,7 @@ const route = async (request) => {
       }
 
       try{
-        await audit(u.id,'SERVICE_ORDER_CREATED','service_order',oid,pointId,{orderType,handlingMode,notification});
+        await audit(session,'SERVICE_ORDER_CREATED','service_order',oid,pointId,{orderType,handlingMode,notification});
       }catch(auditError){
         console.error('[service order audit]',auditError);
       }
@@ -2410,7 +2429,7 @@ const route = async (request) => {
     }
 
     try{
-      await audit(u.id,'SERVICE_STATUS_CHANGED','service_order',found.id,found.point_id,{from:found.status,to:next,notification});
+      await audit(session,'SERVICE_STATUS_CHANGED','service_order',found.id,found.point_id,{from:found.status,to:next,notification});
     }catch(auditError){
       console.error('[service status audit]',auditError);
     }
@@ -2501,7 +2520,7 @@ const route = async (request) => {
     await q('UPDATE service_orders SET current_point_id=NULL,assigned_technician_id=NULL,updated_at=now() WHERE id=$1',[order.id]);
 
     const notification=await queueTransferNotification(u,order.id,row,'IN_TRANSIT',note);
-    await audit(u.id,kind==='RETURN_HOME'?'SERVICE_RETURN_SENT':'SERVICE_TRANSFER_SENT','service_order',order.id,fromPointId,{transferId,toPointId,kind,homePointId,notification});
+    await audit(session,kind==='RETURN_HOME'?'SERVICE_RETURN_SENT':'SERVICE_TRANSFER_SENT','service_order',order.id,fromPointId,{transferId,toPointId,kind,homePointId,notification});
     const enriched=(await loadTransfersForOrders([order.id])).get(order.id)?.find((item)=>item.id===transferId);
     return json(request,{transfer:enriched||transferView({...row,from_point_name:'',to_point_name:destination.name}),notification},201);
   }
@@ -2561,7 +2580,7 @@ const route = async (request) => {
       ? await queueTransferNotification(u,transfer.service_order_id,updated,next,note)
       : {queued:false,sent:false,reason:'EVENT_NOT_EMAILED'};
 
-    await audit(u.id,'SERVICE_TRANSFER_'+next,'service_order',transfer.service_order_id,sourceAction?transfer.from_point_id:transfer.to_point_id,{transferId:transfer.id,kind:transfer.kind,notification});
+    await audit(session,'SERVICE_TRANSFER_'+next,'service_order',transfer.service_order_id,sourceAction?transfer.from_point_id:transfer.to_point_id,{transferId:transfer.id,kind:transfer.kind,notification});
     const full=(await loadTransfersForOrders([transfer.service_order_id])).get(transfer.service_order_id)?.find((item)=>item.id===transfer.id);
     return json(request,{transfer:full||transferView(updated),notification});
   }
@@ -2693,7 +2712,7 @@ const route = async (request) => {
       "INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
       [pointId,u.id,profile.email,encryptSecret(String(tokens.refresh_token))]
     );
-    await audit(u.id,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER'});
+    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER'});
     return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE'});
   }
 
@@ -2708,13 +2727,13 @@ const route = async (request) => {
 
     await q("INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",[pointId,u.id,profile.email,encryptSecret(refreshToken),encryptSecret(clientSecret)]);
 
-    await audit(u.id,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN'});
+    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN'});
     return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE'});
   }
 
   if(method==='DELETE'&&url.pathname==='/integrations/gmail'){
     const session=await requireActive(request),u=session.user;if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień.'),{status:403});
-    const pointId=cleanText(url.searchParams.get('pointId'),80);await requirePoint(u,pointId);await q('DELETE FROM point_email_senders WHERE point_id=$1',[pointId]);await audit(u.id,'GMAIL_DISCONNECTED','point',pointId,pointId,{});
+    const pointId=cleanText(url.searchParams.get('pointId'),80);await requirePoint(u,pointId);await q('DELETE FROM point_email_senders WHERE point_id=$1',[pointId]);await audit(session,'GMAIL_DISCONNECTED','point',pointId,pointId,{});
     return json(request,{ok:true});
   }
 
@@ -2749,7 +2768,7 @@ const route = async (request) => {
       "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,footer_text,updated_by_user_id,updated_at) VALUES($1,$2,$3::text[],$4,NULLIF($5,''),$6,now()) ON CONFLICT(point_id) DO UPDATE SET automatic_email_enabled=EXCLUDED.automatic_email_enabled,notify_statuses=EXCLUDED.notify_statuses,sender_display_name=EXCLUDED.sender_display_name,footer_text=EXCLUDED.footer_text,updated_by_user_id=EXCLUDED.updated_by_user_id,updated_at=now()",
       [pointId,automaticEmailEnabled,notifyStatuses,senderDisplayName,footerText,u.id]
     );
-    await audit(u.id,'NOTIFICATION_SETTINGS_UPDATED','point',pointId,pointId,{automaticEmailEnabled,notifyStatuses});
+    await audit(session,'NOTIFICATION_SETTINGS_UPDATED','point',pointId,pointId,{automaticEmailEnabled,notifyStatuses});
     return json(request,{ok:true,pointId,automaticEmailEnabled,notifyStatuses,senderDisplayName,footerText});
   }
 
@@ -2801,7 +2820,7 @@ const route = async (request) => {
     try{
       const sent=await sendGmail(sender,recipient,subject,textBody,htmlBody,sender.sender_display_name);
       await q("UPDATE point_email_senders SET last_error=NULL,status='ACTIVE',updated_at=now() WHERE point_id=$1",[sender.sender_point_id]);
-      await audit(u.id,'GMAIL_TEST_SENT','point',pointId,pointId,{recipient,messageId:sent.id,senderPointId:sender.sender_point_id,inherited:sender.sender_point_id!==pointId});
+      await audit(session,'GMAIL_TEST_SENT','point',pointId,pointId,{recipient,messageId:sent.id,senderPointId:sender.sender_point_id,inherited:sender.sender_point_id!==pointId});
       return json(request,{ok:true,recipient,messageId:sent.id});
     }catch(error){
       const message=cleanText(error instanceof Error?error.message:error,500);
@@ -2823,7 +2842,7 @@ const route = async (request) => {
     if(!SERVICE_EDIT_ROLES.has(u.role_code)&&!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do ponowienia wysyłki.'),{status:403});
     await q("UPDATE notification_outbox SET status='PENDING',available_at=now(),last_error=NULL,updated_at=now() WHERE id=$1",[row.id]);
     const result=await processNotification(row.id);
-    await audit(u.id,'NOTIFICATION_RETRIED','notification',row.id,row.point_id,result);
+    await audit(session,'NOTIFICATION_RETRIED','notification',row.id,row.point_id,result);
     return json(request,{id:row.id,...result});
   }
 
@@ -2855,7 +2874,7 @@ const route = async (request) => {
     if(note)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'USER',$4)",[makeId('msg'),conversation.id,u.id,note]);
     await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,NULL,'SYSTEM',$3)",[makeId('msg'),conversation.id,'Poproszono konsultanta o pomoc.']);
     await q("UPDATE support_conversations SET updated_at=now() WHERE id=$1",[conversation.id]);
-    await audit(u.id,'SUPPORT_REQUESTED','support_conversation',conversation.id,pointId,{});
+    await audit(session,'SUPPORT_REQUESTED','support_conversation',conversation.id,pointId,{});
     return json(request,{ok:true,conversationId:conversation.id,pointId},201);
   }
 
@@ -2884,17 +2903,1412 @@ const route = async (request) => {
     const action=supportTicketAction[2],body=await readJson(request);
     if(action==='take'){
       await q("UPDATE support_conversations SET assigned_support_user_id=$2,taken_at=COALESCE(taken_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
-      await audit(u.id,'SUPPORT_TAKEN','support_conversation',ticket.id,ticket.point_id,{});
+      await audit(session,'SUPPORT_TAKEN','support_conversation',ticket.id,ticket.point_id,{});
     }else if(action==='reply'){
       const message=cleanText(body.message,2000);if(!message)return json(request,{error:'MESSAGE_REQUIRED'},400);
       if(ticket.status!=='OPEN')return json(request,{error:'TICKET_CLOSED',message:'Zgłoszenie jest zamknięte.'},409);
       await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SUPPORT',$4)",[makeId('msg'),ticket.id,u.id,message]);
       await q("UPDATE support_conversations SET assigned_support_user_id=COALESCE(assigned_support_user_id,$2),taken_at=COALESCE(taken_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
-      await audit(u.id,'SUPPORT_REPLIED','support_conversation',ticket.id,ticket.point_id,{length:message.length});
+      await audit(session,'SUPPORT_REPLIED','support_conversation',ticket.id,ticket.point_id,{length:message.length});
     }else{
       await q("UPDATE support_conversations SET status='CLOSED',closed_at=now(),assigned_support_user_id=COALESCE(assigned_support_user_id,$2),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
       await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SYSTEM','Konsultant zamknął zgłoszenie.')",[makeId('msg'),ticket.id,u.id]);
-      await audit(u.id,'SUPPORT_CLOSED','support_conversation',ticket.id,ticket.point_id,{});
+      await audit(session,'SUPPORT_CLOSED','support_conversation',ticket.id,ticket.point_id,{});
+    }
+    return json(request,{ok:true});
+  }
+
+  if(method==='POST'&&url.pathname==='/assistant/chat'){
+    const session=await requireActive(request),body=await readJson(request),message=cleanText(body.message,1500);if(!message)return json(request,{error:'MESSAGE'},400);
+    const conv=await getOrCreateConversation(session.user.id);
+    const uid=makeId('msg');await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'USER',$4)",[uid,conv.id,session.user.id,message]);
+    const reply=await assistantReply(session,message);
+    const aid=makeId('msg');await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,NULL,'ASSISTANT',$3)",[aid,conv.id,reply.text]);await q('UPDATE support_conversations SET updated_at=now() WHERE id=$1',[conv.id]);
+    return json(request,{userMessage:{id:uid,author:'user',text:message,createdAt:nowIso()},assistantMessage:{id:aid,author:'assistant',text:reply.text,createdAt:nowIso()},action:reply.action||null});
+  }
+
+  return json(request,{error:'NOT_FOUND',message:'Nie znaleziono endpointu.'},404);
+};
+
+export default {
+  async fetch(request) {
+    try {
+      return await route(request);
+    } catch (error) {
+      console.error('[LockOn Central API]', error);
+      const status = Number(error?.status) || 500;
+      const code = error?.code || (status >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR');
+      const message = status >= 500 ? 'Wystąpił błąd centralnego API.' : cleanText(error instanceof Error ? error.message : error, 300);
+      return json(request, { error: code, message }, status);
+    }
+  }
+};
+ + params.length));
+    };
+    const userId = cleanText(url.searchParams.get('userId'), 80);
+    const pointId = cleanText(url.searchParams.get('pointId'), 80);
+    const action = cleanText(url.searchParams.get('action'), 120);
+    const orderNumber = Number(url.searchParams.get('orderNumber') || 0);
+    const dateFromRaw = cleanText(url.searchParams.get('dateFrom'), 40);
+    const dateToRaw = cleanText(url.searchParams.get('dateTo'), 40);
+    if (userId) addFilter(userId, 'a.actor_user_id=?');
+    if (pointId) addFilter(pointId, 'a.point_id=?');
+    if (action) addFilter('%' + action + '%', 'a.action ILIKE ?');
+    if (Number.isInteger(orderNumber) && orderNumber > 0) addFilter(orderNumber, 'COALESCE(s.order_number,sn.order_number,sr.order_number)=?');
+    if (dateFromRaw) {
+      const parsed = new Date(dateFromRaw);
+      if (!Number.isNaN(parsed.getTime())) addFilter(parsed.toISOString(), 'a.created_at>=?::timestamptz');
+    }
+    if (dateToRaw) {
+      const parsed = new Date(dateToRaw);
+      if (!Number.isNaN(parsed.getTime())) {
+        parsed.setUTCHours(23,59,59,999);
+        addFilter(parsed.toISOString(), 'a.created_at<=?::timestamptz');
+      }
+    }
+    const sql =
+      "SELECT a.id,a.actor_user_id,a.action,a.entity_type,a.entity_id,a.point_id,a.metadata,a.created_at," +
+      "u.name AS actor_name,u.email AS actor_email,u.role_code AS actor_role,p.name AS point_name," +
+      "COALESCE(s.order_number,sn.order_number,sr.order_number) AS order_number," +
+      "trim(coalesce(c.first_name,'')||' '||coalesce(c.last_name,'')) AS customer_name," +
+      "trim(coalesce(d.brand,'')||' '||coalesce(d.model,'')) AS device_name," +
+      "n.status AS notification_status,tr.status AS transfer_status,r.status AS settlement_status " +
+      "FROM audit_log a " +
+      "LEFT JOIN users u ON u.id=a.actor_user_id " +
+      "LEFT JOIN points p ON p.id=a.point_id " +
+      "LEFT JOIN service_orders s ON a.entity_type='service_order' AND s.id=a.entity_id " +
+      "LEFT JOIN notification_outbox n ON a.entity_type='notification' AND n.id=a.entity_id " +
+      "LEFT JOIN service_orders sn ON sn.id=n.service_order_id " +
+      "LEFT JOIN revenue_entries r ON a.entity_type='revenue' AND r.id=a.entity_id " +
+      "LEFT JOIN service_orders sr ON sr.id=r.service_order_id " +
+      "LEFT JOIN service_order_transfers tr ON tr.id=(a.metadata->>'transferId') " +
+      "LEFT JOIN customers c ON c.id=COALESCE(s.customer_id,sn.customer_id,sr.customer_id) " +
+      "LEFT JOIN devices d ON d.id=COALESCE(s.device_id,sn.device_id,sr.device_id) " +
+      (where.length ? 'WHERE ' + where.join(' AND ') + ' ' : '') +
+      "ORDER BY a.created_at DESC LIMIT 300";
+    const { rows } = await q(sql, params);
+    return json(request, {
+      events: rows.map((row) => {
+        const metadata = row.metadata || {};
+        const actionTransferStatus = String(row.action || '').startsWith('SERVICE_TRANSFER_')
+          ? String(row.action).slice('SERVICE_TRANSFER_'.length)
+          : null;
+        return {
+          id: row.id,
+          actorUserId: row.actor_user_id || null,
+          actorName: row.actor_name || row.actor_email || 'System',
+          actorEmail: row.actor_email || null,
+          actorRole: row.actor_role || metadata.actorRole || null,
+          pointId: row.point_id || null,
+          pointName: row.point_name || null,
+          entityType: row.entity_type,
+          entityId: row.entity_id || null,
+          action: row.action,
+          before: metadata.before ?? metadata.from ?? null,
+          after: metadata.after ?? metadata.to ?? null,
+          orderNumber: row.order_number == null ? null : Number(row.order_number),
+          customerSummary: cleanText(row.customer_name, 160) || null,
+          deviceSummary: cleanText(row.device_name, 160) || null,
+          notificationStatus: row.notification_status || metadata?.notification?.status || (metadata?.notification?.sent ? 'SENT' : null),
+          transferStatus: row.transfer_status || metadata.transferStatus || actionTransferStatus,
+          settlementStatus: row.settlement_status || metadata.settlementStatus || null,
+          clientType: metadata.clientType || null,
+          metadata,
+          createdAt: row.created_at
+        };
+      })
+    });
+  }
+
+  if (method === 'POST' && url.pathname === '/admin/points') {
+    const session = await requireActive(request);
+    if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
+    const body = await readJson(request);
+    const name = cleanText(body.name, 90), city = cleanText(body.city, 90);
+    const serviceEnabled=body.serviceEnabled===true;
+    const acceptsExternalRepairs=serviceEnabled&&body.acceptsExternalRepairs===true;
+    const serviceNote=cleanText(body.serviceNote,500);
+    if (!name || !city) return json(request, { error:'VALIDATION',message:'Wpisz nazwę punktu i miasto.' }, 400);
+    let result = await q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=p.id AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL) t ON true WHERE lower(p.name)=lower($1) AND lower(p.city)=lower($2) LIMIT 1",[name,city]);
+    if (result.rows[0]) return json(request, pointView(result.rows[0]));
+    const pointId=makeId('pnt');
+    result=await q("INSERT INTO points(id,name,city,active,service_enabled,accepts_external_repairs,external_repairs_paused,service_note) VALUES($1,$2,$3,true,$4,$5,false,NULLIF($6,'')) RETURNING id,name,city,active,service_enabled,accepts_external_repairs,external_repairs_paused,service_note",[pointId,name,city,serviceEnabled,acceptsExternalRepairs,serviceNote]);
+    await audit(session,'POINT_CREATED','point',pointId,pointId,{serviceEnabled,acceptsExternalRepairs});
+    return json(request, pointView(result.rows[0]), 201);
+  }
+
+  const approve = url.pathname.match(/^\/admin\/users\/([^/]+)\/approve$/);
+  if (method === 'POST' && approve) {
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER') throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const target=await loadUser(approve[1]);
+    if(!target) return json(request,{error:'NOT_FOUND'},404);
+    const body=await readJson(request);
+    const role=String(body.role||'USER').toUpperCase();
+    if(!REQUESTABLE_ROLES.has(role)) return json(request,{error:'ROLE'},400);
+    let pointIds=Array.isArray(body.pointIds)?body.pointIds.map(String):[];
+    const req=await loadRequestedPoint(target.id);
+    const technicianSplitPercent = role==='TECHNICIAN' && req?.requestedRole==='TECHNICIAN'
+      ? req.technicianSplitPercent
+      : (target.technician_split_percent == null ? null : Number(target.technician_split_percent));
+    if(body.createRequestedPoint===true){
+      if(req){
+        let found=await q('SELECT id FROM points WHERE lower(name)=lower($1) AND lower(city)=lower($2) LIMIT 1',[req.pointName,req.city]);
+        let pointId=found.rows[0]?.id;
+        if(!pointId){pointId=makeId('pnt');await q('INSERT INTO points(id,name,city,active) VALUES($1,$2,$3,true)',[pointId,req.pointName,req.city]);}
+        pointIds=[pointId];
+      }
+    }
+    if(!GLOBAL_ROLES.has(role)&&pointIds.length===0) return json(request,{error:'POINT_REQUIRED',message:'Wybierz co najmniej jeden punkt.'},400);
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      await client.query(
+        "UPDATE users SET role_code=$1,technician_split_percent=CASE WHEN $1='TECHNICIAN' THEN $2 ELSE technician_split_percent END,status='ACTIVE',updated_at=now() WHERE id=$3",
+        [role,technicianSplitPercent,target.id]
+      );
+      await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);
+      if(!GLOBAL_ROLES.has(role)) for(const pointId of pointIds) await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);
+      await client.query("UPDATE access_requests SET status='APPROVED',resolved_at=now(),resolved_by_user_id=$2 WHERE user_id=$1 AND status='PENDING'",[target.id,session.user.id]);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally{client.release();}
+    await audit(session,'USER_APPROVED','user',target.id,null,{role,pointIds,technicianSplitPercent});
+    return json(request, await authPayload(await loadUser(target.id)));
+  }
+
+  const reject = url.pathname.match(/^\/admin\/users\/([^/]+)\/reject$/);
+  if(method==='POST'&&reject){
+    const session=await requireActive(request);if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const target=await loadUser(reject[1]);if(!target)return json(request,{error:'NOT_FOUND'},404);if(target.role_code==='OWNER')return json(request,{error:'OWNER_PROTECTED'},400);
+    await q("UPDATE users SET role_code=NULL,status='REJECTED',updated_at=now() WHERE id=$1",[target.id]);
+    await q('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);
+    await q("UPDATE access_requests SET status='REJECTED',resolved_at=now(),resolved_by_user_id=$2 WHERE user_id=$1 AND status='PENDING'",[target.id,session.user.id]);
+    await audit(session,'USER_REJECTED','user',target.id);
+    return json(request,{ok:true});
+  }
+
+  const access = url.pathname.match(/^\/admin\/users\/([^/]+)\/access$/);
+  if(method==='POST'&&access){
+    const session=await requireActive(request);if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const target=await loadUser(access[1]);if(!target)return json(request,{error:'NOT_FOUND'},404);if(target.role_code==='OWNER')return json(request,{error:'OWNER_PROTECTED'},400);
+    const body=await readJson(request);const role=String(body.role||target.role_code||'USER').toUpperCase();const pointIds=Array.isArray(body.pointIds)?body.pointIds.map(String):[];const technicianSplitPercent=role==='TECHNICIAN'?normalizeTechnicianPercent(body.technicianSplitPercent):null;
+    if(!REQUESTABLE_ROLES.has(role))return json(request,{error:'ROLE'},400);if(!GLOBAL_ROLES.has(role)&&pointIds.length===0)return json(request,{error:'POINT_REQUIRED'},400);if(role==='TECHNICIAN'&&technicianSplitPercent===null)return json(request,{error:'TECHNICIAN_SPLIT',message:'Ustaw procent rozliczenia serwisanta od 0 do 100%.'},400);
+    const client=await pool.connect();try{await client.query('BEGIN');await client.query("UPDATE users SET role_code=$1,technician_split_percent=CASE WHEN $1='TECHNICIAN' THEN $3 ELSE technician_split_percent END,status='ACTIVE',updated_at=now() WHERE id=$2",[role,target.id,technicianSplitPercent]);await client.query('DELETE FROM user_point_access WHERE user_id=$1',[target.id]);if(!GLOBAL_ROLES.has(role))for(const pointId of pointIds)await client.query('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[target.id,pointId]);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK').catch(()=>undefined);throw error;}finally{client.release();}
+    await audit(session,'USER_ACCESS_UPDATED','user',target.id,null,{role,pointIds,technicianSplitPercent});
+    return json(request,await authPayload(await loadUser(target.id)));
+  }
+
+  const pointServiceMatch=url.pathname.match(/^\/admin\/points\/([^/]+)\/service$/);
+  if(method==='POST'&&pointServiceMatch){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const body=await readJson(request);
+    const serviceEnabled=body.serviceEnabled===true;
+    const acceptsExternalRepairs=serviceEnabled&&body.acceptsExternalRepairs===true;
+    const serviceNote=cleanText(body.serviceNote,500);
+    const hasPause=Object.prototype.hasOwnProperty.call(body,'externalRepairsPaused');
+    const externalRepairsPaused=hasPause?body.externalRepairsPaused===true:null;
+    const row=(await q("UPDATE points SET service_enabled=$1,accepts_external_repairs=$2,external_repairs_paused=CASE WHEN $3::boolean IS NULL THEN external_repairs_paused ELSE $3 END,service_note=NULLIF($4,''),updated_at=now() WHERE id=$5 RETURNING id,name,city,active,service_enabled,accepts_external_repairs,external_repairs_paused,service_note",[serviceEnabled,acceptsExternalRepairs,externalRepairsPaused,serviceNote,pointServiceMatch[1]])).rows[0];
+    if(!row)return json(request,{error:'NOT_FOUND'},404);
+    const techCount=Number((await q("SELECT count(*)::int AS count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=$1 AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL",[row.id])).rows[0]?.count||0);
+    row.active_technician_count=techCount;
+    row.effective_service_enabled=row.service_enabled===true||techCount>0;
+    row.effective_accepts_external_repairs=row.external_repairs_paused!==true&&(techCount>0||(row.service_enabled===true&&row.accepts_external_repairs===true));
+    await audit(session,'POINT_SERVICE_UPDATED','point',row.id,row.id,{serviceEnabled,acceptsExternalRepairs,externalRepairsPaused:row.external_repairs_paused,activeTechnicianCount:techCount});
+    return json(request,pointView(row));
+  }
+
+  const blockUserMatch=url.pathname.match(/^\/admin\/users\/([^/]+)\/block$/);
+  if(method==='POST'&&blockUserMatch){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const target=await loadUser(blockUserMatch[1]);
+    if(!target)return json(request,{error:'NOT_FOUND'},404);
+    if(target.role_code==='OWNER')return json(request,{error:'OWNER_PROTECTED',message:'Konta OWNER nie można zablokować.'},400);
+    const body=await readJson(request),blocked=body.blocked!==false,reason=cleanText(body.reason,500);
+    if(blocked){
+      await q("UPDATE users SET blocked_at=now(),blocked_reason=NULLIF($1,''),blocked_by_user_id=$2,updated_at=now() WHERE id=$3",[reason,session.user.id,target.id]);
+      await q("UPDATE auth_sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE user_id=$1 AND revoked_at IS NULL",[target.id]);
+      await audit(session,'USER_BLOCKED','user',target.id,null,{reason:reason||null});
+    }else{
+      await q("UPDATE users SET blocked_at=NULL,blocked_reason=NULL,blocked_by_user_id=NULL,updated_at=now() WHERE id=$1",[target.id]);
+      await audit(session,'USER_UNBLOCKED','user',target.id);
+    }
+    return json(request,await publicUser(await loadUser(target.id)));
+  }
+
+  const logoutUserMatch=url.pathname.match(/^\/admin\/users\/([^/]+)\/logout-all$/);
+  if(method==='POST'&&logoutUserMatch){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const target=await loadUser(logoutUserMatch[1]);
+    if(!target)return json(request,{error:'NOT_FOUND'},404);
+    const keepCurrent=target.id===session.user.id?session.sessionId:null;
+    const result=keepCurrent
+      ? await q("UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL AND id<>$2",[target.id,keepCurrent])
+      : await q("UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL",[target.id]);
+    await audit(session,'USER_SESSIONS_REVOKED','user',target.id,null,{revoked:Number(result.rowCount||0)});
+    return json(request,{ok:true,revoked:Number(result.rowCount||0)});
+  }
+
+  if(method==='POST'&&url.pathname==='/admin/logout-all'){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const body=await readJson(request);
+    const exceptCurrent=body.exceptCurrent!==false;
+    const result=exceptCurrent
+      ? await q("UPDATE auth_sessions SET revoked_at=now() WHERE revoked_at IS NULL AND id<>$1",[session.sessionId])
+      : await q("UPDATE auth_sessions SET revoked_at=now() WHERE revoked_at IS NULL");
+    await audit(session,'ALL_SESSIONS_REVOKED','session',null,null,{revoked:Number(result.rowCount||0),exceptCurrent});
+    return json(request,{ok:true,revoked:Number(result.rowCount||0),exceptCurrent});
+  }
+
+
+  if(method==='GET'&&url.pathname==='/admin/factory-reset/preview'){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Tylko OWNER może sprawdzić factory reset.'),{status:403,code:'OWNER_ONLY'});
+    const counts=(await q(
+      "SELECT jsonb_build_object(" +
+      "'points',(SELECT count(*) FROM points)," +
+      "'users',(SELECT count(*) FROM users)," +
+      "'serviceOrders',(SELECT count(*) FROM service_orders)," +
+      "'transfers',(SELECT count(*) FROM service_order_transfers)," +
+      "'customers',(SELECT count(*) FROM customers)," +
+      "'devices',(SELECT count(*) FROM devices)," +
+      "'revenues',(SELECT count(*) FROM revenue_entries)," +
+      "'sessions',(SELECT count(*) FROM auth_sessions)," +
+      "'notifications',(SELECT count(*) FROM notification_outbox)" +
+      ") AS counts"
+    )).rows[0]?.counts||{};
+    return json(request,{ok:true,counts});
+  }
+
+  if(method==='POST'&&url.pathname==='/admin/factory-reset'){
+    const session=await requireActive(request);
+    if(session.user.role_code!=='OWNER')throw Object.assign(new Error('Tylko OWNER może wykonać reset danych.'),{status:403,code:'OWNER_ONLY'});
+    const body=await readJson(request);
+    const phrase=String(body.phrase||'');
+    const confirmed=body.confirmed===true;
+    const reason=cleanText(body.reason,500);
+    if(phrase!=='USUŃ WSZYSTKIE DANE'){
+      return json(request,{error:'CONFIRMATION_PHRASE',message:'Wpisz dokładnie: USUŃ WSZYSTKIE DANE'},400);
+    }
+    if(!confirmed){
+      return json(request,{error:'SECOND_CONFIRMATION_REQUIRED',message:'Wymagane jest drugie potwierdzenie resetu.'},400);
+    }
+
+    const resetId=makeId('rst');
+    await q(
+      "INSERT INTO system_reset_log(id,actor_email,actor_name,client_type,reason,status) VALUES($1,$2,NULLIF($3,''),$4,NULLIF($5,''),'REQUESTED')",
+      [resetId,session.user.email,session.user.name||'',session.clientType||'',reason]
+    );
+
+    const client=await pool.connect();
+    const deleted={};
+    try{
+      await client.query('BEGIN');
+      const remove=async(table)=>{
+        const result=await client.query('DELETE FROM '+table);
+        deleted[table]=Number(result.rowCount||0);
+      };
+      await remove('notification_outbox');
+      await remove('revenue_entries');
+      await remove('service_order_notes');
+      await remove('service_order_status_history');
+      await remove('service_order_transfers');
+      await remove('service_orders');
+      await remove('devices');
+      await remove('customers');
+      await remove('settlements');
+      await remove('point_email_senders');
+      await remove('point_notification_settings');
+      await remove('support_messages');
+      await remove('support_conversations');
+      await remove('website_auth_codes');
+      await remove('access_requests');
+      await remove('user_point_access');
+      await remove('auth_sessions');
+      await remove('audit_log');
+      await remove('users');
+      await remove('points');
+
+      const remaining=(await client.query(
+        "SELECT jsonb_build_object(" +
+        "'points',(SELECT count(*) FROM points)," +
+        "'users',(SELECT count(*) FROM users)," +
+        "'service_orders',(SELECT count(*) FROM service_orders)," +
+        "'service_order_transfers',(SELECT count(*) FROM service_order_transfers)," +
+        "'service_order_notes',(SELECT count(*) FROM service_order_notes)," +
+        "'service_order_status_history',(SELECT count(*) FROM service_order_status_history)," +
+        "'customers',(SELECT count(*) FROM customers)," +
+        "'devices',(SELECT count(*) FROM devices)," +
+        "'revenue_entries',(SELECT count(*) FROM revenue_entries)," +
+        "'settlements',(SELECT count(*) FROM settlements)," +
+        "'point_email_senders',(SELECT count(*) FROM point_email_senders)," +
+        "'point_notification_settings',(SELECT count(*) FROM point_notification_settings)," +
+        "'support_conversations',(SELECT count(*) FROM support_conversations)," +
+        "'support_messages',(SELECT count(*) FROM support_messages)," +
+        "'website_auth_codes',(SELECT count(*) FROM website_auth_codes)," +
+        "'access_requests',(SELECT count(*) FROM access_requests)," +
+        "'user_point_access',(SELECT count(*) FROM user_point_access)," +
+        "'notification_outbox',(SELECT count(*) FROM notification_outbox)," +
+        "'audit_log',(SELECT count(*) FROM audit_log)," +
+        "'auth_sessions',(SELECT count(*) FROM auth_sessions)" +
+        ") AS counts"
+      )).rows[0]?.counts||{};
+      const leftovers=Object.entries(remaining).filter(([,value])=>Number(value)!==0);
+      if(leftovers.length){
+        throw new Error('Factory reset verification failed: '+leftovers.map(([key,value])=>key+'='+value).join(', '));
+      }
+
+      await client.query('COMMIT');
+    }catch(error){
+      await client.query('ROLLBACK').catch(()=>undefined);
+      const message=cleanText(error instanceof Error?error.message:error,500);
+      await q("UPDATE system_reset_log SET status='FAILED',error=$2,deleted_counts=$3::jsonb,completed_at=now() WHERE id=$1",[resetId,message,JSON.stringify(deleted)]).catch(()=>undefined);
+      throw Object.assign(new Error('Factory reset nie został wykonany. Dane pozostają bez zmian.'),{status:500,code:'FACTORY_RESET_FAILED'});
+    }finally{
+      client.release();
+    }
+
+    await q("UPDATE system_reset_log SET status='COMPLETED',deleted_counts=$2::jsonb,error=NULL,completed_at=now() WHERE id=$1",[resetId,JSON.stringify(deleted)]);
+    return json(request,{ok:true,resetId,reloginRequired:true,deleted});
+  }
+
+  if(method==='GET'&&url.pathname==='/finance/technician-settings'){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Ustawienia rozliczenia są dostępne dla serwisanta.'),{status:403});
+    const row=(await q("SELECT technician_split_percent FROM users WHERE id=$1 LIMIT 1",[u.id])).rows[0];
+    const technicianPercent=normalizeTechnicianPercent(row?.technician_split_percent);
+    return json(request,{
+      configured:technicianPercent!==null,
+      technicianPercent,
+      bossPercent:technicianPercent===null?null:Math.round((100-technicianPercent)*100)/100
+    });
+  }
+
+  if(method==='POST'&&url.pathname==='/finance/technician-settings'){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Ustawienia rozliczenia są dostępne dla serwisanta.'),{status:403});
+    const body=await readJson(request);
+    const technicianPercent=normalizeTechnicianPercent(body.technicianPercent);
+    if(technicianPercent===null)return json(request,{error:'TECHNICIAN_SPLIT',message:'Ustaw procent serwisanta od 0 do 100%.'},400);
+    await q("UPDATE users SET technician_split_percent=$1,updated_at=now() WHERE id=$2",[technicianPercent,u.id]);
+    await audit(session,'TECHNICIAN_SETTLEMENT_UPDATED','user',u.id,null,{technicianPercent,bossPercent:Math.round((100-technicianPercent)*100)/100});
+    return json(request,{configured:true,technicianPercent,bossPercent:Math.round((100-technicianPercent)*100)/100});
+  }
+
+  if(method==='GET'&&url.pathname==='/finance/revenues'){
+    const session=await requireActive(request);const u=session.user;
+    if(u.role_code==='USER')throw Object.assign(new Error('Brak uprawnień do rozliczeń.'),{status:403});
+    let rows;
+    if(GLOBAL_ROLES.has(u.role_code)) rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id ORDER BY r.occurred_at DESC")).rows;
+    else if(u.role_code==='TECHNICIAN') rows=(await q("SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
+    else rows=(await q("SELECT DISTINCT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id JOIN user_point_access a ON a.point_id=r.point_id AND a.user_id=$1 ORDER BY r.occurred_at DESC",[u.id])).rows;
+    const entries=rows.map((r)=>{const amount=Number(r.amount);const approved=r.status==='APPROVED'||r.status==='SETTLED';const split=splitRevenueAmount(amount,r.technician_percent);return{id:r.id,userId:r.user_id,pointId:r.point_id,serviceOrderId:r.service_order_id||null,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}}});
+    const approved=entries.filter((e)=>e.status==='APPROVED'||e.status==='SETTLED'),pending=entries.filter((e)=>e.status==='PENDING');
+    return json(request,{entries,summary:{approvedRevenue:approved.reduce((s,e)=>s+e.amount,0),technicianShare:approved.reduce((s,e)=>s+e.technicianShare,0),bossShare:approved.reduce((s,e)=>s+e.bossShare,0),pendingRevenue:pending.reduce((s,e)=>s+e.amount,0)}});
+  }
+
+  if(method==='POST'&&url.pathname==='/finance/revenues'){
+    const session=await requireActive(request);if(session.user.role_code!=='TECHNICIAN')throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const body=await readJson(request),amount=Number(body.amount),pointId=String(body.pointId||''),note=cleanText(body.note,700),workDate=cleanText(body.workDate,20)||new Date().toISOString().slice(0,10);
+    if(!Number.isFinite(amount)||amount<=0)return json(request,{error:'AMOUNT'},400);await requirePoint(session.user,pointId);
+    const rounded=Math.round(amount*100)/100;
+    const profile=(await q("SELECT technician_split_percent FROM users WHERE id=$1 LIMIT 1",[session.user.id])).rows[0];
+    const technicianPercent=normalizeTechnicianPercent(profile?.technician_split_percent);
+    if(technicianPercent===null)return json(request,{error:'SETTLEMENT_REQUIRED',message:'Najpierw ustaw swoje rozliczenie serwisanta w sekcji Rozliczenia.'},409);
+    const split=splitRevenueAmount(rounded,technicianPercent);
+    const id=makeId('rev');
+    const row=(await q("INSERT INTO revenue_entries(id,point_id,user_id,amount,currency,category,technician_percent,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,'PLN','SERVICE',$5,'APPROVED',$6,$7,$3,now()) RETURNING created_at,approved_at",[id,pointId,session.user.id,rounded,technicianPercent,note,new Date(workDate+'T12:00:00Z')])).rows[0];
+    await audit(session,'REVENUE_AUTO_APPROVED','revenue',id,pointId,{amount:rounded,manual:true,technicianPercent});
+    return json(request,{id,userId:session.user.id,pointId,serviceOrderId:null,amount:rounded,workDate,note,status:'APPROVED',splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:split.technicianShare,bossShare:split.bossShare,submittedAt:row.created_at,reviewedAt:row.approved_at},201);
+  }
+
+  const review=url.pathname.match(/^\/finance\/revenues\/([^/]+)\/review$/);
+  if(method==='POST'&&review){
+    const session=await requireActive(request);if(!GLOBAL_ROLES.has(session.user.role_code))throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const body=await readJson(request),action=String(body.action||'');if(!['APPROVE','REJECT'].includes(action))return json(request,{error:'ACTION'},400);
+    const result=await q("UPDATE revenue_entries SET status=$1,approved_by_user_id=$2,approved_at=now() WHERE id=$3 RETURNING *",[action==='APPROVE'?'APPROVED':'REJECTED',session.user.id,review[1]]);
+    if(!result.rows[0])return json(request,{error:'NOT_FOUND'},404);
+    const r=result.rows[0],amount=Number(r.amount),approved=r.status==='APPROVED';const split=splitRevenueAmount(amount,r.technician_percent);
+    return json(request,{id:r.id,userId:r.user_id,pointId:r.point_id,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at});
+  }
+
+  if(method==='GET'&&url.pathname==='/dashboard'){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code==='USER')return json(request,{pointCount:0,activeUsers:0,pendingUsers:0,approvedRevenue:0,pendingRevenue:0,bossShare:0,technicianShare:0});
+    const ids=await visiblePointIds(u);
+    const revenue=(await q("SELECT amount,status,user_id,technician_percent FROM revenue_entries WHERE point_id=ANY($1::text[])",[ids])).rows;
+    const users=(await q("SELECT COUNT(DISTINCT u.id)::int AS count FROM users u LEFT JOIN user_point_access a ON a.user_id=u.id WHERE u.status='ACTIVE' AND ($2::boolean OR a.point_id=ANY($1::text[]))",[ids,GLOBAL_ROLES.has(u.role_code)])).rows[0].count;
+    const approved=revenue.filter((r)=>r.status==='APPROVED'||r.status==='SETTLED'),pending=revenue.filter((r)=>r.status==='PENDING');
+    const approvedSum=approved.reduce((s,r)=>s+Number(r.amount),0),pendingSum=pending.reduce((s,r)=>s+Number(r.amount),0);
+    const technicianShareAll=approved.reduce((sum,row)=>sum+splitRevenueAmount(Number(row.amount),row.technician_percent).technicianShare,0);
+    const bossShareAll=approved.reduce((sum,row)=>sum+splitRevenueAmount(Number(row.amount),row.technician_percent).bossShare,0);
+    const technicianShareOwn=approved.filter((r)=>r.user_id===u.id).reduce((sum,row)=>sum+splitRevenueAmount(Number(row.amount),row.technician_percent).technicianShare,0);
+    return json(request,{pointCount:ids.length,activeUsers:users,pendingUsers:u.role_code==='OWNER'?(await q("SELECT COUNT(*)::int AS count FROM users WHERE status='PENDING'")).rows[0].count:0,approvedRevenue:approvedSum,pendingRevenue:pendingSum,bossShare:bossShareAll,technicianShare:u.role_code==='TECHNICIAN'?technicianShareOwn:technicianShareAll});
+  }
+
+  if(method==='GET'&&url.pathname==='/service/customers/search'){
+    const session=await requireActive(request);
+    if(!SERVICE_READ_ROLES.has(session.user.role_code)) throw Object.assign(new Error('Brak uprawnień do danych klientów.'),{status:403});
+    return json(request,await searchCustomers(session.user,url.searchParams.get('q')||''));
+  }
+
+  if(method==='GET'&&url.pathname==='/service/orders'){
+    const session=await requireActive(request);
+    if(!SERVICE_READ_ROLES.has(session.user.role_code)) throw Object.assign(new Error('Brak uprawnień do zleceń.'),{status:403});
+    return json(request,await listVisibleOrders(session.user));
+  }
+
+
+  if(method==='GET'&&url.pathname==='/service/technicians'){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do listy techników.'),{status:403});
+    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    if(!pointId)return json(request,{error:'POINT_REQUIRED',message:'Wybierz punkt.'},400);
+    await requirePoint(u,pointId);
+    const {rows}=await q(
+      "SELECT DISTINCT usr.id,usr.name,usr.email FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND a.point_id=$1 ORDER BY usr.name,usr.email",
+      [pointId]
+    );
+    return json(request,rows.map((row)=>({id:row.id,name:row.name,email:row.email})));
+  }
+
+  const customerDetailMatch=url.pathname.match(/^\/service\/customers\/([^/]+)$/);
+  if(method==='GET'&&customerDetailMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do danych klientów.'),{status:403});
+    const customerId=customerDetailMatch[1];
+    const customer=(await q('SELECT id,first_name,last_name,email,phone,created_at,updated_at FROM customers WHERE id=$1 LIMIT 1',[customerId])).rows[0];
+    if(!customer)return json(request,{error:'NOT_FOUND'},404);
+    const orders=await listVisibleCustomerOrders(u,customerId);
+    if(!GLOBAL_ROLES.has(u.role_code)&&orders.length===0)return json(request,{error:'NOT_FOUND'},404);
+    const devices=[...new Map(orders.map((order)=>[order.deviceId,{
+      id:order.deviceId,
+      brand:order.brand,
+      model:order.model,
+      imei:order.imei||null,
+      serialNumber:order.serialNumber||null,
+      notes:order.deviceNotes||null
+    }])).values()];
+    return json(request,{
+      customer:{...customerView(customer),createdAt:customer.created_at,updatedAt:customer.updated_at},
+      devices,
+      orders,
+      totalVisibleOrders:orders.length
+    });
+  }
+
+  const historyMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/history$/);
+  if(method==='GET'&&historyMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do historii zlecenia.'),{status:403});
+    const order=(await q('SELECT id,point_id FROM service_orders WHERE id=$1 LIMIT 1',[historyMatch[1]])).rows[0];
+    if(!order)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,order.id);
+    const {rows}=await q(
+      "SELECT h.id,h.from_status,h.to_status,h.note,h.created_at,h.changed_by_user_id,usr.name AS changed_by_name,usr.email AS changed_by_email FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.created_at ASC,h.id ASC",
+      [order.id]
+    );
+    return json(request,rows.map((row)=>({
+      id:row.id,
+      fromStatus:row.from_status||null,
+      fromLabel:row.from_status?(STATUS_LABELS[row.from_status]||row.from_status):null,
+      toStatus:row.to_status,
+      toLabel:STATUS_LABELS[row.to_status]||row.to_status,
+      note:row.note||null,
+      changedAt:row.created_at,
+      changedByUserId:row.changed_by_user_id||null,
+      changedByName:row.changed_by_name||row.changed_by_email||'System'
+    })));
+  }
+
+  const notesMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/notes$/);
+  if(notesMatch&&(method==='GET'||method==='POST')){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do notatek zlecenia.'),{status:403});
+    const order=(await q('SELECT id,point_id FROM service_orders WHERE id=$1 LIMIT 1',[notesMatch[1]])).rows[0];
+    if(!order)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,order.id);
+
+    if(method==='GET'){
+      if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do notatek wewnętrznych zlecenia.'),{status:403});
+      const {rows}=await q(
+        'SELECT n.id,n.body,n.created_at,n.author_user_id,usr.name AS author_name,usr.email AS author_email FROM service_order_notes n JOIN users usr ON usr.id=n.author_user_id WHERE n.service_order_id=$1 ORDER BY n.created_at DESC,n.id DESC',
+        [order.id]
+      );
+      return json(request,rows.map((row)=>({
+        id:row.id,
+        body:row.body,
+        createdAt:row.created_at,
+        authorUserId:row.author_user_id,
+        authorName:row.author_name||row.author_email
+      })));
+    }
+
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do dodawania notatek.'),{status:403});
+    const body=await readJson(request),note=cleanText(body.body,2000);
+    if(!note)return json(request,{error:'NOTE_REQUIRED',message:'Notatka nie może być pusta.'},400);
+    const id=makeId('not');
+    await q('INSERT INTO service_order_notes(id,service_order_id,author_user_id,body) VALUES($1,$2,$3,$4)',[id,order.id,u.id,note]);
+    await audit(session,'SERVICE_NOTE_ADDED','service_order',order.id,order.point_id,{length:note.length});
+    return json(request,{id,body:note,createdAt:nowIso(),authorUserId:u.id,authorName:u.name||u.email},201);
+  }
+
+  const detailsMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
+  if(method==='POST'&&detailsMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_INTAKE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji danych przyjęcia.'),{status:403});
+    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,handling_mode,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
+    if(!found)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,found.id);
+    const detailsOpenTransfer=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') LIMIT 1",[found.id])).rows[0]||null;
+    if(detailsOpenTransfer){
+      return json(request,{error:'DEVICE_IN_TRANSFER',message:'Szczegóły robocze zlecenia są zablokowane podczas transportu urządzenia.'},409);
+    }
+    const detailsCurrentPointId=found.current_point_id||found.home_point_id||found.point_id;
+    await requirePoint(u,detailsCurrentPointId);
+    const body=await readJson(request);
+    const imei=cleanText(body.imei,32).replace(/\s+/g,'');
+    const serialNumber=cleanText(body.serialNumber,120);
+    const deviceNotes=cleanText(body.deviceNotes,1000);
+    if(imei&&!/^\d{14,16}$/.test(imei))return json(request,{error:'IMEI',message:'IMEI powinien zawierać 14–16 cyfr.'},400);
+
+    if(imei){
+      const conflict=(await q('SELECT id FROM devices WHERE imei=$1 AND id<>$2 LIMIT 1',[imei,found.device_id])).rows[0];
+      if(conflict)return json(request,{error:'IMEI_CONFLICT',message:'Ten IMEI jest już przypisany do innego urządzenia.'},409);
+    }
+
+    const canEditWorkflow=SERVICE_EDIT_ROLES.has(u.role_code);
+    const etaText=canEditWorkflow&&found.handling_mode!=='TRANSFER_ONLY'?cleanText(body.estimatedCompletionAt,64):'';
+    let estimatedCompletionAt=canEditWorkflow
+      ? (found.handling_mode==='TRANSFER_ONLY'?found.estimated_completion_at:null)
+      : found.estimated_completion_at;
+    if(etaText){
+      const date=new Date(etaText);
+      if(Number.isNaN(date.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
+      estimatedCompletionAt=date;
+    }
+
+    const canManageAssignment=SERVICE_MANAGE_ROLES.has(u.role_code);
+    const canEditCosts=SERVICE_EDIT_ROLES.has(u.role_code);
+    if(!canEditWorkflow&&('estimatedCompletionAt' in body)&&body.estimatedCompletionAt){
+      throw Object.assign(new Error('Rola USER nie może zmieniać terminu realizacji.'),{status:403});
+    }
+    if(found.handling_mode==='TRANSFER_ONLY'&&('assignedTechnicianId' in body||'estimatedCost' in body||'finalCost' in body)){
+      return json(request,{error:'TRANSFER_ONLY_DETAILS_LOCKED',message:'W trybie „Tylko przekazanie” nie ustawia się serwisanta ani cen naprawy.'},409);
+    }
+    if(!canManageAssignment&&'assignedTechnicianId' in body){
+      throw Object.assign(new Error('Tylko kierownictwo punktu może zmieniać przypisanego technika.'),{status:403});
+    }
+    if(!canEditCosts&&('estimatedCost' in body||'finalCost' in body)){
+      throw Object.assign(new Error('Brak uprawnień do danych kosztowych zlecenia.'),{status:403});
+    }
+
+    let assignedTechnicianId=found.assigned_technician_id||null;
+    let estimatedCost=found.estimated_cost==null?null:Number(found.estimated_cost);
+    let finalCost=found.final_cost==null?null:Number(found.final_cost);
+    if(canManageAssignment){
+      assignedTechnicianId=cleanText(body.assignedTechnicianId,80)||null;
+      if(assignedTechnicianId){
+        const tech=(await q(
+          "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE usr.id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND a.point_id=$2 LIMIT 1",
+          [assignedTechnicianId,found.current_point_id||found.home_point_id||found.point_id]
+        )).rows[0];
+        if(!tech)return json(request,{error:'TECHNICIAN',message:'Wybrany technik nie ma dostępu do aktualnego punktu urządzenia.'},400);
+      }
+    }
+    if(canEditCosts){
+      if('estimatedCost' in body){
+        const estimatedRaw=body.estimatedCost;
+        estimatedCost=estimatedRaw==null||estimatedRaw===''?null:Number(estimatedRaw);
+      }
+      if('finalCost' in body){
+        const finalRaw=body.finalCost;
+        finalCost=finalRaw==null||finalRaw===''?null:Number(finalRaw);
+      }
+      if(estimatedCost!=null&&(!Number.isFinite(estimatedCost)||estimatedCost<0))return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
+      if(finalCost!=null&&(!Number.isFinite(finalCost)||finalCost<0))return json(request,{error:'FINAL_COST',message:'Nieprawidłowy koszt końcowy.'},400);
+    }
+
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      await client.query('UPDATE devices SET imei=NULLIF($1,\'\'),serial_number=NULLIF($2,\'\'),notes=NULLIF($3,\'\'),updated_at=now() WHERE id=$4',[imei,serialNumber,deviceNotes,found.device_id]);
+      await client.query('UPDATE service_orders SET assigned_technician_id=$1,estimated_cost=$2,final_cost=$3,estimated_completion_at=$4,updated_at=now() WHERE id=$5',[assignedTechnicianId,estimatedCost,finalCost,estimatedCompletionAt,found.id]);
+      await client.query('COMMIT');
+    }catch(error){
+      await client.query('ROLLBACK').catch(()=>undefined);
+      throw error;
+    }finally{client.release();}
+
+    await audit(session,'SERVICE_ORDER_DETAILS_UPDATED','service_order',found.id,found.point_id,{
+      assignedTechnicianId,
+      estimatedCost,
+      finalCost,
+      estimatedCompletionAt:estimatedCompletionAt?estimatedCompletionAt.toISOString():null,
+      hasImei:Boolean(imei),
+      hasSerialNumber:Boolean(serialNumber)
+    });
+    const view=(await listVisibleOrders(u)).find((order)=>order.id===found.id);
+    return json(request,view);
+  }
+
+  if(method==='POST'&&url.pathname==='/service/orders'){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    if(!SERVICE_CREATE_ROLES.has(u.role_code)) throw Object.assign(new Error('Brak uprawnień do tworzenia zleceń.'),{status:403});
+    const pointId=cleanText(body.pointId,80);await requirePoint(u,pointId);
+    const firstName=cleanText(body.firstName,80),lastName=cleanText(body.lastName,100),email=normalizeEmail(cleanText(body.email,180)),phone=cleanText(body.phone,50),phoneNorm=normalizePhone(phone),brand=cleanText(body.brand,80),model=cleanText(body.model,120),issue=cleanText(body.issueDescription,2000),orderType=String(body.orderType||'REPAIR').toUpperCase(),handlingMode=String(body.handlingMode||'STANDARD').toUpperCase();
+    const imei=cleanText(body.imei,32).replace(/\s+/g,''),serialNumber=cleanText(body.serialNumber,120),deviceNotes=cleanText(body.deviceNotes,1000);
+    const canSetIntakeEta=SERVICE_EDIT_ROLES.has(u.role_code);
+    const etaText=canSetIntakeEta?cleanText(body.estimatedCompletionAt,64):'';
+    let estimatedCompletionAt=null;
+    if(etaText){
+      const eta=new Date(etaText);
+      if(Number.isNaN(eta.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
+      estimatedCompletionAt=eta;
+    }
+    const canManage=SERVICE_MANAGE_ROLES.has(u.role_code);
+    let assignedTechnicianId=u.role_code==='TECHNICIAN'?u.id:(canManage?(cleanText(body.assignedTechnicianId,80)||null):null);
+    let estimatedCost=null;
+    if(!SERVICE_EDIT_ROLES.has(u.role_code)&&body.estimatedCost!==undefined&&body.estimatedCost!=='')throw Object.assign(new Error('Brak uprawnień do danych kosztowych zlecenia.'),{status:403});
+    if(SERVICE_EDIT_ROLES.has(u.role_code)&&body.estimatedCost!==undefined&&body.estimatedCost!==''){
+      estimatedCost=Number(body.estimatedCost);
+      if(!Number.isFinite(estimatedCost)||estimatedCost<0)return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
+    }
+    if(!canManage&&body.assignedTechnicianId&&String(body.assignedTechnicianId)!==u.id){
+      throw Object.assign(new Error('Nie możesz przypisać zlecenia do innego technika.'),{status:403});
+    }
+    if(!firstName||!lastName||!brand||!model||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij dane klienta, urządzenia i usterki.'},400);
+    if(!['STANDARD','TRANSFER_ONLY'].includes(handlingMode))return json(request,{error:'HANDLING_MODE',message:'Nieprawidłowy sposób obsługi zlecenia.'},400);
+    if(!email&&!phoneNorm)return json(request,{error:'CONTACT_REQUIRED',message:'Podaj adres e-mail lub numer telefonu klienta.'},400);
+    if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json(request,{error:'EMAIL',message:'Adres e-mail klienta jest nieprawidłowy.'},400);
+    if(phone&&phoneNorm.length<7)return json(request,{error:'PHONE',message:'Numer telefonu klienta jest zbyt krótki.'},400);
+    if(imei&&!/^\d{14,16}$/.test(imei))return json(request,{error:'IMEI',message:'IMEI powinien zawierać 14–16 cyfr.'},400);
+    if(assignedTechnicianId&&u.role_code!=='TECHNICIAN'){
+      const tech=(await q("SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE usr.id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND a.point_id=$2 LIMIT 1",[assignedTechnicianId,pointId])).rows[0];
+      if(!tech)return json(request,{error:'TECHNICIAN',message:'Wybrany technik nie ma dostępu do tego punktu.'},400);
+    }
+    const client=await pool.connect();let reused=false,reusedDevice=false;try{
+      await client.query('BEGIN');
+      let customer=(await client.query("SELECT * FROM customers WHERE ($1<>'' AND lower(email)=lower($1)) OR ($2<>'' AND phone_normalized=$2) ORDER BY updated_at DESC LIMIT 1",[email,phoneNorm])).rows[0];
+      if(customer){reused=true;await client.query("UPDATE customers SET first_name=$1,last_name=$2,email=COALESCE(NULLIF($3,''),email),phone=COALESCE(NULLIF($4,''),phone),phone_normalized=COALESCE(NULLIF($5,''),phone_normalized),updated_at=now() WHERE id=$6",[firstName,lastName,email,phone,phoneNorm,customer.id]);customer=(await client.query('SELECT * FROM customers WHERE id=$1',[customer.id])).rows[0];}
+      else{
+        const cid=makeId('cst');
+        customer=(await client.query("INSERT INTO customers(id,first_name,last_name,email,phone,phone_normalized,created_by_user_id) VALUES($1,$2,$3,NULLIF($4,''),NULLIF($5,''),NULLIF($6,''),$7) ON CONFLICT DO NOTHING RETURNING *",[cid,firstName,lastName,email,phone,phoneNorm,u.id])).rows[0];
+        if(!customer){
+          reused=true;
+          customer=(await client.query("SELECT * FROM customers WHERE ($1<>'' AND lower(email)=lower($1)) OR ($2<>'' AND phone_normalized=$2) ORDER BY updated_at DESC LIMIT 1",[email,phoneNorm])).rows[0];
+          if(!customer)throw new Error('Nie udało się bezpiecznie rozpoznać istniejącego klienta.');
+          await client.query("UPDATE customers SET first_name=$1,last_name=$2,email=COALESCE(NULLIF($3,''),email),phone=COALESCE(NULLIF($4,''),phone),phone_normalized=COALESCE(NULLIF($5,''),phone_normalized),updated_at=now() WHERE id=$6",[firstName,lastName,email,phone,phoneNorm,customer.id]);
+          customer=(await client.query('SELECT * FROM customers WHERE id=$1',[customer.id])).rows[0];
+        }
+      }
+      let device=null;
+      if(imei){
+        const byImei=(await client.query("SELECT * FROM devices WHERE imei=$1 ORDER BY updated_at DESC LIMIT 1",[imei])).rows[0];
+        if(byImei&&byImei.customer_id!==customer.id)throw Object.assign(new Error('Urządzenie z tym IMEI jest przypisane do innego klienta.'),{status:409});
+        device=byImei||null;
+      }
+      if(!device&&serialNumber){
+        device=(await client.query("SELECT * FROM devices WHERE customer_id=$1 AND lower(brand)=lower($2) AND lower(model)=lower($3) AND lower(serial_number)=lower($4) ORDER BY updated_at DESC LIMIT 1",[customer.id,brand,model,serialNumber])).rows[0]||null;
+      }
+      let did='';
+      if(device){
+        reusedDevice=true;
+        did=device.id;
+        await client.query("UPDATE devices SET brand=$1,model=$2,imei=COALESCE(NULLIF($3,''),imei),serial_number=COALESCE(NULLIF($4,''),serial_number),notes=COALESCE(NULLIF($5,''),notes),updated_at=now() WHERE id=$6",[brand,model,imei,serialNumber,deviceNotes,did]);
+      }else{
+        did=makeId('dev');
+        await client.query("INSERT INTO devices(id,customer_id,brand,model,imei,serial_number,notes) VALUES($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''))",[did,customer.id,brand,model,imei,serialNumber,deviceNotes]);
+      }
+      const oid=makeId('srv');const order=(await client.query("INSERT INTO service_orders(id,point_id,home_point_id,current_point_id,customer_id,device_id,order_type,handling_mode,issue_description,status,assigned_technician_id,created_by_user_id,estimated_cost,estimated_completion_at) VALUES($1,$2,$2,$2,$3,$4,$5,$6,$7,'RECEIVED',$8,$9,$10,$11) RETURNING *",[oid,pointId,customer.id,did,orderType,handlingMode,issue,handlingMode==='TRANSFER_ONLY'?null:assignedTechnicianId,u.id,handlingMode==='TRANSFER_ONLY'?null:estimatedCost,estimatedCompletionAt])).rows[0];
+      await client.query("INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,changed_by_user_id) VALUES($1,$2,NULL,'RECEIVED',$3)",[makeId('hst'),oid,u.id]);
+      await client.query('COMMIT');
+
+      let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
+      try{
+        const settings=await mailSettingsForPoint(pointId);
+        if(!customer.email){
+          notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
+        }else if(settings.automatic_email_enabled!==true){
+          notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
+        }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes('RECEIVED')){
+          notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
+        }else{
+          const nid=makeId('ntf');
+          await q(
+            "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",
+            [nid,u.id,customer.id,oid,customer.email,JSON.stringify({from:null,to:'RECEIVED',note:null})]
+          );
+          notification={queued:true,...(await processNotification(nid))};
+        }
+      }catch(notificationError){
+        console.error('[intake notification]',notificationError);
+        notification={queued:false,sent:false,reason:'NOTIFICATION_ERROR'};
+      }
+
+      try{
+        await audit(session,'SERVICE_ORDER_CREATED','service_order',oid,pointId,{orderType,handlingMode,notification});
+      }catch(auditError){
+        console.error('[service order audit]',auditError);
+      }
+      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,handlingMode,issueDescription:issue,status:'RECEIVED',assignedTechnicianId:handlingMode==='TRANSFER_ONLY'?null:assignedTechnicianId,estimatedCost:SERVICE_EDIT_ROLES.has(u.role_code)&&handlingMode!=='TRANSFER_ONLY'?estimatedCost:null,estimatedCompletionAt:order.estimated_completion_at||null,receivedAt:order.received_at},reusedCustomer:reused,reusedDevice,notification},201);
+    }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
+  }
+
+  const statusMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/status$/);
+  if(method==='POST'&&statusMatch){
+    const session=await requireActive(request),u=session.user;
+    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500),actingPointId=cleanText(body.actingPointId,80);
+    const canEditStatus=SERVICE_EDIT_ROLES.has(u.role_code);
+    const canCancelOnly=u.role_code==='USER'&&next==='CANCELLED';
+    if(!canEditStatus&&!canCancelOnly)throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
+    if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
+
+    const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
+    if(!found)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,found.id);
+
+    const homePointId=found.home_point_id||found.point_id;
+    const openTransfer=(await q("SELECT id,kind,status,from_point_id,to_point_id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') ORDER BY requested_at DESC LIMIT 1",[found.id])).rows[0]||null;
+    if(openTransfer&&next!==found.status){
+      return json(request,{error:'DEVICE_IN_TRANSFER',message:'Status zlecenia jest zablokowany podczas aktywnego przekazania. Najpierw zakończ logistykę urządzenia.'},409);
+    }
+    const effectiveCurrentPointId=found.current_point_id||(!openTransfer?homePointId:null);
+    if(next!==found.status){
+      if(!effectiveCurrentPointId){
+        return json(request,{error:'DEVICE_LOCATION_UNKNOWN',message:'Nie można zmienić statusu, dopóki lokalizacja urządzenia nie jest potwierdzona.'},409);
+      }
+      if(GLOBAL_ROLES.has(u.role_code)&&!actingPointId){
+        return json(request,{error:'ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt, z którego wykonujesz zmianę statusu.'},409);
+      }
+      if(actingPointId&&actingPointId!==effectiveCurrentPointId){
+        return json(request,{error:'WRONG_ACTIVE_POINT',message:'Status może zmienić tylko punkt, w którym fizycznie znajduje się urządzenie.'},409);
+      }
+      await requirePoint(u,effectiveCurrentPointId);
+    }
+
+    if(found.handling_mode==='TRANSFER_ONLY'&&next!==found.status&&next!=='CANCELLED'){
+      return json(request,{error:'TRANSFER_ONLY_STATUS_LOCKED',message:'To zlecenie działa w trybie „Tylko przekazanie”. Możesz obsługiwać logistykę urządzenia albo anulować zlecenie, ale nie zmieniać etapów naprawy.'},409);
+    }
+
+    if(['READY','COMPLETED'].includes(next)){
+      if(effectiveCurrentPointId!==homePointId){
+        return json(request,{error:'RETURN_REQUIRED',message:'Urządzenie znajduje się poza punktem macierzystym. Najpierw odeślij je do punktu macierzystego i potwierdź przyjęcie zwrotu.'},409);
+      }
+      await requirePoint(u,homePointId);
+      if(next==='READY'&&found.status!=='REPAIR_DONE'){
+        return json(request,{error:'REPAIR_DONE_REQUIRED',message:'Status „Gotowe do odbioru” można ustawić dopiero po zakończeniu naprawy.'},409);
+      }
+      if(next==='COMPLETED'&&found.status!=='READY'){
+        return json(request,{error:'READY_REQUIRED',message:'Zlecenie można zakończyć dopiero po oznaczeniu urządzenia jako gotowego do odbioru w punkcie macierzystym.'},409);
+      }
+    }
+
+    const settlementAmount = next==='COMPLETED'
+      ? Number(found.final_cost ?? found.estimated_cost)
+      : null;
+    if(next==='COMPLETED'&&(!Number.isFinite(settlementAmount)||settlementAmount<=0)){
+      return json(request,{
+        error:'FINAL_COST_REQUIRED',
+        message:'Przed zakończeniem zlecenia wpisz koszt końcowy. Jeżeli koszt końcowy jest pusty, system może użyć zapisanej wyceny.'
+      },409);
+    }
+
+    if(found.status===next){
+      const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
+      return json(request,{order:view,notification:{queued:false,sent:false,reason:'STATUS_UNCHANGED'}});
+    }
+
+    let settlementSpec=null;
+    if(next==='COMPLETED'){
+      const settlementPointId=found.home_point_id||found.point_id;
+      let revenueUserId=found.assigned_technician_id||null;
+      if(!revenueUserId&&u.role_code==='TECHNICIAN') revenueUserId=u.id;
+      if(!revenueUserId){
+        const candidates=(await q(
+          "SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE a.point_id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL ORDER BY usr.name,usr.id LIMIT 2",
+          [settlementPointId]
+        )).rows;
+        if(candidates.length===1) revenueUserId=candidates[0].id;
+      }
+      if(!revenueUserId){
+        return json(request,{error:'TECHNICIAN_REQUIRED',message:'Przed zakończeniem zlecenia przypisz serwisanta odpowiedzialnego za naprawę.'},409);
+      }
+      const revenueUser=(await q(
+        "SELECT id,name,technician_split_percent FROM users WHERE id=$1 AND role_code='TECHNICIAN' AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",
+        [revenueUserId]
+      )).rows[0];
+      if(!revenueUser){
+        return json(request,{error:'TECHNICIAN_REQUIRED',message:'Przypisany serwisant nie jest aktywnym kontem TECHNICIAN.'},409);
+      }
+      const technicianPercent=normalizeTechnicianPercent(revenueUser.technician_split_percent);
+      if(technicianPercent===null){
+        return json(request,{error:'SETTLEMENT_REQUIRED',message:'Serwisant '+(revenueUser.name||'')+' musi najpierw ustawić swój procent rozliczenia w sekcji Rozliczenia.'},409);
+      }
+      settlementSpec={settlementPointId,revenueUserId,technicianPercent,split:splitRevenueAmount(settlementAmount,technicianPercent)};
+    }
+
+    let settlement=null;
+    const statusClient=await pool.connect();
+    try{
+      await statusClient.query('BEGIN');
+      await statusClient.query(
+        "UPDATE service_orders SET status=$1,updated_at=now(),completed_at=CASE WHEN $1='COMPLETED' THEN now() ELSE completed_at END,final_cost=CASE WHEN $1='COMPLETED' AND final_cost IS NULL THEN estimated_cost ELSE final_cost END WHERE id=$2",
+        [next,found.id]
+      );
+      await statusClient.query(
+        'INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,note,changed_by_user_id) VALUES($1,$2,$3,$4,$5,$6)',
+        [makeId('hst'),found.id,found.status,next,note||null,u.id]
+      );
+
+      if(next==='COMPLETED'&&settlementSpec){
+        const revenueId=makeId('rev');
+        const revenue=(await statusClient.query(
+          "INSERT INTO revenue_entries(id,point_id,user_id,service_order_id,amount,currency,category,technician_percent,status,note,occurred_at,approved_by_user_id,approved_at) VALUES($1,$2,$3,$4,$5,$6,'SERVICE',$7,'APPROVED',$8,now(),$9,now()) ON CONFLICT (service_order_id) WHERE service_order_id IS NOT NULL DO UPDATE SET point_id=EXCLUDED.point_id,user_id=EXCLUDED.user_id,amount=EXCLUDED.amount,currency=EXCLUDED.currency,technician_percent=EXCLUDED.technician_percent,status='APPROVED',note=EXCLUDED.note,approved_by_user_id=EXCLUDED.approved_by_user_id,approved_at=now() RETURNING id,point_id,user_id,service_order_id,amount,currency,technician_percent,status,approved_at",
+          [revenueId,settlementSpec.settlementPointId,settlementSpec.revenueUserId,found.id,Math.round(settlementAmount*100)/100,found.currency||'PLN',settlementSpec.technicianPercent,'Automatyczne rozliczenie zakończonego zlecenia #'+found.order_number,u.id]
+        )).rows[0];
+        settlement={
+          id:revenue.id,
+          amount:Number(revenue.amount),
+          currency:String(revenue.currency||'PLN').trim(),
+          status:revenue.status,
+          serviceOrderId:revenue.service_order_id,
+          userId:revenue.user_id,
+          pointId:revenue.point_id,
+          technicianPercent:settlementSpec.split.technicianPercent,
+          bossPercent:settlementSpec.split.bossPercent,
+          technicianShare:settlementSpec.split.technicianShare,
+          bossShare:settlementSpec.split.bossShare,
+          approvedAt:revenue.approved_at
+        };
+      }
+      await statusClient.query('COMMIT');
+    }catch(error){
+      await statusClient.query('ROLLBACK').catch(()=>undefined);
+      throw error;
+    }finally{
+      statusClient.release();
+    }
+
+    let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
+    try{
+      const customer=(await q('SELECT email FROM customers WHERE id=$1',[found.customer_id])).rows[0];
+      const settings=await mailSettingsForPoint(found.point_id);
+      const senderReady=Boolean(await loadActiveMailSender(found.point_id));
+
+      if(!customer?.email){
+        notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
+      }else if(settings.automatic_email_enabled!==true){
+        notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
+      }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes(next)){
+        notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
+      }else if(!senderReady){
+        notification={queued:false,sent:false,reason:'NO_SENDER'};
+      }else{
+        const nid=makeId('ntf');
+        await q(
+          "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",
+          [nid,u.id,found.customer_id,found.id,customer.email,JSON.stringify({from:found.status,to:next,note:note||null})]
+        );
+        notification={queued:true,...(await processNotification(nid))};
+      }
+    }catch(notificationError){
+      console.error('[status notification]',notificationError);
+      notification={queued:false,sent:false,reason:'NOTIFICATION_ERROR'};
+    }
+
+    try{
+      await audit(session,'SERVICE_STATUS_CHANGED','service_order',found.id,found.point_id,{from:found.status,to:next,notification});
+    }catch(auditError){
+      console.error('[service status audit]',auditError);
+    }
+    const view=(await listVisibleOrders(u)).find((o)=>o.id===found.id);
+    return json(request,{order:view,notification,settlement});
+  }
+
+  if(method==='GET'&&url.pathname==='/service/service-points'){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do listy serwisów.'),{status:403});
+    const {rows}=await q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users usr ON usr.id=a.user_id WHERE a.point_id=p.id AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL) t ON true WHERE p.active=true AND (p.service_enabled=true OR coalesce(t.active_technician_count,0)>0) ORDER BY p.city,p.name");
+    return json(request,rows.map(pointView));
+  }
+
+  if(method==='GET'&&url.pathname==='/service/transfers'){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przekazań serwisowych.'),{status:403});
+    const status=cleanText(url.searchParams.get('status'),30).toUpperCase();
+    const incoming=url.searchParams.get('incoming')==='1';
+    const params=[];
+    let where=' WHERE 1=1';
+    if(!GLOBAL_ROLES.has(u.role_code)){
+      params.push(u.id);
+      where += incoming
+        ? " AND EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=t.to_point_id)"
+        : " AND EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id))";
+    }
+    if(status){
+      params.push(status);
+      where += ' AND t.status=' + '$' + String(params.length);
+    }
+    const {rows}=await q(
+      "SELECT t.*,fp.name AS from_point_name,fp.city AS from_point_city,tp.name AS to_point_name,tp.city AS to_point_city,su.name AS sent_by_name,su.email AS sent_by_email,au.name AS accepted_by_name,au.email AS accepted_by_email,s.order_number,c.first_name,c.last_name,d.brand,d.model FROM service_order_transfers t JOIN points fp ON fp.id=t.from_point_id JOIN points tp ON tp.id=t.to_point_id JOIN users su ON su.id=t.sent_by_user_id LEFT JOIN users au ON au.id=t.accepted_by_user_id JOIN service_orders s ON s.id=t.service_order_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id" + where + " ORDER BY t.requested_at DESC LIMIT 150",
+      params
+    );
+    return json(request,rows.map((row)=>({
+      ...transferView(row),
+      orderNumber:Number(row.order_number),
+      customerName:[row.first_name,row.last_name].filter(Boolean).join(' '),
+      device:[row.brand,row.model].filter(Boolean).join(' ')
+    })));
+  }
+
+  const createTransferMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/transfer$/);
+  if(method==='POST'&&createTransferMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przekazywania zleceń.'),{status:403});
+    const order=(await q('SELECT id,point_id,home_point_id,current_point_id,status,handling_mode,customer_id FROM service_orders WHERE id=$1 LIMIT 1',[createTransferMatch[1]])).rows[0];
+    if(!order)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,order.id);
+    if(['COMPLETED','CANCELLED','REJECTED'].includes(order.status)){
+      return json(request,{error:'ORDER_CLOSED',message:'Zamkniętego lub anulowanego zlecenia nie można dalej przekazywać.'},409);
+    }
+
+    const body=await readJson(request);
+    const kind=String(body.kind||'OUTBOUND_SERVICE').toUpperCase();
+    const note=cleanText(body.note,500);
+    if(!['OUTBOUND_SERVICE','RETURN_HOME'].includes(kind))return json(request,{error:'TRANSFER_KIND',message:'Nieprawidłowy kierunek logistyki.'},400);
+
+    const open=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') LIMIT 1",[order.id])).rows[0];
+    if(open)return json(request,{error:'TRANSFER_OPEN',message:'To zlecenie ma już aktywne przekazanie.'},409);
+
+    const homePointId=order.home_point_id||order.point_id;
+    const fromPointId=order.current_point_id||homePointId;
+    await requirePoint(u,fromPointId);
+
+    let toPointId=cleanText(body.toPointId,80);
+    let destination=null;
+    if(kind==='RETURN_HOME'){
+      toPointId=homePointId;
+      if(fromPointId===homePointId)return json(request,{error:'ALREADY_HOME',message:'Urządzenie znajduje się już w punkcie macierzystym.'},409);
+      destination=(await q("SELECT id,name,city,active,service_enabled,accepts_external_repairs,service_note FROM points WHERE id=$1 AND active=true LIMIT 1",[toPointId])).rows[0];
+      if(!destination)return json(request,{error:'HOME_POINT_UNAVAILABLE',message:'Punkt macierzysty jest nieaktywny.'},409);
+    }else{
+      if(!toPointId||toPointId===fromPointId)return json(request,{error:'DESTINATION',message:'Wybierz inny punkt serwisowy.'},400);
+      if(toPointId===homePointId&&fromPointId!==homePointId){
+        return json(request,{error:'USE_RETURN_HOME',message:'Powrót do punktu macierzystego musi być zapisany jako osobny zwrot logistyczny.'},400);
+      }
+      destination=(await q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users usr ON usr.id=a.user_id WHERE a.point_id=p.id AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND usr.blocked_at IS NULL) t ON true WHERE p.id=$1 AND p.active=true AND NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled=true AND p.accepts_external_repairs=true)) LIMIT 1",[toPointId])).rows[0];
+      if(!destination)return json(request,{error:'SERVICE_UNAVAILABLE',message:'Wybrany punkt nie przyjmuje teraz przekazań serwisowych.'},400);
+    }
+
+    const transferId=makeId('trf');
+    const row=(await q(
+      "INSERT INTO service_order_transfers(id,service_order_id,from_point_id,to_point_id,kind,status,note,sent_by_user_id,shipped_at) VALUES($1,$2,$3,$4,$5,'IN_TRANSIT',NULLIF($6,''),$7,now()) RETURNING *",
+      [transferId,order.id,fromPointId,toPointId,kind,note,u.id]
+    )).rows[0];
+    await q('UPDATE service_orders SET current_point_id=NULL,assigned_technician_id=NULL,updated_at=now() WHERE id=$1',[order.id]);
+
+    const notification=await queueTransferNotification(u,order.id,row,'IN_TRANSIT',note);
+    await audit(session,kind==='RETURN_HOME'?'SERVICE_RETURN_SENT':'SERVICE_TRANSFER_SENT','service_order',order.id,fromPointId,{transferId,toPointId,kind,homePointId,notification});
+    const enriched=(await loadTransfersForOrders([order.id])).get(order.id)?.find((item)=>item.id===transferId);
+    return json(request,{transfer:enriched||transferView({...row,from_point_name:'',to_point_name:destination.name}),notification},201);
+  }
+
+  const transferStatusMatch=url.pathname.match(/^\/service\/transfers\/([^/]+)\/status$/);
+  if(method==='POST'&&transferStatusMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do obsługi przekazania.'),{status:403});
+    const transfer=(await q('SELECT * FROM service_order_transfers WHERE id=$1 LIMIT 1',[transferStatusMatch[1]])).rows[0];
+    if(!transfer)return json(request,{error:'NOT_FOUND'},404);
+
+    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500);
+    const transitions={
+      REQUESTED:new Set(['IN_TRANSIT','CANCELLED']),
+      IN_TRANSIT:new Set(['DELIVERED','CANCELLED']),
+      DELIVERED:new Set(['ACCEPTED','REJECTED']),
+      ACCEPTED:new Set(),
+      REJECTED:new Set(),
+      CANCELLED:new Set()
+    };
+    if(!transitions[transfer.status]?.has(next))return json(request,{error:'TRANSFER_STATUS',message:'Niedozwolona zmiana etapu przekazania.'},400);
+
+    const sourceAction=['IN_TRANSIT','CANCELLED'].includes(next);
+    await requirePoint(u,sourceAction?transfer.from_point_id:transfer.to_point_id);
+
+    const orderMode=(await q('SELECT handling_mode,status FROM service_orders WHERE id=$1 LIMIT 1',[transfer.service_order_id])).rows[0];
+    if(!orderMode)return json(request,{error:'ORDER_NOT_FOUND'},404);
+    if(orderMode.status==='CANCELLED'&&next!=='CANCELLED'){
+      return json(request,{error:'ORDER_CANCELLED',message:'Zlecenie zostało anulowane. Nie można kontynuować przekazania.'},409);
+    }
+
+    let acceptedBy=null;
+    if(next==='ACCEPTED'){
+      if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))throw Object.assign(new Error('Brak uprawnień do przyjęcia urządzenia.'),{status:403});
+      acceptedBy=u.id;
+    }
+
+    const updated=(await q(
+      "UPDATE service_order_transfers SET status=$1,note=CASE WHEN NULLIF($2,'') IS NULL THEN note ELSE $2 END,accepted_by_user_id=CASE WHEN $1='ACCEPTED' THEN $3 ELSE accepted_by_user_id END,shipped_at=CASE WHEN $1='IN_TRANSIT' THEN COALESCE(shipped_at,now()) ELSE shipped_at END,delivered_at=CASE WHEN $1='DELIVERED' THEN now() ELSE delivered_at END,accepted_at=CASE WHEN $1='ACCEPTED' THEN now() ELSE accepted_at END,updated_at=now() WHERE id=$4 RETURNING *",
+      [next,note,acceptedBy,transfer.id]
+    )).rows[0];
+
+    const physicalPointId=next==='CANCELLED'
+      ? transfer.from_point_id
+      : ['DELIVERED','ACCEPTED','REJECTED'].includes(next)
+        ? transfer.to_point_id
+        : null;
+    if(next==='ACCEPTED'&&transfer.kind==='OUTBOUND_SERVICE'&&u.role_code==='TECHNICIAN'&&orderMode?.handling_mode!=='TRANSFER_ONLY'){
+      await q('UPDATE service_orders SET current_point_id=$1,assigned_technician_id=$2,updated_at=now() WHERE id=$3',[physicalPointId,u.id,transfer.service_order_id]);
+    }else{
+      await q('UPDATE service_orders SET current_point_id=$1,updated_at=now() WHERE id=$2',[physicalPointId,transfer.service_order_id]);
+    }
+
+    const shouldEmail=['DELIVERED','ACCEPTED','REJECTED','CANCELLED'].includes(next) &&
+      !(transfer.kind==='RETURN_HOME'&&next==='ACCEPTED');
+    const notification=shouldEmail
+      ? await queueTransferNotification(u,transfer.service_order_id,updated,next,note)
+      : {queued:false,sent:false,reason:'EVENT_NOT_EMAILED'};
+
+    await audit(session,'SERVICE_TRANSFER_'+next,'service_order',transfer.service_order_id,sourceAction?transfer.from_point_id:transfer.to_point_id,{transferId:transfer.id,kind:transfer.kind,notification});
+    const full=(await loadTransfersForOrders([transfer.service_order_id])).get(transfer.service_order_id)?.find((item)=>item.id===transfer.id);
+    return json(request,{transfer:full||transferView(updated),notification});
+  }
+
+  if(method==='GET'&&url.pathname==='/integrations/gmail'){
+    const session=await requireActive(request),pointId=cleanText(url.searchParams.get('pointId'),80);
+    await requirePoint(session.user,pointId);
+    const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,refresh_token_ciphertext,oauth_client_secret_ciphertext,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
+    let row=rows[0]||null;
+    let inherited=false;
+    const checkedAt=nowIso();
+    if(!row){
+      const fallback=await loadActiveMailSender(pointId);
+      if(!fallback)return json(request,{connected:false,pointId,needsReconnect:false,connectionState:'NOT_CONNECTED',checkedAt});
+      row={
+        point_id:fallback.sender_point_id,
+        sender_email:fallback.sender_email,
+        status:fallback.status,
+        last_error:null,
+        connected_at:fallback.connected_at,
+        refresh_token_ciphertext:fallback.refresh_token_ciphertext,
+        oauth_client_secret_ciphertext:fallback.oauth_client_secret_ciphertext,
+        refresh_complete:Boolean(fallback.refresh_token_ciphertext),
+        legacy_secret_complete:Boolean(fallback.oauth_client_secret_ciphertext)
+      };
+      inherited=true;
+    }
+
+    const credentialsComplete=row.refresh_complete===true&&Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||row.legacy_secret_complete);
+    if(!credentialsComplete){
+      return json(request,{
+        connected:false,
+        needsReconnect:true,
+        connectionState:'REAUTH_REQUIRED',
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
+        email:row.sender_email,
+        status:row.status,
+        lastError:'Połączenie Gmail jest niekompletne i wymaga ponownej autoryzacji.',
+        connectedAt:row.connected_at,
+        checkedAt
+      });
+    }
+    if(row.status==='REVOKED'){
+      return json(request,{
+        connected:false,
+        needsReconnect:true,
+        connectionState:'REAUTH_REQUIRED',
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
+        email:row.sender_email,
+        status:row.status,
+        lastError:row.last_error||'Zgoda Google dla Gmail wygasła albo została cofnięta.',
+        connectedAt:row.connected_at,
+        checkedAt
+      });
+    }
+
+    try{
+      const refreshToken=decryptSecret(row.refresh_token_ciphertext);
+      const legacyClientSecret=row.oauth_client_secret_ciphertext?decryptSecret(row.oauth_client_secret_ciphertext):'';
+      await refreshGmailAccess(refreshToken,legacyClientSecret);
+      if(row.status!=='ACTIVE'||row.last_error){
+        await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1",[row.point_id]);
+      }
+      return json(request,{
+        connected:true,
+        needsReconnect:false,
+        connectionState:'CONNECTED',
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
+        email:row.sender_email,
+        status:'ACTIVE',
+        lastError:null,
+        connectedAt:row.connected_at,
+        checkedAt
+      });
+    }catch(error){
+      const reauth=isGmailReauthError(error);
+      const message=cleanText(error instanceof Error?error.message:error,500);
+      if(reauth){
+        await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1",[pointId,message]);
+        return json(request,{
+          connected:false,
+          needsReconnect:true,
+          connectionState:'REAUTH_REQUIRED',
+          pointId,
+        senderPointId:row.point_id,
+        inherited,
+          email:row.sender_email,
+          status:'REVOKED',
+          lastError:message,
+          connectedAt:row.connected_at,
+          checkedAt
+        });
+      }
+      return json(request,{
+        connected:false,
+        needsReconnect:false,
+        connectionState:'TEMPORARY_ERROR',
+        pointId,
+        senderPointId:row.point_id,
+        inherited,
+        email:row.sender_email,
+        status:row.status,
+        lastError:'Nie udało się teraz potwierdzić połączenia Gmail. ServiceOS spróbuje ponownie automatycznie.',
+        connectedAt:row.connected_at,
+        checkedAt
+      });
+    }
+  }
+
+  if(method==='POST'&&url.pathname==='/integrations/gmail/connect-code'){
+    const session=await requireActive(request),u=session.user;
+    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do połączenia Gmail.'),{status:403});
+    const body=await readJson(request),pointId=cleanText(body.pointId,80);
+    await requirePoint(u,pointId);
+
+    const tokens=await exchangeDesktopAuthorizationCode(body,'/gmail/callback');
+    if(!tokens?.refresh_token) return json(request,{error:'REFRESH_TOKEN',message:'Google nie zwrócił refresh tokena. Odłącz wcześniejszy dostęp ServiceOS w koncie Google i spróbuj ponownie.'},400);
+    if(!tokens?.id_token) return json(request,{error:'GOOGLE_ID_TOKEN',message:'Google nie zwrócił tokena tożsamości.'},400);
+
+    const profile=await verifyGoogle(String(tokens.id_token),GOOGLE_DESKTOP_CLIENT_ID);
+    await refreshGmailAccess(String(tokens.refresh_token),'');
+    await q(
+      "INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
+      [pointId,u.id,profile.email,encryptSecret(String(tokens.refresh_token))]
+    );
+    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER'});
+    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE'});
+  }
+
+  if(method==='POST'&&url.pathname==='/integrations/gmail/connect'){
+    const session=await requireActive(request),u=session.user;if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do połączenia Gmail.'),{status:403});
+    const body=await readJson(request),pointId=cleanText(body.pointId,80),refreshToken=cleanText(body.refreshToken,4096),idToken=cleanText(body.idToken,8192),clientSecret=cleanText(body.clientSecret,4096);
+    await requirePoint(u,pointId);
+    if(!refreshToken||!idToken||!clientSecret)return json(request,{error:'TOKEN',message:'Brak kompletnych danych autoryzacji Google.'},400);
+
+    const profile=await verifyGoogle(idToken,GOOGLE_DESKTOP_CLIENT_ID);
+    await refreshGmailAccess(refreshToken,clientSecret);
+
+    await q("INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",[pointId,u.id,profile.email,encryptSecret(refreshToken),encryptSecret(clientSecret)]);
+
+    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN'});
+    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE'});
+  }
+
+  if(method==='DELETE'&&url.pathname==='/integrations/gmail'){
+    const session=await requireActive(request),u=session.user;if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const pointId=cleanText(url.searchParams.get('pointId'),80);await requirePoint(u,pointId);await q('DELETE FROM point_email_senders WHERE point_id=$1',[pointId]);await audit(session,'GMAIL_DISCONNECTED','point',pointId,pointId,{});
+    return json(request,{ok:true});
+  }
+
+  if(method==='GET'&&url.pathname==='/notifications/settings'){
+    const session=await requireActive(request),u=session.user;
+    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    await requirePoint(u,pointId);
+    await q("INSERT INTO point_notification_settings(point_id) VALUES($1) ON CONFLICT(point_id) DO NOTHING",[pointId]);
+    const {rows}=await q("SELECT point_id,automatic_email_enabled,notify_statuses,sender_display_name,footer_text,updated_at FROM point_notification_settings WHERE point_id=$1 LIMIT 1",[pointId]);
+    const row=rows[0];
+    return json(request,{
+      pointId:row.point_id,
+      automaticEmailEnabled:row.automatic_email_enabled,
+      notifyStatuses:row.notify_statuses||[],
+      senderDisplayName:row.sender_display_name,
+      footerText:row.footer_text||'',
+      updatedAt:row.updated_at
+    });
+  }
+
+  if(method==='POST'&&url.pathname==='/notifications/settings'){
+    const session=await requireActive(request),u=session.user;
+    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do ustawień powiadomień.'),{status:403});
+    const body=await readJson(request),pointId=cleanText(body.pointId,80);
+    await requirePoint(u,pointId);
+    const automaticEmailEnabled=body.automaticEmailEnabled!==false;
+    const rawStatuses=Array.isArray(body.notifyStatuses)?body.notifyStatuses:[];
+    const notifyStatuses=[...new Set(rawStatuses.map((value)=>String(value).toUpperCase()).filter((value)=>SERVICE_STATUSES.has(value)))];
+    const senderDisplayName=cleanText(body.senderDisplayName||'LockOn ServiceOS',80).replace(/[\r\n]+/g,' ');
+    const footerText=cleanText(body.footerText||'',500);
+    await q(
+      "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,footer_text,updated_by_user_id,updated_at) VALUES($1,$2,$3::text[],$4,NULLIF($5,''),$6,now()) ON CONFLICT(point_id) DO UPDATE SET automatic_email_enabled=EXCLUDED.automatic_email_enabled,notify_statuses=EXCLUDED.notify_statuses,sender_display_name=EXCLUDED.sender_display_name,footer_text=EXCLUDED.footer_text,updated_by_user_id=EXCLUDED.updated_by_user_id,updated_at=now()",
+      [pointId,automaticEmailEnabled,notifyStatuses,senderDisplayName,footerText,u.id]
+    );
+    await audit(session,'NOTIFICATION_SETTINGS_UPDATED','point',pointId,pointId,{automaticEmailEnabled,notifyStatuses});
+    return json(request,{ok:true,pointId,automaticEmailEnabled,notifyStatuses,senderDisplayName,footerText});
+  }
+
+  if(method==='GET'&&url.pathname==='/notifications/history'){
+    const session=await requireActive(request),u=session.user;
+    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    await requirePoint(u,pointId);
+    const {rows}=await q(
+      "SELECT n.id,n.service_order_id,n.recipient,n.status,n.attempts,n.subject,n.provider_message_id,n.last_error,n.available_at,n.sent_at,n.created_at,n.updated_at,s.order_number,c.first_name,c.last_name,d.brand,d.model FROM notification_outbox n LEFT JOIN service_orders s ON s.id=n.service_order_id LEFT JOIN customers c ON c.id=n.customer_id LEFT JOIN devices d ON d.id=s.device_id WHERE s.point_id=$1 ORDER BY n.created_at DESC LIMIT 100",
+      [pointId]
+    );
+    return json(request,rows.map((row)=>({
+      id:row.id,
+      orderId:row.service_order_id,
+      orderNumber:row.order_number?Number(row.order_number):null,
+      recipient:row.recipient,
+      status:row.status,
+      attempts:Number(row.attempts||0),
+      subject:row.subject||null,
+      providerMessageId:row.provider_message_id||null,
+      lastError:row.last_error||null,
+      availableAt:row.available_at,
+      sentAt:row.sent_at||null,
+      createdAt:row.created_at,
+      updatedAt:row.updated_at,
+      customerName:row.first_name?[row.first_name,row.last_name].filter(Boolean).join(' '):null,
+      device:[row.brand,row.model].filter(Boolean).join(' ')
+    })));
+  }
+
+  if(method==='POST'&&url.pathname==='/integrations/gmail/test'){
+    const session=await requireActive(request),u=session.user;
+    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do testowania Gmail.'),{status:403});
+    const body=await readJson(request),pointId=cleanText(body.pointId,80);
+    await requirePoint(u,pointId);
+    const senderBase=await loadActiveMailSender(pointId);
+    if(!senderBase)return json(request,{error:'NO_SENDER',message:'Brak aktywnego firmowego nadawcy Gmail.'},409);
+    const point=(await q("SELECT name FROM points WHERE id=$1 LIMIT 1",[pointId])).rows[0];
+    const settings=await mailSettingsForPoint(pointId);
+    const sender={
+      ...senderBase,
+      sender_display_name:settings.sender_display_name||'LockOn ServiceOS',
+      point_name:point?.name||pointId
+    };
+    const recipient=normalizeEmail(u.email);
+    const subject='LockOn ServiceOS · test powiadomień · '+sender.point_name;
+    const textBody='To jest wiadomość testowa z LockOn ServiceOS.\n\nPunkt: '+sender.point_name+'\nNadawca: '+sender.sender_email+'\n\nJeżeli ją widzisz, integracja Gmail działa poprawnie.';
+    const htmlBody='<!doctype html><html lang="pl"><body style="background:#111318;color:#eceff3;font-family:Arial,sans-serif;padding:28px"><div style="max-width:600px;margin:auto;border:1px solid #2a2f37;border-radius:16px;background:#171a20;padding:22px"><div style="color:#ff7b45;font-size:12px;font-weight:700">LOCKON SERVICEOS</div><h2 style="margin:8px 0 12px">Test powiadomień Gmail</h2><p>Integracja dla punktu <strong>'+escapeHtml(sender.point_name)+'</strong> działa poprawnie.</p><p style="color:#89939e">Nadawca: '+escapeHtml(sender.sender_email)+'</p></div></body></html>';
+    try{
+      const sent=await sendGmail(sender,recipient,subject,textBody,htmlBody,sender.sender_display_name);
+      await q("UPDATE point_email_senders SET last_error=NULL,status='ACTIVE',updated_at=now() WHERE point_id=$1",[sender.sender_point_id]);
+      await audit(session,'GMAIL_TEST_SENT','point',pointId,pointId,{recipient,messageId:sent.id,senderPointId:sender.sender_point_id,inherited:sender.sender_point_id!==pointId});
+      return json(request,{ok:true,recipient,messageId:sent.id});
+    }catch(error){
+      const message=cleanText(error instanceof Error?error.message:error,500);
+      if(isGmailReauthError(error)){
+        await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1",[sender.sender_point_id,message]);
+      }else{
+        await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1",[sender.sender_point_id,message]);
+      }
+      throw Object.assign(new Error(message),{status:502,code:isGmailReauthError(error)?'GMAIL_REAUTH_REQUIRED':'GMAIL_TEST_FAILED'});
+    }
+  }
+
+  const retryNotification=url.pathname.match(/^\/notifications\/([^/]+)\/retry$/);
+  if(method==='POST'&&retryNotification){
+    const session=await requireActive(request),u=session.user;
+    const row=(await q("SELECT n.id,s.point_id FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id WHERE n.id=$1 LIMIT 1",[retryNotification[1]])).rows[0];
+    if(!row)return json(request,{error:'NOT_FOUND'},404);
+    await requirePoint(u,row.point_id);
+    if(!SERVICE_EDIT_ROLES.has(u.role_code)&&!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do ponowienia wysyłki.'),{status:403});
+    await q("UPDATE notification_outbox SET status='PENDING',available_at=now(),last_error=NULL,updated_at=now() WHERE id=$1",[row.id]);
+    const result=await processNotification(row.id);
+    await audit(session,'NOTIFICATION_RETRIED','notification',row.id,row.point_id,result);
+    return json(request,{id:row.id,...result});
+  }
+
+  if(method==='POST'&&url.pathname==='/notifications/process'){
+    const session=await requireActive(request);if(!GLOBAL_ROLES.has(session.user.role_code))throw Object.assign(new Error('Brak uprawnień.'),{status:403});
+    const {rows}=await q("SELECT id FROM notification_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY created_at ASC LIMIT 20");
+    const results=[];for(const row of rows)results.push({id:row.id,...(await processNotification(row.id))});
+    return json(request,{processed:results.length,results});
+  }
+
+  if(method==='GET'&&url.pathname==='/support/conversation'){
+    const session=await requireActive(request);return json(request,await conversationPayload(session.user.id));
+  }
+
+  if(method==='POST'&&url.pathname==='/support/request'){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    const requestedPointId=cleanText(body.pointId,80);
+    const pointIds=await visiblePointIds(u);
+    const pointId=requestedPointId&&pointIds.includes(requestedPointId)?requestedPointId:(pointIds[0]||null);
+    if(!pointId)return json(request,{error:'POINT_REQUIRED',message:'Konto nie ma przypisanego punktu do zgłoszenia.'},409);
+    let conversation=(await q("SELECT id,user_id,subject,status,point_id,assigned_support_user_id,taken_at,closed_at,created_at,updated_at FROM support_conversations WHERE user_id=$1 AND status='OPEN' ORDER BY updated_at DESC LIMIT 1",[u.id])).rows[0];
+    if(!conversation){
+      const id=makeId('sup');
+      conversation=(await q("INSERT INTO support_conversations(id,user_id,subject,status,point_id) VALUES($1,$2,'Pomoc konsultanta','OPEN',$3) RETURNING *",[id,u.id,pointId])).rows[0];
+    }else if(!conversation.point_id){
+      conversation=(await q("UPDATE support_conversations SET point_id=$2,updated_at=now() WHERE id=$1 RETURNING *",[conversation.id,pointId])).rows[0];
+    }
+    const note=cleanText(body.message,1500);
+    if(note)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'USER',$4)",[makeId('msg'),conversation.id,u.id,note]);
+    await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,NULL,'SYSTEM',$3)",[makeId('msg'),conversation.id,'Poproszono konsultanta o pomoc.']);
+    await q("UPDATE support_conversations SET updated_at=now() WHERE id=$1",[conversation.id]);
+    await audit(session,'SUPPORT_REQUESTED','support_conversation',conversation.id,pointId,{});
+    return json(request,{ok:true,conversationId:conversation.id,pointId},201);
+  }
+
+  if(method==='GET'&&url.pathname==='/support/tickets'){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='SUPPORT'&&!GLOBAL_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zgłoszeń wsparcia.'),{status:403});
+    const ids=await visiblePointIds(u);
+    const {rows}=GLOBAL_ROLES.has(u.role_code)
+      ? await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200")
+      : await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.point_id=ANY($1::text[]) ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[ids]);
+    const tickets=[];
+    for(const row of rows){
+      const messages=(await q("SELECT id,sender_user_id,sender_kind,body,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 200",[row.id])).rows;
+      tickets.push({id:row.id,userId:row.user_id,userName:row.user_name,userEmail:row.user_email,pointId:row.point_id,pointName:row.point_name||'Brak punktu',status:row.status,assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_name||null,createdAt:row.created_at,updatedAt:row.updated_at,messages:messages.map(m=>({id:m.id,author:m.sender_kind.toLowerCase(),text:m.body,createdAt:m.created_at}))});
+    }
+    return json(request,tickets);
+  }
+
+  const supportTicketAction=url.pathname.match(/^\/support\/tickets\/([^/]+)\/(take|reply|close)$/);
+  if(method==='POST'&&supportTicketAction){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='SUPPORT'&&!GLOBAL_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zgłoszeń wsparcia.'),{status:403});
+    const ticket=(await q("SELECT * FROM support_conversations WHERE id=$1 LIMIT 1",[supportTicketAction[1]])).rows[0];
+    if(!ticket)return json(request,{error:'NOT_FOUND'},404);
+    if(ticket.point_id)await requirePoint(u,ticket.point_id);
+    const action=supportTicketAction[2],body=await readJson(request);
+    if(action==='take'){
+      await q("UPDATE support_conversations SET assigned_support_user_id=$2,taken_at=COALESCE(taken_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
+      await audit(session,'SUPPORT_TAKEN','support_conversation',ticket.id,ticket.point_id,{});
+    }else if(action==='reply'){
+      const message=cleanText(body.message,2000);if(!message)return json(request,{error:'MESSAGE_REQUIRED'},400);
+      if(ticket.status!=='OPEN')return json(request,{error:'TICKET_CLOSED',message:'Zgłoszenie jest zamknięte.'},409);
+      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SUPPORT',$4)",[makeId('msg'),ticket.id,u.id,message]);
+      await q("UPDATE support_conversations SET assigned_support_user_id=COALESCE(assigned_support_user_id,$2),taken_at=COALESCE(taken_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
+      await audit(session,'SUPPORT_REPLIED','support_conversation',ticket.id,ticket.point_id,{length:message.length});
+    }else{
+      await q("UPDATE support_conversations SET status='CLOSED',closed_at=now(),assigned_support_user_id=COALESCE(assigned_support_user_id,$2),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
+      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SYSTEM','Konsultant zamknął zgłoszenie.')",[makeId('msg'),ticket.id,u.id]);
+      await audit(session,'SUPPORT_CLOSED','support_conversation',ticket.id,ticket.point_id,{});
     }
     return json(request,{ok:true});
   }
