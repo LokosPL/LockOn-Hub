@@ -8,7 +8,6 @@ pool.on('error', (error) => console.error('[postgres idle client]', error));
 const OWNER_EMAIL = String(process.env.LOCKON_OWNER_EMAIL || 'nowogar@gmail.com').trim().toLowerCase();
 const GOOGLE_DESKTOP_CLIENT_ID = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_ID || '').trim();
 const GOOGLE_DESKTOP_CLIENT_SECRET = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET || '').trim();
-const GOOGLE_WEB_CLIENT_ID = String(process.env.LOCKON_GOOGLE_WEB_CLIENT_ID || '').trim();
 const SITE_ORIGINS = new Set(
   [
     String(process.env.LOCKON_SITE_ORIGIN || '').trim().replace(/\/$/, ''),
@@ -1897,15 +1896,10 @@ const route = async (request) => {
   }
 
   if (method === 'POST' && url.pathname === '/auth/google-web') {
-    const body = await readJson(request);
-    if (!body.idToken) return json(request, { error: 'MISSING_TOKEN', message: 'Brak tokena Google.' }, 400);
-    try {
-      const profile = await verifyGoogle(String(body.idToken), GOOGLE_WEB_CLIENT_ID);
-      return json(request, await loginProfile(profile, 'WEB', false));
-    } catch (error) {
-      if (error?.status) throw error;
-      return json(request, { error: 'GOOGLE_AUTH_FAILED', message: 'Google nie potwierdził tożsamości.' }, 401);
-    }
+    return json(request, {
+      error: 'WEB_CODE_ONLY',
+      message: 'Panel WWW można połączyć wyłącznie jednorazowym kodem z aplikacji ServiceOS.'
+    }, 404);
   }
 
   if (method === 'POST' && url.pathname === '/auth/dev-owner') {
