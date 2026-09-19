@@ -54,6 +54,45 @@ let splashWindow: BrowserWindow | null = null;
 let mainReady: Promise<void> = Promise.resolve();
 let localApiProcess: ChildProcess | null = null;
 
+const APP_PROTOCOL = 'lockon-serviceos';
+let pendingProtocolFocus = false;
+
+const focusMainWindow = () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    pendingProtocolFocus = true;
+    return;
+  }
+  pendingProtocolFocus = false;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+};
+
+const handleProtocolUrl = (value: string) => {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== APP_PROTOCOL + ':' || url.hostname !== 'login-complete') return false;
+    focusMainWindow();
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, commandLine) => {
+    const deepLink = commandLine.find((arg) => arg.startsWith(APP_PROTOCOL + '://'));
+    if (!deepLink || !handleProtocolUrl(deepLink)) focusMainWindow();
+  });
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    handleProtocolUrl(url);
+  });
+}
+
 const rendererUrl = (view?: string) => {
   if (isDevelopment) {
     const url = new URL(process.env.VITE_DEV_SERVER_URL!);
@@ -734,6 +773,14 @@ const registerIpc = () => {
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
 
+  if (process.defaultApp && process.argv[1]) {
+    app.setAsDefaultProtocolClient(APP_PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
+  } else {
+    app.setAsDefaultProtocolClient(APP_PROTOCOL);
+  }
+  const startupDeepLink = process.argv.find((arg) => arg.startsWith(APP_PROTOCOL + '://'));
+  if (startupDeepLink) handleProtocolUrl(startupDeepLink);
+
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
 
@@ -749,6 +796,7 @@ app.whenReady().then(async () => {
   createMainWindow();
   await delay(380);
   await runStartupSequence();
+  if (pendingProtocolFocus) focusMainWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
