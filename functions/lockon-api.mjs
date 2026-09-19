@@ -937,6 +937,155 @@ const mailSettingsForPoint = async (pointId) => {
   };
 };
 
+const CUSTOMER_PORTAL_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+const normalizeCustomerPortalCode = (value) => {
+  let raw = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if (raw.startsWith('LK')) raw = raw.slice(2);
+  if (!/^[A-Z0-9]{16}$/.test(raw)) return '';
+  return 'LK-' + raw.match(/.{4}/g).join('-');
+};
+
+const generateCustomerPortalCode = () => {
+  let raw = '';
+  for (let i = 0; i < 16; i += 1) raw += CUSTOMER_PORTAL_ALPHABET[crypto.randomInt(0, CUSTOMER_PORTAL_ALPHABET.length)];
+  return 'LK-' + raw.match(/.{4}/g).join('-');
+};
+
+const ensureCustomerPortalCode = async (customerId) => {
+  let row = (await q("SELECT portal_code_hash,portal_code_ciphertext FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
+  if (!row) throw Object.assign(new Error('Nie znaleziono klienta.'),{status:404});
+  if (row.portal_code_ciphertext) return decryptSecret(row.portal_code_ciphertext);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = generateCustomerPortalCode();
+    const hash = tokenHash(code);
+    const packed = encryptSecret(code);
+    try {
+      const updated = (await q(
+        "UPDATE customers SET portal_code_hash=$2,portal_code_ciphertext=$3,portal_code_created_at=COALESCE(portal_code_created_at,now()),updated_at=now() WHERE id=$1 AND portal_code_ciphertext IS NULL RETURNING portal_code_ciphertext",
+        [customerId,hash,packed]
+      )).rows[0];
+      if (updated?.portal_code_ciphertext) return code;
+      row = (await q("SELECT portal_code_ciphertext FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
+      if (row?.portal_code_ciphertext) return decryptSecret(row.portal_code_ciphertext);
+    } catch (error) {
+      if (String(error?.code || '') !== '23505') throw error;
+    }
+  }
+  throw new Error('Nie udało się utworzyć identyfikatora klienta.');
+};
+
+const createCustomerPortalSession = async (customerId) => {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + CUSTOMER_PORTAL_SESSION_TTL_MS);
+  await q("DELETE FROM customer_portal_sessions WHERE expires_at<=now()");
+  await q(
+    "INSERT INTO customer_portal_sessions(id,customer_id,token_hash,expires_at) VALUES($1,$2,$3,$4)",
+    [makeId('cps'),customerId,tokenHash(token),expiresAt]
+  );
+  return { token, expiresAt: expiresAt.toISOString() };
+};
+
+const requireCustomerPortal = async (request) => {
+  const auth = String(request.headers.get('authorization') || '');
+  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw Object.assign(new Error('Sesja klienta wygasła. Wpisz identyfikator ponownie.'),{status:401});
+  const row = (await q(
+    "SELECT s.id AS session_id,s.customer_id,s.expires_at,c.first_name,c.last_name,c.email,c.phone FROM customer_portal_sessions s JOIN customers c ON c.id=s.customer_id WHERE s.token_hash=$1 AND s.expires_at>now() LIMIT 1",
+    [tokenHash(token)]
+  )).rows[0];
+  if (!row) throw Object.assign(new Error('Sesja klienta wygasła. Wpisz identyfikator ponownie.'),{status:401});
+  await q("UPDATE customer_portal_sessions SET last_seen_at=now() WHERE id=$1",[row.session_id]);
+  return row;
+};
+
+const routeCustomerQuote = async (requestedPointId) => {
+  const local = (await q(
+    "SELECT u.id,u.name FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=$1 AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL ORDER BY (SELECT count(*) FROM service_orders s WHERE s.assigned_technician_id=u.id)::int DESC,u.last_login_at DESC LIMIT 1",
+    [requestedPointId]
+  )).rows[0];
+  if (local) return { routedPointId: requestedPointId, technicianId: local.id, routingReason: 'LOCAL_TECHNICIAN' };
+
+  let destination = (await q(
+    "SELECT t.to_point_id,count(*)::int AS transfer_count,max(t.requested_at) AS last_transfer FROM service_order_transfers t JOIN users su ON su.id=t.sent_by_user_id WHERE t.from_point_id=$1 AND t.kind='OUTBOUND_SERVICE' AND su.role_code='USER' AND EXISTS(SELECT 1 FROM user_point_access a JOIN users tu ON tu.id=a.user_id WHERE a.point_id=t.to_point_id AND tu.role_code='TECHNICIAN' AND tu.status='ACTIVE' AND tu.blocked_at IS NULL) GROUP BY t.to_point_id ORDER BY count(*) DESC,max(t.requested_at) DESC LIMIT 1",
+    [requestedPointId]
+  )).rows[0];
+  if (!destination) {
+    destination = (await q(
+      "SELECT t.to_point_id,count(*)::int AS transfer_count,max(t.requested_at) AS last_transfer FROM service_order_transfers t WHERE t.from_point_id=$1 AND t.kind='OUTBOUND_SERVICE' AND EXISTS(SELECT 1 FROM user_point_access a JOIN users tu ON tu.id=a.user_id WHERE a.point_id=t.to_point_id AND tu.role_code='TECHNICIAN' AND tu.status='ACTIVE' AND tu.blocked_at IS NULL) GROUP BY t.to_point_id ORDER BY count(*) DESC,max(t.requested_at) DESC LIMIT 1",
+      [requestedPointId]
+    )).rows[0];
+  }
+  if (!destination) return { routedPointId: requestedPointId, technicianId: null, routingReason: 'POINT_QUEUE_NO_TECHNICIAN' };
+
+  const tech = (await q(
+    "SELECT u.id,u.name FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=$1 AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL ORDER BY (SELECT count(*) FROM service_order_transfers t WHERE t.from_point_id=$2 AND t.to_point_id=$1 AND t.accepted_by_user_id=u.id)::int DESC,(SELECT count(*) FROM service_orders s WHERE s.assigned_technician_id=u.id)::int DESC,u.last_login_at DESC LIMIT 1",
+    [destination.to_point_id,requestedPointId]
+  )).rows[0];
+  return { routedPointId: destination.to_point_id, technicianId: tech?.id || null, routingReason: 'MOST_USED_TRANSFER_DESTINATION' };
+};
+
+const loadCustomerPortalPayload = async (customerId) => {
+  const customer = (await q("SELECT id,first_name,last_name,email,phone,created_at FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
+  const [ordersResult,quotesResult,pointsResult] = await Promise.all([
+    q(
+      "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_completion_at,s.estimated_cost,s.final_cost,s.currency,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,d.imei,d.serial_number,p.id AS point_id,p.name AS point_name,hp.id AS home_point_id,hp.name AS home_point_name,cp.id AS current_point_id,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.customer_id=$1 ORDER BY s.received_at DESC,s.order_number DESC",
+      [customerId]
+    ),
+    q(
+      "SELECT r.*,rp.name AS requested_point_name,rrp.name AS routed_point_name,u.name AS technician_name FROM customer_quote_requests r JOIN points rp ON rp.id=r.requested_point_id JOIN points rrp ON rrp.id=r.routed_point_id LEFT JOIN users u ON u.id=r.assigned_technician_id WHERE r.customer_id=$1 ORDER BY r.updated_at DESC",
+      [customerId]
+    ),
+    q("SELECT id,name,city FROM points WHERE active=true ORDER BY city,name")
+  ]);
+
+  const quoteIds = quotesResult.rows.map((row)=>row.id);
+  let messageRows = [];
+  if (quoteIds.length) {
+    messageRows = (await q(
+      "SELECT m.id,m.request_id,m.sender_kind,m.body,m.created_at,u.name AS sender_name FROM customer_quote_messages m LEFT JOIN users u ON u.id=m.sender_user_id WHERE m.request_id=ANY($1::text[]) ORDER BY m.created_at ASC",
+      [quoteIds]
+    )).rows;
+  }
+  const messagesByRequest = new Map();
+  for (const row of messageRows) {
+    const list = messagesByRequest.get(row.request_id) || [];
+    list.push({id:row.id,senderKind:row.sender_kind,senderName:row.sender_name||null,body:row.body,createdAt:row.created_at});
+    messagesByRequest.set(row.request_id,list);
+  }
+
+  return {
+    customer:{id:customer.id,firstName:customer.first_name,lastName:customer.last_name,email:customer.email||null,phone:customer.phone||null,customerSince:customer.created_at},
+    orders:ordersResult.rows.map((row)=>({
+      id:row.id,orderNumber:Number(row.order_number),orderType:row.order_type,handlingMode:row.handling_mode||'STANDARD',
+      issueDescription:row.issue_description,status:row.status,statusLabel:STATUS_LABELS[row.status]||row.status,
+      device:{brand:row.brand,model:row.model,imei:row.imei?('••••••••••'+String(row.imei).slice(-4)):null,serialNumber:row.serial_number?('••••'+String(row.serial_number).slice(-4)):null},
+      pointId:row.point_id,pointName:row.point_name,homePointId:row.home_point_id||row.point_id,homePointName:row.home_point_name||row.point_name,
+      currentPointId:row.current_point_id||null,currentPointName:row.current_point_name||null,
+      estimatedCompletionAt:row.estimated_completion_at||null,estimatedCost:row.estimated_cost==null?null:Number(row.estimated_cost),
+      finalCost:row.final_cost==null?null:Number(row.final_cost),currency:row.currency||'PLN',
+      receivedAt:row.received_at,completedAt:row.completed_at||null,createdAt:row.created_at,updatedAt:row.updated_at
+    })),
+    points:pointsResult.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
+    quoteRequests:quotesResult.rows.map((row)=>({
+      id:row.id,requestedPointId:row.requested_point_id,requestedPointName:row.requested_point_name,
+      routedPointId:row.routed_point_id,routedPointName:row.routed_point_name,assignedTechnicianName:row.technician_name||null,
+      serviceOrderId:row.service_order_id||null,deviceDescription:row.device_description,issueDescription:row.issue_description,
+      status:row.status,quoteAmount:row.quote_amount==null?null:Number(row.quote_amount),currency:row.currency||'PLN',
+      quoteNote:row.quote_note||null,routingReason:row.routing_reason,createdAt:row.created_at,updatedAt:row.updated_at,
+      quotedAt:row.quoted_at||null,closedAt:row.closed_at||null,messages:messagesByRequest.get(row.id)||[]
+    }))
+  };
+};
+
+const staffQuoteVisible = async (user, requestId) => {
+  const row = (await q(
+    "SELECT r.* FROM customer_quote_requests r WHERE r.id=$1 AND ($2::boolean OR r.assigned_technician_id=$3 OR EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$3 AND a.point_id IN (r.requested_point_id,r.routed_point_id))) LIMIT 1",
+    [requestId,GLOBAL_ROLES.has(user.role_code),user.id]
+  )).rows[0];
+  return row || null;
+};
+
 const renderStatusEmail = (item) => {
   const displayName = cleanText(item.sender_display_name || 'LockOn ServiceOS', 80).replace(/[\r\n]+/g, ' ');
   const transferStatus = String(item.payload?.transferStatus || '').toUpperCase();
