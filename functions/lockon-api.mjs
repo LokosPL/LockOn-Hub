@@ -2514,7 +2514,7 @@ const route = async (request) => {
   const transferStatusMatch=url.pathname.match(/^\/service\/transfers\/([^/]+)\/status$/);
   if(method==='POST'&&transferStatusMatch){
     const session=await requireActive(request),u=session.user;
-    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do obsługi przekazania.'),{status:403});
+    if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do obsługi przekazania.'),{status:403});
     const transfer=(await q('SELECT * FROM service_order_transfers WHERE id=$1 LIMIT 1',[transferStatusMatch[1]])).rows[0];
     if(!transfer)return json(request,{error:'NOT_FOUND'},404);
 
