@@ -375,7 +375,7 @@ const secureHandle = (channel: string, listener: SecureHandler) => {
   });
 };
 
-const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf') => {
+const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf' | 'sup') => {
   const text = String(value ?? '');
   if (!new RegExp(`^${prefix}_[a-f0-9]{20}$`).test(text)) throw new Error('Nieprawidłowy identyfikator.');
   return text;
