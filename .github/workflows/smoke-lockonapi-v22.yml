@@ -1,0 +1,32 @@
+name: Smoke production lockonapi v22
+
+on:
+  push:
+    branches: ["ops/deploy-lockonapi-v22"]
+    paths:
+      - ".github/workflows/smoke-lockonapi-v22.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe production health
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 --max-time 20 \
+            'https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech/health')"
+          printf '%s' "$body" | jq -e '.ok == true and .service == "LockOn ServiceOS Central API"'
+      - name: Verify protected endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in '/me' '/finance/technician-settings' '/finance/revenues' '/service/orders'; do
+            code="$(curl --silent --output /tmp/out.json --write-out '%{http_code}' --max-time 20 \
+              "https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech/${path#/}")"
+            test "$code" = "401"
+          done
