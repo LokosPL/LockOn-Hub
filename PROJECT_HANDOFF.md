@@ -512,6 +512,17 @@ Dla każdego priorytetu:
 - Neon lockonapi wdrożony jako v26 z artifact digest SHA-256 b4e896d7dd489b9434255d46cce23924dd5707cfd5345e4ed185bad155b45fb9.
 - Bez zmian schematu DB; produkcja ma istniejące zdarzenia audytu, a nowy endpoint czyta je bez destrukcyjnych testów.
 
+## Priorytet 7 — ZROBIONE produkcyjnie (2026-09-19)
+
+- Hub PR #39 i PWA PR #16 scalone.
+- BOSS/OWNER widzi łączny przychód firmy, łączny udział serwisantów, udział firmy/Szefa oraz rozbicie per punkt.
+- Punkt można rozwinąć do wpisów/zleceń z serwisantem, kwotą, snapshotem procentu i datą; wpisy ręczne i automatyczne są rozróżnione.
+- Model nie wraca do stałego 50/50: każdy wpis używa zapisanego `technician_percent`; historia zachowuje snapshot.
+- Verify ServiceOS #460 SUCCESS, Verify Neon API bundle #8 SUCCESS, CodeQL #235 SUCCESS, PWA Verify #120 SUCCESS.
+- Neon lockonapi wdrożony jako v27 z artifact digest SHA-256 5d60feed08bb57ec39385f31bda7a37d5e9a4f0e3f8d9cbf77cead99e69af11d.
+- Produkcyjny odczyt kontrolny: Sklep LockOn 1800 PLN przychodu / 900 PLN serwisant / 900 PLN firma.
+- Bez zmian schematu DB i bez destrukcyjnych testów.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
