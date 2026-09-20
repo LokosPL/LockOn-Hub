@@ -78,13 +78,13 @@ jobs:
         run: |
           set -euo pipefail
           target_branch="tmp/v021-service-finance-smoke"
-          target_path=".temp/temp-neon-lockonapi.zip"
+          target_path=".temp/temp-neon-lockonapi.b64"
           current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
           TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" node - <<'NODE'
           const fs=require('fs');
           const payload={
             message:'ci: stage exact temp Neon bundle',
-            content:fs.readFileSync('temp-neon-lockonapi.zip').toString('base64'),
+            content:Buffer.from(fs.readFileSync('temp-neon-lockonapi.zip').toString('base64'),'utf8').toString('base64'),
             branch:process.env.TARGET_BRANCH
           };
           if(process.env.CURRENT_SHA) payload.sha=process.env.CURRENT_SHA;
