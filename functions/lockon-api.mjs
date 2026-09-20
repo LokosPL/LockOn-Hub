@@ -315,6 +315,43 @@ const verifyGoogle = async (idToken, audience) => {
   };
 };
 
+const verifyGoogleAccessToken = async (accessToken, audience) => {
+  if (!audience) throw new Error('Google OAuth audience is not configured.');
+  const token = cleanText(accessToken,4096);
+  if (!token) throw new Error('Brak tokena Google.');
+  const tokenInfoResponse = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token), {
+    headers:{Accept:'application/json'},
+    redirect:'error'
+  });
+  const tokenInfo = await tokenInfoResponse.json().catch(() => ({}));
+  const tokenAudience = cleanText(tokenInfo.aud || tokenInfo.audience || tokenInfo.issued_to || '',300);
+  if (!tokenInfoResponse.ok || tokenAudience !== audience || String(tokenInfo.email_verified || '').toLowerCase() !== 'true') {
+    throw new Error('Google nie potwierdził tożsamości.');
+  }
+  const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers:{Authorization:'Bearer ' + token,Accept:'application/json'},
+    redirect:'error'
+  });
+  const userInfo = await userInfoResponse.json().catch(() => ({}));
+  const sub = cleanText(userInfo.sub || tokenInfo.sub || '',180);
+  const email = normalizeEmail(userInfo.email || tokenInfo.email || '');
+  if (!userInfoResponse.ok || !sub || !email || (userInfo.email_verified !== undefined && userInfo.email_verified !== true)) {
+    throw new Error('Google nie potwierdził tożsamości.');
+  }
+  return {
+    sub,
+    email,
+    name: cleanText(userInfo.name || email,120),
+    picture: cleanText(userInfo.picture || '',1000) || null
+  };
+};
+
+const verifyCustomerGoogleCredential = async (body) => {
+  if (body?.idToken) return verifyGoogle(String(body.idToken),GOOGLE_CUSTOMER_WEB_CLIENT_ID);
+  if (body?.accessToken) return verifyGoogleAccessToken(String(body.accessToken),GOOGLE_CUSTOMER_WEB_CLIENT_ID);
+  throw Object.assign(new Error('Brak tokena Google.'),{code:'MISSING_TOKEN'});
+};
+
 const validateDesktopRedirectUri = (value, expectedPath) => {
   let parsed;
   try { parsed = new URL(String(value || '')); }
@@ -2006,10 +2043,12 @@ const route = async (request) => {
     const customerSession = await requireCustomerPortal(request);
     if (!GOOGLE_CUSTOMER_WEB_CLIENT_ID) return json(request,{error:'GOOGLE_NOT_CONFIGURED',message:'Logowanie Google dla klientów nie jest jeszcze dostępne.'},503);
     const body = await readJson(request);
-    if (!body.idToken) return json(request,{error:'MISSING_TOKEN',message:'Brak tokena Google.'},400);
     let profile;
-    try { profile = await verifyGoogle(String(body.idToken),GOOGLE_CUSTOMER_WEB_CLIENT_ID); }
-    catch { return json(request,{error:'GOOGLE_AUTH_FAILED',message:'Google nie potwierdził tożsamości.'},401); }
+    try { profile = await verifyCustomerGoogleCredential(body); }
+    catch (error) {
+      if (error?.code === 'MISSING_TOKEN') return json(request,{error:'MISSING_TOKEN',message:'Brak tokena Google.'},400);
+      return json(request,{error:'GOOGLE_AUTH_FAILED',message:'Google nie potwierdził tożsamości. Spróbuj ponownie wybrać konto Google.'},401);
+    }
     const customerEmail=normalizeEmail(customerSession.email||'');
     if (!customerEmail) return json(request,{error:'CUSTOMER_EMAIL_REQUIRED',message:'Najpierw poproś punkt LockOn o zapisanie Twojego adresu e-mail przy kliencie.'},409);
     if (profile.email!==customerEmail) return json(request,{error:'GOOGLE_EMAIL_MISMATCH',message:'Konto Google musi używać tego samego adresu e-mail, który jest zapisany przy kliencie: '+customerEmail},409);
@@ -2030,10 +2069,12 @@ const route = async (request) => {
   if (method === 'POST' && url.pathname === '/public/customer-portal/google/login') {
     if (!GOOGLE_CUSTOMER_WEB_CLIENT_ID) return json(request,{error:'GOOGLE_NOT_CONFIGURED',message:'Logowanie Google dla klientów nie jest jeszcze dostępne.'},503);
     const body=await readJson(request);
-    if (!body.idToken) return json(request,{error:'MISSING_TOKEN',message:'Brak tokena Google.'},400);
     let profile;
-    try { profile=await verifyGoogle(String(body.idToken),GOOGLE_CUSTOMER_WEB_CLIENT_ID); }
-    catch { return json(request,{error:'GOOGLE_AUTH_FAILED',message:'Google nie potwierdził tożsamości.'},401); }
+    try { profile=await verifyCustomerGoogleCredential(body); }
+    catch (error) {
+      if (error?.code === 'MISSING_TOKEN') return json(request,{error:'MISSING_TOKEN',message:'Brak tokena Google.'},400);
+      return json(request,{error:'GOOGLE_AUTH_FAILED',message:'Google nie potwierdził tożsamości. Spróbuj ponownie wybrać konto Google.'},401);
+    }
     let account=(await q(
       "SELECT a.customer_id,a.blocked_at,a.blocked_reason,c.email FROM customer_portal_accounts a JOIN customers c ON c.id=a.customer_id WHERE a.google_sub=$1 LIMIT 1",
       [profile.sub]
@@ -2312,6 +2353,53 @@ const route = async (request) => {
     const sent=await sendGmail(sender,customer.email,subject,textBody,htmlBody,settings.sender_display_name||'LockOn ServiceOS');
     await audit(session,'CUSTOMER_CODE_SENT','customer',customer.id,point.point_id,{recipient:customer.email,messageId:sent.id,googleLinked:Boolean(account?.google_sub)});
     return json(request,{ok:true,recipient:customer.email,messageId:sent.id});
+  }
+
+  const customerAccountProfileMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/profile$/);
+  if(method==='POST'&&customerAccountProfileMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerAccountProfileMatch[1]);
+    const body=await readJson(request);
+    const firstName=cleanText(body.firstName,100);
+    const lastName=cleanText(body.lastName,100);
+    const email=normalizeEmail(body.email||'')||null;
+    const phone=cleanText(body.phone,40)||null;
+    if(!firstName)return json(request,{error:'CUSTOMER_NAME_REQUIRED',message:'Podaj imię klienta.'},400);
+    if(email&&(!email.includes('@')||email.length>200))return json(request,{error:'CUSTOMER_EMAIL_INVALID',message:'Podaj prawidłowy adres e-mail.'},400);
+    const before={firstName:customer.first_name,lastName:customer.last_name,email:customer.email||null,phone:customer.phone||null};
+    const account=await customerPortalAccount(customer.id);
+    const emailChanged=normalizeEmail(customer.email||'')!==normalizeEmail(email||'');
+    let googleDisconnected=false;
+    let revokedGoogleSessions=0;
+    if(emailChanged&&account?.google_sub){
+      await q("UPDATE customer_portal_accounts SET google_sub=NULL,google_email=NULL,google_name=NULL,google_picture_url=NULL,linked_at=NULL,last_login_at=NULL,updated_at=now() WHERE customer_id=$1",[customer.id]);
+      revokedGoogleSessions=await revokeCustomerPortalSessions(customer.id,'GOOGLE');
+      googleDisconnected=true;
+    }
+    const updated=(await q(
+      "UPDATE customers SET first_name=$2,last_name=$3,email=$4,phone=$5,updated_at=now() WHERE id=$1 RETURNING id,first_name,last_name,email,phone,created_at,updated_at",
+      [customer.id,firstName,lastName,email,phone]
+    )).rows[0];
+    await audit(session,'CUSTOMER_PROFILE_UPDATED','customer',customer.id,null,{
+      before,after:{firstName:updated.first_name,lastName:updated.last_name,email:updated.email||null,phone:updated.phone||null},
+      googleDisconnected,revokedGoogleSessions
+    });
+    return json(request,{ok:true,customer:{...customerView(updated),createdAt:updated.created_at,updatedAt:updated.updated_at},googleDisconnected,revokedGoogleSessions});
+  }
+
+  const customerAccountGoogleUnlinkMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/google\/unlink$/);
+  if(method==='POST'&&customerAccountGoogleUnlinkMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerAccountGoogleUnlinkMatch[1]);
+    const account=await customerPortalAccount(customer.id);
+    if(!account?.google_sub)return json(request,{ok:true,unlinked:false,revoked:0});
+    await q(
+      "UPDATE customer_portal_accounts SET google_sub=NULL,google_email=NULL,google_name=NULL,google_picture_url=NULL,linked_at=NULL,last_login_at=NULL,updated_at=now() WHERE customer_id=$1",
+      [customer.id]
+    );
+    const revoked=await revokeCustomerPortalSessions(customer.id,'GOOGLE');
+    await audit(session,'CUSTOMER_GOOGLE_UNLINKED_BY_STAFF','customer',customer.id,null,{googleEmail:account.google_email||null,revokedSessions:revoked});
+    return json(request,{ok:true,unlinked:true,revoked});
   }
 
   const customerAccountBlockMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/block$/);
