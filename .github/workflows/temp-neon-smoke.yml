@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: temp-neon-smoke-${{ github.ref }}
@@ -69,6 +69,28 @@ jobs:
           path: temp-neon-lockonapi.zip
           if-no-files-found: error
           retention-days: 3
+
+      - name: Publish exact bundle to temp GitHub branch for connector deploy
+        if: steps.neon_credential.outputs.available != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target_branch="tmp/v021-service-finance-smoke"
+          target_path=".temp/temp-neon-lockonapi.zip"
+          current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
+          TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" node - <<'NODE'
+          const fs=require('fs');
+          const payload={
+            message:'ci: stage exact temp Neon bundle',
+            content:fs.readFileSync('temp-neon-lockonapi.zip').toString('base64'),
+            branch:process.env.TARGET_BRANCH
+          };
+          if(process.env.CURRENT_SHA) payload.sha=process.env.CURRENT_SHA;
+          fs.writeFileSync('bundle-upload.json',JSON.stringify(payload));
+          NODE
+          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${target_path}" --input bundle-upload.json >/dev/null
 
       - name: Deploy bundle to temp Neon only
         if: steps.neon_credential.outputs.available == 'true'
