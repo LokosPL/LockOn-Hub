@@ -1,0 +1,37 @@
+name: Prepare customer accounts Neon payload
+
+on:
+  push:
+    paths:
+      - ".github/workflows/temp-customer-payload.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  payload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: Build compact bundle
+        run: |
+          npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 esbuild@0.25.12
+          mkdir -p tmp/customer-function
+          npx esbuild functions/lockon-api.mjs --bundle --minify --platform=node --target=node24 --format=esm --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" --outfile=tmp/customer-function/index.mjs
+          cd tmp/customer-function
+          zip -9 -q ../lockonapi-v34.zip index.mjs
+          cd ../..
+          base64 -w0 tmp/lockonapi-v34.zip > tmp/lockonapi-v34.b64
+      - name: Commit payload
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f tmp/lockonapi-v34.b64
+          git commit -m "chore: prepare customer accounts Neon payload" || exit 0
+          git push origin "HEAD:${GITHUB_REF_NAME}"
