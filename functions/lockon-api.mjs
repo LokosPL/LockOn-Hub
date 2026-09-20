@@ -517,7 +517,7 @@ const searchCustomers = async (user, term) => {
     return rows.map(customerView);
   }
   const { rows } = await q(
-    "SELECT DISTINCT c.id,c.first_name,c.last_name,c.email,c.phone FROM customers c JOIN service_orders s ON s.customer_id=c.id JOIN user_point_access a ON a.point_id=s.point_id AND a.user_id=$2 WHERE lower(c.first_name||' '||c.last_name||' '||coalesce(c.email,'')||' '||coalesce(c.phone,'')) LIKE '%'||lower($1)||'%' ORDER BY c.last_name,c.first_name LIMIT 20",
+    "SELECT DISTINCT c.id,c.first_name,c.last_name,c.email,c.phone FROM customers c JOIN service_orders s ON s.customer_id=c.id WHERE lower(c.first_name||' '||c.last_name||' '||coalesce(c.email,'')||' '||coalesce(c.phone,'')) LIKE '%'||lower($1)||'%' AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY c.last_name,c.first_name LIMIT 20",
     [query, user.id]
   );
   return rows.map(customerView);
@@ -844,7 +844,7 @@ const attachTransfers = async (orders) => {
 const canSeeOrder = async (user, orderId) => {
   if (GLOBAL_ROLES.has(user.role_code)) return true;
   const { rowCount } = await q(
-    "SELECT 1 FROM service_orders s WHERE s.id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id)) LIMIT 1",
+    "SELECT 1 FROM service_orders s WHERE s.id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) LIMIT 1",
     [orderId, user.id]
   );
   return rowCount > 0;
@@ -1012,7 +1012,7 @@ const getVisibleOrderByNumber = async (user, number) => {
   let access = '';
   if (!GLOBAL_ROLES.has(user.role_code)) {
     params.push(user.id);
-    access = " AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id))";
+    access = " AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')))";
   }
   const { rows } = await q(
     "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts ca ON ca.customer_id=c.id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
@@ -1030,7 +1030,7 @@ const listVisibleOrders = async (user) => {
     return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150",
     [user.id]
   );
   return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
@@ -1045,7 +1045,7 @@ const listVisibleCustomerOrders = async (user, customerId) => {
     return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id)) ORDER BY s.created_at DESC LIMIT 100",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY s.created_at DESC LIMIT 100",
     [customerId, user.id]
   );
   return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
@@ -3786,6 +3786,7 @@ const route = async (request) => {
     const client=await pool.connect();
     try{
       await client.query('BEGIN');
+      await client.query('SELECT id FROM service_orders WHERE id=$1 FOR UPDATE',[order.id]);
       await client.query('UPDATE service_orders SET labor_cost_gross=$1,other_cost_gross=$2,updated_at=now() WHERE id=$3',[roundMoney(laborCostGross),roundMoney(otherCostGross),order.id]);
       await client.query('DELETE FROM service_order_parts WHERE service_order_id=$1',[order.id]);
       for(const part of parts){
@@ -4067,7 +4068,7 @@ const route = async (request) => {
     if(!canManage&&body.assignedTechnicianId&&String(body.assignedTechnicianId)!==u.id){
       throw Object.assign(new Error('Nie możesz przypisać zlecenia do innego technika.'),{status:403});
     }
-    if(!firstName||!lastName||!brand||!model||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij dane klienta, urządzenia i usterki.'},400);
+    if(!firstName||!lastName||!brand||!model||!imei||!serialNumber||!deviceNotes||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij wszystkie wymagane dane klienta i urządzenia, w tym IMEI, numer seryjny, uwagi oraz opis usterki.'},400);
     if(!email||!phoneNorm)return json(request,{error:'CONTACT_REQUIRED',message:'Podaj adres e-mail i numer telefonu klienta. Karta serwisowa jest zawsze wysyłana e-mailem.'},400);
     if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json(request,{error:'EMAIL',message:'Adres e-mail klienta jest nieprawidłowy.'},400);
     if(phone&&phoneNorm.length<7)return json(request,{error:'PHONE',message:'Numer telefonu klienta jest zbyt krótki.'},400);
