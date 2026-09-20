@@ -3671,7 +3671,7 @@ const route = async (request) => {
     }finally{client.release();}
 
     let notification={queued:false,sent:false,reason:'NOT_REQUIRED'};
-    if(acceptedTransfer){
+    if(acceptedTransfer&&!(acceptedTransfer.kind==='RETURN_HOME'&&readyChanged)){
       notification=await queueTransferNotification(u,cardRow.service_order_id,acceptedTransfer,'ACCEPTED','Przyjęto urządzenie skanem karty serwisowej.');
     }
     if(readyChanged){
