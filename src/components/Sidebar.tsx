@@ -7,6 +7,7 @@ import {
   Settings,
   ShieldCheck,
   UserRound,
+  UsersRound,
   UserCog,
   Wrench
 } from 'lucide-react';
@@ -17,6 +18,7 @@ import { ROLE_DEFINITIONS, ROLE_ORDER, roleCanNavigate, type UserRole } from '..
 export type NavigationKey =
   | 'dashboard'
   | 'administration'
+  | 'customers'
   | 'service'
   | 'earnings'
   | 'browser'
@@ -40,6 +42,7 @@ const items = [
   { key: 'service', label: 'Serwis', icon: Wrench },
   { key: 'earnings', label: 'Rozliczenia', icon: BadgeDollarSign },
   { key: 'administration', label: 'Administracja', icon: UserCog },
+  { key: 'customers', label: 'Klienci', icon: UsersRound },
   { key: 'support', label: 'Wsparcie', icon: Headphones }
 ] as const;
 
