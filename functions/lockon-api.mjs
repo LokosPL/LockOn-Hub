@@ -59,6 +59,7 @@ const normalizeEmail = (value = '') => String(value).trim().toLowerCase();
 const normalizePhone = (value = '') => String(value).replace(/\D/g, '').slice(-15);
 const cleanText = (value, max = 240) => String(value ?? '').trim().slice(0, max);
 const normalizeTechnicianPercent = (value) => {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 && number <= 100
     ? Math.round(number * 100) / 100
@@ -2315,10 +2316,10 @@ const route = async (request) => {
     const requestedRole = String(body.requestedRole || 'USER').toUpperCase();
     const splitRaw = body.technicianSplitPercent;
     const technicianSplitPercent = requestedRole === 'TECHNICIAN'
-      ? Number(splitRaw)
+      ? normalizeTechnicianPercent(splitRaw)
       : null;
     if (!pointName || !city || !REQUESTABLE_ROLES.has(requestedRole)) return json(request, { error: 'VALIDATION', message: 'Nieprawidłowe zgłoszenie punktu.' }, 400);
-    if (requestedRole === 'TECHNICIAN' && (!Number.isFinite(technicianSplitPercent) || technicianSplitPercent < 0 || technicianSplitPercent > 100)) {
+    if (requestedRole === 'TECHNICIAN' && technicianSplitPercent === null) {
       return json(request, { error: 'TECHNICIAN_SPLIT', message: 'Ustaw swój procent rozliczenia serwisanta od 0 do 100%.' }, 400);
     }
     await q("UPDATE access_requests SET status='REJECTED',resolved_at=now(),note='Zastąpione nowszym zgłoszeniem' WHERE user_id=$1 AND status='PENDING'", [session.user.id]);
