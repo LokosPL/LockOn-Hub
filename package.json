@@ -80,6 +80,8 @@
     "publish": [
       {
         "provider": "github",
+        "owner": "LokosPL",
+        "repo": "LockOn-Hub",
         "releaseType": "release"
       }
     ],
