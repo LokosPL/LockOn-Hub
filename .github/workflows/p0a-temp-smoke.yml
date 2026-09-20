@@ -51,7 +51,7 @@ jobs:
             throw new Error('OWNER bot did not answer after self-assignment repair');
           }
 
-          await call('/support/request', owner, 'POST', { message: 'P0A SELF ' + marker });
+          await call('/support/request', owner, 'POST', { message: 'P0A SELF ' + marker }, 201);
           const ownerConversation = await call('/support/conversation', owner);
           const selfTake = await call('/support/tickets/' + ownerConversation.id + '/take', owner, 'POST', {}, 409);
           if (selfTake?.error !== 'SELF_SUPPORT_NOT_ALLOWED') {
@@ -59,7 +59,7 @@ jobs:
           }
           await call('/support/leave', owner, 'POST', {});
 
-          await call('/support/request', user, 'POST', { message: 'P0A HUMAN REQUEST ' + marker });
+          await call('/support/request', user, 'POST', { message: 'P0A HUMAN REQUEST ' + marker }, 201);
           const userConversation = await call('/support/conversation', user);
           await call('/support/tickets/' + userConversation.id + '/take', owner, 'POST', {});
           const joined = await call('/support/conversation', user);
