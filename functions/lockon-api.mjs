@@ -984,28 +984,76 @@ const ensureCustomerPortalCode = async (customerId) => {
   throw new Error('Nie udało się utworzyć identyfikatora klienta.');
 };
 
-const createCustomerPortalSession = async (customerId) => {
+const rotateCustomerPortalCode = async (customerId) => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = generateCustomerPortalCode();
+    try {
+      await q(
+        "UPDATE customers SET portal_code_hash=$2,portal_code_ciphertext=$3,portal_code_created_at=now(),updated_at=now() WHERE id=$1",
+        [customerId,tokenHash(code),encryptSecret(code)]
+      );
+      return { code, created:true, rotated:true };
+    } catch (error) {
+      if (String(error?.code || '') !== '23505') throw error;
+    }
+  }
+  throw new Error('Nie udało się wygenerować nowego kodu klienta.');
+};
+
+const customerPortalAccount = async (customerId) => {
+  return (await q(
+    "SELECT customer_id,google_sub,google_email,google_name,google_picture_url,linked_at,last_login_at,blocked_at,blocked_reason,notify_service_updates,notify_ready_for_pickup,notify_quote_updates,notify_messages,created_at,updated_at FROM customer_portal_accounts WHERE customer_id=$1 LIMIT 1",
+    [customerId]
+  )).rows[0] || null;
+};
+
+const customerNotificationPreferences = async (customerId) => {
+  const account = await customerPortalAccount(customerId);
+  return {
+    serviceUpdates: account?.notify_service_updates !== false,
+    readyForPickup: account?.notify_ready_for_pickup !== false,
+    quoteUpdates: account?.notify_quote_updates !== false,
+    messages: account?.notify_messages !== false
+  };
+};
+
+const createCustomerPortalSession = async (customerId, authMethod = 'CODE') => {
+  const method = authMethod === 'GOOGLE' ? 'GOOGLE' : 'CODE';
   const token = crypto.randomBytes(32).toString('base64url');
   const expiresAt = new Date(Date.now() + CUSTOMER_PORTAL_SESSION_TTL_MS);
   await q("DELETE FROM customer_portal_sessions WHERE expires_at<=now()");
   await q(
-    "INSERT INTO customer_portal_sessions(id,customer_id,token_hash,expires_at) VALUES($1,$2,$3,$4)",
-    [makeId('cps'),customerId,tokenHash(token),expiresAt]
+    "INSERT INTO customer_portal_sessions(id,customer_id,token_hash,auth_method,expires_at) VALUES($1,$2,$3,$4,$5)",
+    [makeId('cps'),customerId,tokenHash(token),method,expiresAt]
   );
-  return { token, expiresAt: expiresAt.toISOString() };
+  return { token, authMethod:method, expiresAt: expiresAt.toISOString() };
 };
 
 const requireCustomerPortal = async (request) => {
   const auth = String(request.headers.get('authorization') || '');
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw Object.assign(new Error('Sesja klienta wygasła. Wpisz identyfikator ponownie.'),{status:401});
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw Object.assign(new Error('Sesja klienta wygasła. Zaloguj się ponownie.'),{status:401});
   const row = (await q(
-    "SELECT s.id AS session_id,s.customer_id,s.expires_at,c.first_name,c.last_name,c.email,c.phone FROM customer_portal_sessions s JOIN customers c ON c.id=s.customer_id WHERE s.token_hash=$1 AND s.expires_at>now() LIMIT 1",
+    "SELECT s.id AS session_id,s.customer_id,s.auth_method,s.expires_at,c.first_name,c.last_name,c.email,c.phone,a.google_sub,a.google_email,a.google_name,a.google_picture_url,a.blocked_at,a.blocked_reason FROM customer_portal_sessions s JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts a ON a.customer_id=c.id WHERE s.token_hash=$1 AND s.expires_at>now() LIMIT 1",
     [tokenHash(token)]
   )).rows[0];
-  if (!row) throw Object.assign(new Error('Sesja klienta wygasła. Wpisz identyfikator ponownie.'),{status:401});
+  if (!row) throw Object.assign(new Error('Sesja klienta wygasła. Zaloguj się ponownie.'),{status:401});
+  if (row.blocked_at) throw Object.assign(new Error(row.blocked_reason ? 'Dostęp do portalu został zablokowany: '+cleanText(row.blocked_reason,180) : 'Dostęp do portalu został zablokowany.'),{status:403,code:'CUSTOMER_ACCOUNT_BLOCKED'});
   await q("UPDATE customer_portal_sessions SET last_seen_at=now() WHERE id=$1",[row.session_id]);
   return row;
+};
+
+const requireCustomerPortalFull = async (request) => {
+  const session = await requireCustomerPortal(request);
+  if (session.auth_method !== 'GOOGLE' || !session.google_sub) {
+    throw Object.assign(new Error('Ta funkcja wymaga pełnego konta klienta. Połącz konto Google.'),{status:403,code:'CUSTOMER_FULL_ACCOUNT_REQUIRED'});
+  }
+  return session;
+};
+
+const revokeCustomerPortalSessions = async (customerId) => {
+  const result = await q("DELETE FROM customer_portal_sessions WHERE customer_id=$1 RETURNING id",[customerId]);
+  return result.rowCount || result.rows.length;
 };
 
 const routeCustomerQuote = async (requestedPointId) => {
