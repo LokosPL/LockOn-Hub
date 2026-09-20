@@ -3545,6 +3545,147 @@ const route = async (request) => {
     });
   }
 
+
+  const serviceCardMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/service-card$/);
+  if(method==='POST'&&serviceCardMatch){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do karty serwisowej.'),{status:403,code:'SERVICE_CARD_FORBIDDEN'});
+    const order=(await q('SELECT id,point_id,home_point_id,current_point_id FROM service_orders WHERE id=$1 LIMIT 1',[serviceCardMatch[1]])).rows[0];
+    if(!order)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,order.id);
+    const activePointId=order.current_point_id||order.home_point_id||order.point_id;
+    await requirePoint(u,activePointId);
+    const printMode=String(body.printMode||'').toUpperCase();
+    if(!['PHYSICAL_AND_ONLINE','ONLINE_ONLY'].includes(printMode)){
+      return json(request,{error:'SERVICE_CARD_MODE',message:'Wybierz kartę fizyczną albo online.'},400);
+    }
+    await ensureServiceCardIdentity(order.id);
+    const variant=printMode==='PHYSICAL_AND_ONLINE'?'PHYSICAL':'DEVICE';
+    const card=await renderServiceCardPdf(order.id,variant);
+    await q(
+      "UPDATE service_order_cards SET print_mode=$2,last_printed_at=now(),print_count=print_count+1,updated_at=now() WHERE service_order_id=$1",
+      [order.id,printMode]
+    );
+    await audit(session,'SERVICE_CARD_PRINTED','service_order',order.id,activePointId,{printMode,variant});
+    return json(request,{
+      orderId:order.id,
+      orderNumber:card.context.orderNumber,
+      printMode,
+      variant,
+      fileName:card.fileName,
+      mimeType:'application/pdf',
+      pdfBase64:card.buffer.toString('base64'),
+      staffScanCode:card.context.staffScanCode
+    });
+  }
+
+  if(method==='POST'&&url.pathname==='/service/scan'){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do skanowania urządzeń.'),{status:403,code:'SERVICE_SCAN_FORBIDDEN'});
+    const actingPointId=cleanText(body.actingPointId,80);
+    if(!actingPointId)return json(request,{error:'ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt przed skanowaniem.'},400);
+    await requirePoint(u,actingPointId);
+
+    const token=cleanText(body.token,100);
+    const code=normalizeServiceScanCode(body.code);
+    if(!token&&!code)return json(request,{error:'SCAN_CODE_REQUIRED',message:'Zeskanuj QR albo wpisz kod z karty urządzenia.'},400);
+    const tokenDigest=token?tokenHash(token):'';
+    const codeDigest=code?tokenHash(code):'';
+    const cardRow=(await q(
+      "SELECT c.service_order_id FROM service_order_cards c WHERE ($1<>'' AND c.staff_scan_token_hash=$1) OR ($2<>'' AND c.staff_scan_code_hash=$2) LIMIT 1",
+      [tokenDigest,codeDigest]
+    )).rows[0];
+    if(!cardRow)return json(request,{error:'SERVICE_SCAN_NOT_FOUND',message:'Nie znaleziono urządzenia dla tego kodu.'},404);
+
+    const client=await pool.connect();
+    let scanAction='OPEN_ORDER';
+    let acceptedTransfer=null;
+    let readyChanged=false;
+    let pointForAudit=actingPointId;
+    try{
+      await client.query('BEGIN');
+      const order=(await client.query(
+        "SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,assigned_technician_id,customer_id FROM service_orders WHERE id=$1 FOR UPDATE",
+        [cardRow.service_order_id]
+      )).rows[0];
+      if(!order)throw Object.assign(new Error('Nie znaleziono zlecenia.'),{status:404,code:'NOT_FOUND'});
+      const homePointId=order.home_point_id||order.point_id;
+      const transfer=(await client.query(
+        "SELECT * FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') ORDER BY requested_at DESC LIMIT 1 FOR UPDATE",
+        [order.id]
+      )).rows[0]||null;
+
+      if(transfer){
+        if(transfer.to_point_id!==actingPointId){
+          throw Object.assign(new Error('Ta przesyłka jest skierowana do innego punktu.'),{status:409,code:'WRONG_SCAN_POINT'});
+        }
+        if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code)){
+          throw Object.assign(new Error('Przyjęcie urządzenia skanem wymaga roli serwisowej.'),{status:403,code:'SERVICE_SCAN_ACCEPT_FORBIDDEN'});
+        }
+        acceptedTransfer=(await client.query(
+          "UPDATE service_order_transfers SET status='ACCEPTED',accepted_by_user_id=$2,shipped_at=COALESCE(shipped_at,now()),delivered_at=COALESCE(delivered_at,now()),accepted_at=now(),updated_at=now() WHERE id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') RETURNING *",
+          [transfer.id,u.id]
+        )).rows[0];
+        if(!acceptedTransfer)throw Object.assign(new Error('Przekazanie zmieniło się w międzyczasie. Zeskanuj ponownie.'),{status:409,code:'TRANSFER_STATUS_CHANGED'});
+
+        const assignTechnician=transfer.kind==='OUTBOUND_SERVICE'&&u.role_code==='TECHNICIAN'&&order.handling_mode!=='TRANSFER_ONLY';
+        const shouldReady=transfer.kind==='RETURN_HOME'&&actingPointId===homePointId&&order.status==='REPAIR_DONE';
+        await client.query(
+          "UPDATE service_orders SET current_point_id=$2,assigned_technician_id=CASE WHEN $3::boolean THEN $4 ELSE assigned_technician_id END,status=CASE WHEN $5::boolean THEN 'READY' ELSE status END,updated_at=now() WHERE id=$1",
+          [order.id,actingPointId,assignTechnician,u.id,shouldReady]
+        );
+        if(shouldReady){
+          readyChanged=true;
+          await client.query(
+            "INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,note,changed_by_user_id) VALUES($1,$2,'REPAIR_DONE','READY',$3,$4)",
+            [makeId('hst'),order.id,'Automatyczne przyjęcie zwrotu skanem karty urządzenia.',u.id]
+          );
+        }
+        scanAction=transfer.kind==='RETURN_HOME'?(shouldReady?'RETURN_ACCEPTED_READY':'RETURN_ACCEPTED'):'SERVICE_ACCEPTED';
+      }else{
+        const currentPointId=order.current_point_id||homePointId;
+        if(currentPointId!==actingPointId){
+          throw Object.assign(new Error('Urządzenie nie ma aktywnego przekazania do tego punktu. Najpierw utwórz transport w ServiceOS.'),{status:409,code:'TRANSFER_REQUIRED'});
+        }
+        scanAction='ALREADY_AT_POINT';
+      }
+
+      await client.query(
+        "UPDATE service_order_cards SET last_scanned_at=now(),last_scanned_by_user_id=$2,last_scan_point_id=$3,updated_at=now() WHERE service_order_id=$1",
+        [order.id,u.id,actingPointId]
+      );
+      await client.query('COMMIT');
+    }catch(error){
+      await client.query('ROLLBACK').catch(()=>undefined);
+      throw error;
+    }finally{client.release();}
+
+    let notification={queued:false,sent:false,reason:'NOT_REQUIRED'};
+    if(acceptedTransfer){
+      notification=await queueTransferNotification(u,cardRow.service_order_id,acceptedTransfer,'ACCEPTED','Przyjęto urządzenie skanem karty serwisowej.');
+    }
+    if(readyChanged){
+      try{
+        const customer=(await q("SELECT s.customer_id,c.email FROM service_orders s JOIN customers c ON c.id=s.customer_id WHERE s.id=$1 LIMIT 1",[cardRow.service_order_id])).rows[0];
+        if(customer?.email){
+          const prefs=await customerNotificationPreferences(customer.customer_id);
+          const settings=await mailSettingsForPoint(actingPointId);
+          if(prefs.readyForPickup!==false&&settings.automatic_email_enabled===true&&Array.isArray(settings.notify_statuses)&&settings.notify_statuses.includes('READY')){
+            const nid=makeId('ntf');
+            await q(
+              "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",
+              [nid,u.id,customer.customer_id,cardRow.service_order_id,customer.email,JSON.stringify({from:'REPAIR_DONE',to:'READY',note:'Przyjęto zwrot skanem.'})]
+            );
+            notification={queued:true,...(await processNotification(nid))};
+          }
+        }
+      }catch(error){console.error('[scan ready notification]',error);}
+    }
+    await audit(session,'SERVICE_CARD_SCANNED','service_order',cardRow.service_order_id,pointForAudit,{scanAction,readyChanged,transferId:acceptedTransfer?.id||null});
+    const view=(await listVisibleOrders(u)).find((item)=>item.id===cardRow.service_order_id)||null;
+    return json(request,{ok:true,scanAction,readyChanged,order:view,notification});
+  }
+
   const historyMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/history$/);
   if(method==='GET'&&historyMatch){
     const session=await requireActive(request),u=session.user;
