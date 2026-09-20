@@ -2273,7 +2273,7 @@ const assistantReply = async (session, message) => {
   }
 
   if (lower.includes('konsultant') || lower.includes('wsparcie') || lower.includes('pomoc człow') || lower.includes('pomoc czlow')) {
-    return { text:'Możesz najpierw korzystać z bota. Gdy potrzebujesz człowieka, wybierz „Poproś konsultanta”. Wsparcie LockOn zobaczy wtedy Twoją prośbę i może dołączyć do tej samej rozmowy. Samo używanie bota nie udostępnia rozmowy konsultantowi.', action:navAction('support','Otwórz Wsparcie') };
+    return { text:'Najpierw jestem do Twojej dyspozycji jako Bot ServiceOS i spróbuję rozwiązać sprawę od razu. Gdy potrzebujesz człowieka, wybierz „Poproś konsultanta”. Możesz nadal pisać do mnie także w kolejce i po dołączeniu konsultanta — wybierasz odbiorcę każdej wiadomości. Prywatne wiadomości do bota nie są udostępniane konsultantowi.', action:navAction('support','Otwórz Pomoc i infolinię') };
   }
 
   if (lower.includes('ustawien') || lower.includes('wygląd') || lower.includes('wyglad') || lower.includes('skala')) {
