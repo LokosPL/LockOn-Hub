@@ -451,7 +451,7 @@ jobs:
           curl --silent --show-error --fail-with-body             --request PUT "$upload_url"             --header "content-type: application/pdf"             --header "x-amz-meta-sha256: $sha256"             --data-binary @service-card.pdf > /dev/null
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/invoices/$invoice_id/complete"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data '{}' > invoice-complete.json
-          node -e "const d=require('./invoice-complete.json');if(d.id!==process.argv[1]||d.status!=='READY')throw new Error('Invoice did not become READY')" "$invoice_id"
+          node -e "const d=require('./invoice-complete.json');if(d.id!==process.argv[1]||!d.readyAt)throw new Error('Invoice did not become READY')" "$invoice_id"
 
           curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/invoices?month=$period"             --header "Authorization: Bearer $owner_token" > invoices-list.json
           node -e "const d=require('./invoices-list.json');if(!d.invoices?.some(x=>x.id===process.argv[1]))throw new Error('Ready invoice missing from warehouse')" "$invoice_id"
