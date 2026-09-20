@@ -125,7 +125,7 @@ export function SupportDesk({ role, supportEnabled = false, onOpenChat }: Suppor
       <div>
         <div className="eyebrow"><span className="live-dot"/> WSPARCIE LOCKON</div>
         <h1>Centrum pomocy zespołu</h1>
-        <p>Widzisz aktywnych pracowników. Treść rozmowy otwierasz dopiero, gdy użytkownik poprosi konsultanta o dołączenie.</p>
+        <p>Widzisz aktywnych pracowników. Po prośbie użytkownika obsługujesz tylko kanał konsultanta — jego prywatne wiadomości do bota pozostają niewidoczne.</p>
         <button className="button secondary" onClick={onOpenChat}><Bot size={16}/> Otwórz własnego bota</button>
       </div>
       <div className="support-hero-icon"><Headphones size={30}/></div>
@@ -206,7 +206,7 @@ export function SupportDesk({ role, supportEnabled = false, onOpenChat }: Suppor
               onKeyDown={(event)=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();void reply();}}}
               placeholder="Napisz odpowiedź do użytkownika…" rows={2}/>
             <button className="button primary" disabled={busy||!draft.trim()} onClick={()=>void reply()}><Send size={14}/> Wyślij</button>
-            <button className="button secondary" disabled={busy} onClick={()=>void close(selected)}><XCircle size={14}/> Zamknij</button>
+            <button className="button secondary" disabled={busy} onClick={()=>void close(selected)}><XCircle size={14}/> Zakończ kanał</button>
           </div>}
         </> : <div className="support-empty-workspace"><Headphones size={28}/><strong>Nikt nie czeka na konsultanta.</strong><span>Aktywni użytkownicy korzystający tylko z bota pozostają po lewej stronie bez dostępu do ich treści rozmowy.</span></div>}
       </section>
