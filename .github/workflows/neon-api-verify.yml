@@ -78,7 +78,7 @@ jobs:
           grep -q "/service/invoices/download-batch" functions/lockon-api.mjs
           grep -q "SERVICE_INTAKE_CARD" functions/lockon-api.mjs
           grep -q "/service/scan" functions/lockon-api.mjs
-          grep -q "/service/orders/.*service-card" functions/lockon-api.mjs
+          grep -Fq "const serviceCardMatch=url.pathname.match" functions/lockon-api.mjs
           grep -q "COMPLAINT_FLOW" functions/lockon-api.mjs
           grep -q "customerPortalAutoUrl" functions/lockon-api.mjs
           grep -q "v1000-service-cards" database/migrations/2026-09-20-v1000-service-cards.sql
