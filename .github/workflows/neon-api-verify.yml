@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: 24
       - name: Install function build dependencies
-        run: npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 esbuild@0.25.12
+        run: npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 pdfmake@0.2.20 esbuild@0.25.12
       - name: Check source syntax
         run: node --check functions/lockon-api.mjs
       - name: Verify v0.20 support and customer contracts
@@ -70,6 +70,12 @@ jobs:
           grep -q "/service/technician-workspace" functions/lockon-api.mjs
           grep -q "/service/technician-notes" functions/lockon-api.mjs
           grep -q "/service/invoices/download-batch" functions/lockon-api.mjs
+          grep -q "SERVICE_INTAKE_CARD" functions/lockon-api.mjs
+          grep -q "/service/scan" functions/lockon-api.mjs
+          grep -q "/service/orders/.*service-card" functions/lockon-api.mjs
+          grep -q "COMPLAINT_FLOW" functions/lockon-api.mjs
+          grep -q "customerPortalAutoUrl" functions/lockon-api.mjs
+          grep -q "v1000-service-cards" database/migrations/2026-09-20-v1000-service-cards.sql
           grep -q "magic!=='%PDF-'" functions/lockon-api.mjs
           grep -q "service_order_parts" database/migrations/2026-09-20-v021-service-finance-invoices.sql
           grep -q "service_order_invoices" database/migrations/2026-09-20-v021-service-finance-invoices.sql
