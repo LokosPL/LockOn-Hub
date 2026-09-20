@@ -43,6 +43,8 @@ const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNIC
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const CUSTOMER_QUOTE_STAFF_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const FINANCE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
+const DEV_TEST_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER', 'SUPPORT']);
 const CUSTOMER_PORTAL_SESSION_TTL_MS = 1000 * 60 * 60 * 24;
 const SERVICE_INVOICE_BUCKET = 'service-invoices';
 const SERVICE_INVOICE_MAX_BYTES = 20 * 1024 * 1024;
@@ -2734,6 +2736,33 @@ const route = async (request) => {
     }, 404);
   }
 
+  if (method === 'POST' && url.pathname === '/auth/dev-role') {
+    if (!ALLOW_DEV_LOGIN) return json(request, { error: 'NOT_FOUND' }, 404);
+    const body = await readJson(request);
+    const role = String(body.role || '').trim().toUpperCase();
+    if (!DEV_TEST_ROLES.has(role)) return json(request, { error:'DEV_ROLE_INVALID', message:'Nieprawidłowa rola testowa.' }, 400);
+    if (role === 'OWNER') return json(request, await loginProfile({ sub:'dev-owner', email:OWNER_EMAIL, name:'Bartłomiej Motłoch', picture:null }, 'DESKTOP', true));
+
+    const roleSlug = role.toLowerCase();
+    const userId = 'usr_ci_' + roleSlug;
+    const email = 'ci-' + roleSlug + '@invalid.test';
+    const name = 'CI ' + role;
+    await q(
+      "INSERT INTO users(id,google_sub,email,name,picture_url,role_code,technician_split_percent,support_enabled,status,first_login_at,last_login_at,updated_at) VALUES($1,$2,$3,$4,NULL,$5,$6,$7,'ACTIVE',now(),now(),now()) ON CONFLICT(id) DO UPDATE SET google_sub=EXCLUDED.google_sub,email=EXCLUDED.email,name=EXCLUDED.name,role_code=EXCLUDED.role_code,technician_split_percent=EXCLUDED.technician_split_percent,support_enabled=EXCLUDED.support_enabled,status='ACTIVE',blocked_at=NULL,blocked_reason=NULL,blocked_by_user_id=NULL,last_login_at=now(),updated_at=now()",
+      [userId, 'dev-role-' + roleSlug, email, name, role, role === 'TECHNICIAN' ? 50 : null, role === 'SUPPORT']
+    );
+    await q('DELETE FROM user_point_access WHERE user_id=$1', [userId]);
+    if (!GLOBAL_ROLES.has(role)) {
+      const point = (await q('SELECT id FROM points WHERE active=true ORDER BY name,id LIMIT 1')).rows[0];
+      if (!point) return json(request, { error:'DEV_POINT_REQUIRED', message:'Brak aktywnego punktu do testu roli.' }, 409);
+      await q('INSERT INTO user_point_access(user_id,point_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [userId, point.id]);
+    }
+    const user = await loadUser(userId);
+    const session = await createSession(user.id, 'DESKTOP');
+    await audit({ user, clientType:'DESKTOP' }, 'LOGIN_DEV_ROLE', 'user', user.id, null, { role });
+    return json(request, { token:session.token, ...(await authPayload(user,session.activePointId)) });
+  }
+
   if (method === 'POST' && url.pathname === '/auth/dev-owner') {
     if (!ALLOW_DEV_LOGIN) return json(request, { error: 'NOT_FOUND' }, 404);
     return json(request, await loginProfile({ sub: 'dev-owner', email: OWNER_EMAIL, name: 'Bartłomiej Motłoch', picture: null }, 'DESKTOP', true));
@@ -3383,7 +3412,7 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/finance/revenues'){
     const session=await requireActive(request);const u=session.user;
-    if(u.role_code==='USER')throw Object.assign(new Error('Brak uprawnień do rozliczeń.'),{status:403});
+    if(!FINANCE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do rozliczeń.'),{status:403});
     const baseSelect="SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active,so.order_number FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id LEFT JOIN service_orders so ON so.id=r.service_order_id ";
     let rows;
     if(GLOBAL_ROLES.has(u.role_code)) rows=(await q(baseSelect+"ORDER BY r.occurred_at DESC,r.created_at DESC")).rows;

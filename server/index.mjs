@@ -42,6 +42,7 @@ const SERVICE_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIA
 const SERVICE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const SERVICE_INTAKE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
+const FINANCE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 
 const nowIso = () => new Date().toISOString();
 const id = (prefix) => `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
@@ -1714,7 +1715,7 @@ const handle = async (req, res) => {
   if (method === 'GET' && url.pathname === '/finance/revenues') {
     const user = requireActive(req, res);
     if (!user) return;
-    if (user.role === 'USER') return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do rozliczeń.' });
+    if (!FINANCE_READ_ROLES.has(user.role)) return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do rozliczeń.' });
     const entries = db.revenueEntries.filter((entry) => revenueVisibleTo(user, entry)).map((entry) => {
       const view = revenueView(entry);
       const order = entry.serviceOrderId ? db.serviceOrders.find((candidate)=>candidate.id===entry.serviceOrderId) : null;

@@ -181,6 +181,47 @@ jobs:
           if(!d.activePointId || !d.points.some((p)=>p.id===d.activePointId)) throw new Error('Temp session has no server-bound active point');
           NODE
 
+      - name: Temp role and authorization matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expect_code() {
+            local token="$1" path="$2" expected="$3" label="$4"
+            local code
+            code="$(curl --silent --show-error --output role-response.json --write-out '%{http_code}'               "$TEMP_API_URL$path"               --header "Authorization: Bearer $token")"
+            if [[ "$code" != "$expected" ]]; then
+              echo "::error::$label expected HTTP $expected, got $code"
+              cat role-response.json || true
+              exit 1
+            fi
+          }
+
+          for role in OWNER BOSS COORDINATOR TECHNICIAN USER SUPPORT; do
+            curl --silent --show-error --fail-with-body               --request POST "$TEMP_API_URL/auth/dev-role"               --header "Content-Type: application/json"               --data "$(node -e "process.stdout.write(JSON.stringify({role:process.argv[1]}))" "$role")" > "role-$role.json"
+            token="$(node -e "const d=require('./role-'+process.argv[1]+'.json');if(!d.token||d.user?.role!==process.argv[1])throw new Error('Bad dev role login '+process.argv[1]);process.stdout.write(d.token)" "$role")"
+
+            expect_code "$token" "/service/orders" "200" "$role service read"
+
+            admin_expected="403"
+            [[ "$role" == "OWNER" ]] && admin_expected="200"
+            expect_code "$token" "/admin/overview" "$admin_expected" "$role admin"
+
+            finance_expected="403"
+            case "$role" in OWNER|BOSS|COORDINATOR|TECHNICIAN) finance_expected="200";; esac
+            expect_code "$token" "/finance/revenues" "$finance_expected" "$role finance"
+
+            workspace_expected="403"
+            [[ "$role" == "TECHNICIAN" ]] && workspace_expected="200"
+            expect_code "$token" "/service/technician-workspace" "$workspace_expected" "$role technician workspace"
+
+            support_expected="403"
+            case "$role" in OWNER|SUPPORT) support_expected="200";; esac
+            expect_code "$token" "/support/tickets" "$support_expected" "$role support queue"
+          done
+
+          echo "Role matrix passed: OWNER, BOSS, COORDINATOR, TECHNICIAN, USER, SUPPORT."
+
       - name: Temp service intake, PDF and logistics E2E
         shell: bash
         run: |
