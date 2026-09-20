@@ -3401,8 +3401,16 @@ const route = async (request) => {
     if(!message)return json(request,{error:'MESSAGE_REQUIRED',message:'Wpisz odpowiedź dla klienta.'},400);
     await q("INSERT INTO customer_quote_messages(id,request_id,sender_kind,sender_user_id,body) VALUES($1,$2,'STAFF',$3,$4)",[makeId('cqm'),quote.id,u.id,message]);
     await q("UPDATE customer_quote_requests SET assigned_technician_id=CASE WHEN assigned_technician_id IS NULL AND $2='TECHNICIAN' THEN $3 ELSE assigned_technician_id END,updated_at=now() WHERE id=$1",[quote.id,u.role_code,u.id]);
-    await audit(session,'CUSTOMER_QUOTE_REPLIED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id});
-    return json(request,{ok:true});
+    const emailResult=await sendCustomerPortalEventEmail({
+      customerId:quote.customer_id,
+      pointId:quote.routed_point_id,
+      preference:'messages',
+      subject:'LockOn ServiceOS · nowa wiadomość z serwisu',
+      title:'Masz nową wiadomość z serwisu',
+      message
+    });
+    await audit(session,'CUSTOMER_QUOTE_REPLIED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id,email:emailResult});
+    return json(request,{ok:true,email:emailResult});
   }
 
   const staffQuotePriceMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/quote$/);
@@ -3423,8 +3431,16 @@ const route = async (request) => {
     );
     const message='Wycena zdalna: '+rounded.toFixed(2)+' PLN'+(note?' · '+note:'');
     await q("INSERT INTO customer_quote_messages(id,request_id,sender_kind,sender_user_id,body) VALUES($1,$2,'STAFF',$3,$4)",[makeId('cqm'),quote.id,u.id,message]);
-    await audit(session,'CUSTOMER_QUOTE_PRICED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id,amount:rounded,currency:'PLN'});
-    return json(request,{ok:true,amount:rounded,currency:'PLN'});
+    const emailResult=await sendCustomerPortalEventEmail({
+      customerId:quote.customer_id,
+      pointId:quote.routed_point_id,
+      preference:'quoteUpdates',
+      subject:'LockOn ServiceOS · wycena jest gotowa',
+      title:'Wycena jest gotowa',
+      message:'Wycena: '+rounded.toFixed(2)+' PLN'+(note?' · '+note:'')
+    });
+    await audit(session,'CUSTOMER_QUOTE_PRICED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id,amount:rounded,currency:'PLN',email:emailResult});
+    return json(request,{ok:true,amount:rounded,currency:'PLN',email:emailResult});
   }
 
   const staffQuoteCloseMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/close$/);
