@@ -23,6 +23,8 @@ export function BrowserPage() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [browser, setBrowser] = useState<BrowserState>(initialState);
   const [input, setInput] = useState(initialState.url);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let resizeObserver: ResizeObserver | null = null;
@@ -42,8 +44,8 @@ export function BrowserPage() {
     void window.lockOn.browser.getState().then((state) => {
       setBrowser(state);
       setInput(state.url || initialState.url);
-    });
-    void window.lockOn.browser.setVisible(true);
+    }).catch((reason) => setError(reason instanceof Error ? reason.message : 'Nie udało się odczytać stanu przeglądarki.'));
+    void window.lockOn.browser.setVisible(true).catch((reason) => setError(reason instanceof Error ? reason.message : 'Nie udało się otworzyć przeglądarki.'));
 
     const unsubscribe = window.lockOn.browser.onState((state) => {
       setBrowser(state);
@@ -68,9 +70,23 @@ export function BrowserPage() {
     };
   }, []);
 
+  const runAction = async (action: () => Promise<unknown>, fallback: string) => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setError('');
+    try {
+      await action();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : fallback);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void window.lockOn.browser.navigate(input);
+    if (!input.trim()) return;
+    void runAction(() => window.lockOn.browser.navigate(input), 'Nie udało się otworzyć tego adresu.');
   };
 
   return (
@@ -85,10 +101,10 @@ export function BrowserPage() {
 
       <div className="browser-toolbar">
         <div className="browser-nav-actions">
-          <button disabled={!browser.canGoBack} onClick={() => void window.lockOn.browser.back()} title="Wstecz"><ArrowLeft size={17} /></button>
-          <button disabled={!browser.canGoForward} onClick={() => void window.lockOn.browser.forward()} title="Dalej"><ArrowRight size={17} /></button>
-          <button onClick={() => void window.lockOn.browser.reload()} title="Odśwież"><RefreshCw className={browser.loading ? 'spin' : ''} size={17} /></button>
-          <button onClick={() => void window.lockOn.browser.home()} title="Strona główna"><Home size={17} /></button>
+          <button disabled={actionBusy || !browser.canGoBack} onClick={() => void runAction(() => window.lockOn.browser.back(), 'Nie udało się wrócić do poprzedniej strony.')} title="Wstecz"><ArrowLeft size={17} /></button>
+          <button disabled={actionBusy || !browser.canGoForward} onClick={() => void runAction(() => window.lockOn.browser.forward(), 'Nie udało się przejść dalej.')} title="Dalej"><ArrowRight size={17} /></button>
+          <button disabled={actionBusy} onClick={() => void runAction(() => window.lockOn.browser.reload(), 'Nie udało się odświeżyć strony.')} title="Odśwież"><RefreshCw className={browser.loading || actionBusy ? 'spin' : ''} size={17} /></button>
+          <button disabled={actionBusy} onClick={() => void runAction(() => window.lockOn.browser.home(), 'Nie udało się otworzyć strony głównej.')} title="Strona główna"><Home size={17} /></button>
         </div>
 
         <form className="browser-address" onSubmit={submit}>
@@ -98,16 +114,19 @@ export function BrowserPage() {
             onChange={(event) => setInput(event.target.value)}
             placeholder="Wpisz adres lub wyszukaj…"
             spellCheck={false}
+            maxLength={4096}
+            disabled={actionBusy}
           />
-          <button type="submit" title="Przejdź"><Search size={16} /></button>
+          <button type="submit" disabled={actionBusy || !input.trim()} title="Przejdź"><Search size={16} /></button>
         </form>
 
-        <button className="browser-external" onClick={() => void window.lockOn.browser.openExternal()} title="Otwórz poza ServiceOS">
+        <button className="browser-external" disabled={actionBusy} onClick={() => void runAction(() => window.lockOn.browser.openExternal(), 'Nie udało się otworzyć strony w przeglądarce systemowej.')} title="Otwórz poza ServiceOS">
           <ExternalLink size={17} />
         </button>
       </div>
 
       <div className={'browser-loading ' + (browser.loading ? 'active' : '')}><span /></div>
+      {error && <div className="browser-action-error" role="alert">{error}</div>}
       <div className="browser-host-frame">
         <div ref={hostRef} className="browser-host" />
       </div>
