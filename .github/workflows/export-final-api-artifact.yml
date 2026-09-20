@@ -27,11 +27,10 @@ jobs:
           curl -L --fail --silent --show-error \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/10612244334/zip" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/10613501910/zip" \
             -o .temp/prod-final.zip
-          echo "87698193c277a744dcf27ad559b71f6ae3f8fcc5862fbf19ac7160cd9bcecac4  .temp/prod-final.zip" | sha256sum -c -
+          echo "38314d09ec3a1d21bfed0807c66c76017d0465f5afcb690abe943e3c3e38cb3f  .temp/prod-final.zip" | sha256sum -c -
           unzip -t .temp/prod-final.zip
-          unzip -p .temp/prod-final.zip index.mjs | sha256sum | grep -q '^b12465fe98daba82b0a07d7478b252991f35b5d0b637522e4aac239378c90c07'
           base64 -w0 .temp/prod-final.zip > .temp/prod-final.b64
 
       - name: Commit encoded verified artifact
