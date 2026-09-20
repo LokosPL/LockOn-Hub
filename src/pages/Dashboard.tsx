@@ -43,6 +43,8 @@ const greeting = () => {
 export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }: DashboardProps) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [update, setUpdate] = useState<UpdateState>(initialUpdate);
+  const [updateActionBusy, setUpdateActionBusy] = useState(false);
+  const [updateActionError, setUpdateActionError] = useState('');
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
 
   useEffect(() => {
@@ -59,7 +61,19 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }:
     return 'neutral' as const;
   }, [update.status]);
 
-  const busy = update.status === 'checking' || update.status === 'downloading';
+  const busy = updateActionBusy || update.status === 'checking' || update.status === 'downloading';
+  const runUpdateAction = async (action: () => Promise<unknown>) => {
+    if (updateActionBusy) return;
+    setUpdateActionBusy(true);
+    setUpdateActionError('');
+    try {
+      await action();
+    } catch (error) {
+      setUpdateActionError(error instanceof Error ? error.message : 'Nie udało się wykonać akcji aktualizatora.');
+    } finally {
+      setUpdateActionBusy(false);
+    }
+  };
   const roleDefinition = ROLE_DEFINITIONS[role];
   const firstName = userName.split(' ').filter(Boolean)[0] ?? userName;
 
@@ -188,22 +202,23 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }:
             <RefreshCw className={busy ? 'spin' : ''} size={17} />
             <span>{update.message}</span>
           </div>
+          {updateActionError && <div className="service-error">{updateActionError}</div>}
 
           {update.status === 'downloading' && (
             <div className="download-progress"><div style={{ width: update.percent + '%' }} /></div>
           )}
 
           <div className="button-row">
-            <button className="button secondary" disabled={busy} onClick={() => void window.lockOn.updater.check()}>
+            <button className="button secondary" disabled={busy} onClick={() => void runUpdateAction(() => window.lockOn.updater.check())}>
               <RefreshCw size={16} /> Sprawdź
             </button>
             {update.status === 'available' && (
-              <button className="button primary" onClick={() => void window.lockOn.updater.download()}>
+              <button className="button primary" disabled={busy} onClick={() => void runUpdateAction(() => window.lockOn.updater.download())}>
                 <CloudDownload size={16} /> Pobierz aktualizację
               </button>
             )}
             {update.status === 'downloaded' && (
-              <button className="button primary" onClick={() => void window.lockOn.updater.install()}>
+              <button className="button primary" disabled={busy} onClick={() => void runUpdateAction(() => window.lockOn.updater.install())}>
                 Zainstaluj i uruchom ponownie
               </button>
             )}
