@@ -1,0 +1,26 @@
+name: Smoke customer control production
+
+on:
+  push:
+    paths:
+      - ".github/workflows/temp-customer-control-prod-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Smoke production customer backend
+        shell: bash
+        env:
+          BASE: https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+        run: |
+          set -euo pipefail
+          h="$(mktemp)"; code="$(curl -sS -o "$h" -w '%{http_code}' "$BASE/health")"; test "$code" = 200; grep -q '"ok":true' "$h"
+          cfg="$(mktemp)"; code="$(curl -sS -o "$cfg" -w '%{http_code}' -H 'Origin: https://app.serviceos.pl' "$BASE/public/customer-portal/config")"; test "$code" = 200; grep -q '"googleEnabled":true' "$cfg"
+          bad="$(mktemp)"; code="$(curl -sS -o "$bad" -w '%{http_code}' -H 'Origin: https://app.serviceos.pl' -H 'Content-Type: application/json' --data '{"accessToken":"not-real"}' "$BASE/public/customer-portal/google/login")"; test "$code" = 401; grep -q '"error":"GOOGLE_AUTH_FAILED"' "$bad"
+          noauth="$(mktemp)"; code="$(curl -sS -o "$noauth" -w '%{http_code}' -H 'Origin: https://app.serviceos.pl' -H 'Content-Type: application/json' --data '{"firstName":"A"}' "$BASE/customer-accounts/cst_fake/profile")"; test "$code" = 401
+          unlink="$(mktemp)"; code="$(curl -sS -o "$unlink" -w '%{http_code}' -H 'Origin: https://app.serviceos.pl' -H 'Content-Type: application/json' --data '{}' "$BASE/customer-accounts/cst_fake/google/unlink")"; test "$code" = 401
