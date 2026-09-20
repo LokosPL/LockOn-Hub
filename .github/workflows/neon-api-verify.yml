@@ -51,6 +51,7 @@ jobs:
           grep -q "value === null || value === undefined || value === ''" functions/lockon-api.mjs
           grep -q 'consultant_requested_at' functions/lockon-api.mjs
           grep -q 'customer_portal_code' functions/lockon-api.mjs
+          grep -q "JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts ca ON ca.customer_id=c.id JOIN devices" functions/lockon-api.mjs
           grep -q "error: 'WEB_CODE_ONLY'" functions/lockon-api.mjs
           grep -q '/website/redeem' functions/lockon-api.mjs
           grep -q 'consumePublicAuthAttempt' functions/lockon-api.mjs
