@@ -3,6 +3,8 @@ import { Pool } from 'pg';
 import { OAuth2Client } from 'google-auth-library';
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import pdfMake from 'pdfmake/build/pdfmake.js';
+import pdfFonts from 'pdfmake/build/vfs_fonts.js';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
 pool.on('error', (error) => console.error('[postgres idle client]', error));
@@ -54,6 +56,10 @@ const invoiceStorage = process.env.AWS_ENDPOINT_URL_S3 && process.env.AWS_REGION
       requestChecksumCalculation: 'WHEN_REQUIRED'
     })
   : null;
+const pdfFontVfs = pdfFonts?.pdfMake?.vfs || pdfFonts?.vfs || pdfFonts;
+if (pdfFontVfs && typeof pdfFontVfs === 'object') pdfMake.vfs = pdfFontVfs;
+const SERVICE_SCAN_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const SERVICE_CARD_VARIANTS = new Set(['PHYSICAL','DEVICE','CUSTOMER']);
 
 const STATUS_LABELS = {
   RECEIVED: 'Przyjęto urządzenie',
