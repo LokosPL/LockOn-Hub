@@ -3198,6 +3198,49 @@ const route = async (request) => {
     return json(request,await listVisibleOrders(session.user));
   }
 
+  if(method==='GET'&&url.pathname==='/service/technician-workspace'){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Ten widok jest przeznaczony dla serwisanta.'),{status:403,code:'TECHNICIAN_ONLY'});
+    const all=await listVisibleOrders(u);
+    const orders=all.filter((order)=>order.assignedTechnicianId===u.id&&!CLOSED_ORDER_STATUSES.has(order.status));
+    const counts={
+      active:orders.length,
+      received:orders.filter((order)=>order.status==='RECEIVED').length,
+      diagnosis:orders.filter((order)=>order.status==='DIAGNOSIS').length,
+      waitingParts:orders.filter((order)=>order.status==='WAITING_PARTS').length,
+      inRepair:orders.filter((order)=>order.status==='IN_REPAIR').length,
+      readyForPickup:orders.filter((order)=>['REPAIR_DONE','READY'].includes(order.status)).length,
+      overdue:orders.filter((order)=>order.workflow?.flags?.includes('OVERDUE')).length
+    };
+    return json(request,{technician:{id:u.id,name:u.name,email:u.email},counts,orders,generatedAt:nowIso()});
+  }
+
+  if((method==='GET'||method==='POST')&&url.pathname==='/service/technician-notes'){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Prywatny pokój notatek jest dostępny dla serwisanta.'),{status:403,code:'TECHNICIAN_ONLY'});
+    if(method==='GET'){
+      const {rows}=await q('SELECT id,title,body,pinned,created_at,updated_at FROM technician_private_notes WHERE user_id=$1 ORDER BY pinned DESC,updated_at DESC LIMIT 200',[u.id]);
+      return json(request,rows.map((row)=>({id:row.id,title:row.title||'',body:row.body,pinned:row.pinned===true,createdAt:row.created_at,updatedAt:row.updated_at})));
+    }
+    const body=await readJson(request);
+    const title=cleanText(body.title,120),note=cleanText(body.body,4000),pinned=body.pinned===true;
+    if(!note)return json(request,{error:'NOTE_REQUIRED',message:'Notatka nie może być pusta.'},400);
+    const id=makeId('tnn');
+    await q('INSERT INTO technician_private_notes(id,user_id,title,body,pinned) VALUES($1,$2,NULLIF($3,\'\'),$4,$5)',[id,u.id,title,note,pinned]);
+    await audit(session,'TECHNICIAN_PRIVATE_NOTE_CREATED','technician_note',id,null,{pinned,length:note.length});
+    return json(request,{id,title,body:note,pinned,createdAt:nowIso(),updatedAt:nowIso()},201);
+  }
+
+  const technicianNoteDeleteMatch=url.pathname.match(/^\/service\/technician-notes\/([^/]+)$/);
+  if(method==='DELETE'&&technicianNoteDeleteMatch){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Prywatny pokój notatek jest dostępny dla serwisanta.'),{status:403,code:'TECHNICIAN_ONLY'});
+    const result=await q('DELETE FROM technician_private_notes WHERE id=$1 AND user_id=$2',[technicianNoteDeleteMatch[1],u.id]);
+    if(!result.rowCount)return json(request,{error:'NOT_FOUND'},404);
+    await audit(session,'TECHNICIAN_PRIVATE_NOTE_DELETED','technician_note',technicianNoteDeleteMatch[1],null,{});
+    return json(request,{ok:true});
+  }
+
 
   if(method==='GET'&&url.pathname==='/service/technicians'){
     const session=await requireActive(request),u=session.user;
