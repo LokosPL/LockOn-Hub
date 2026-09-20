@@ -61,6 +61,8 @@ contextBridge.exposeInMainWorld('lockOn', {
     transferOrder: (orderId: string, payload: unknown) => ipcRenderer.invoke('service:transferOrder', orderId, payload),
     updateTransferStatus: (transferId: string, status: string, note?: string) => ipcRenderer.invoke('service:updateTransferStatus', transferId, status, note),
     createOrder: (payload: unknown) => ipcRenderer.invoke('service:createOrder', payload),
+    openServiceCard: (orderId: string, printMode: 'PHYSICAL_AND_ONLINE' | 'ONLINE_ONLY') => ipcRenderer.invoke('service:openServiceCard', orderId, printMode),
+    scanServiceCard: (payload: unknown) => ipcRenderer.invoke('service:scanServiceCard', payload),
     listOrders: () => ipcRenderer.invoke('service:listOrders'),
     getHistory: (orderId: string) => ipcRenderer.invoke('service:getHistory', orderId),
     getNotes: (orderId: string) => ipcRenderer.invoke('service:getNotes', orderId),
