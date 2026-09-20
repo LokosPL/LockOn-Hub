@@ -1415,6 +1415,42 @@ const sendGmail = async (sender, recipient, subject, textBody, htmlBody, display
   return { id: String(payload.id), threadId: payload.threadId ? String(payload.threadId) : null };
 };
 
+const sendCustomerPortalEventEmail = async ({
+  customerId,
+  pointId,
+  preference,
+  subject,
+  title,
+  message
+}) => {
+  const customer=(await q("SELECT email,first_name,last_name FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
+  if(!customer?.email)return {sent:false,reason:'NO_CUSTOMER_EMAIL'};
+  const prefs=await customerNotificationPreferences(customerId);
+  if(preference==='quoteUpdates'&&prefs.quoteUpdates===false)return {sent:false,reason:'CUSTOMER_PREF_DISABLED'};
+  if(preference==='messages'&&prefs.messages===false)return {sent:false,reason:'CUSTOMER_PREF_DISABLED'};
+  const sender=await loadActiveMailSender(pointId);
+  if(!sender)return {sent:false,reason:'NO_SENDER'};
+  const settings=await mailSettingsForPoint(pointId);
+  const account=await customerPortalAccount(customerId);
+  const portalUrl=PUBLIC_PORTAL_URL+'/klient.html'+(account?.google_sub?'?google=1':'');
+  const textBody=title+'\n\n'+message+'\n\nPortal klienta: '+portalUrl;
+  const htmlBody='<!doctype html><html lang="pl"><body style="margin:0;background:#0b0d10;color:#f3f5f7;font-family:Arial,sans-serif">'+
+    '<div style="max-width:560px;margin:auto;padding:28px 14px"><div style="font-size:13px;font-weight:800">LockOn <span style="color:#77818c;font-weight:500">ServiceOS</span></div>'+
+    '<div style="margin-top:18px;padding:24px;border:1px solid #252d35;border-radius:18px;background:#11161c">'+
+    '<div style="font-size:11px;color:#ff8b60;font-weight:800;letter-spacing:.08em">PORTAL KLIENTA</div>'+
+    '<h1 style="font-size:23px;line-height:1.2;margin:9px 0 10px">'+escapeHtml(title)+'</h1>'+
+    '<p style="color:#929ca7;font-size:14px;line-height:1.6">'+escapeHtml(message)+'</p>'+
+    '<a href="'+escapeHtml(portalUrl)+'" style="display:block;margin-top:18px;padding:14px;border-radius:12px;background:#ff7048;color:#fff;text-decoration:none;text-align:center;font-weight:800">Otwórz portal klienta →</a>'+
+    '</div></div></body></html>';
+  try{
+    const sent=await sendGmail(sender,customer.email,subject,textBody,htmlBody,settings.sender_display_name||'LockOn ServiceOS');
+    return {sent:true,messageId:sent.id};
+  }catch(error){
+    console.error('[customer portal email]',error);
+    return {sent:false,reason:'SEND_FAILED'};
+  }
+};
+
 const processNotification = async (notificationId) => {
   const { rows } = await q(
     "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,s.customer_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
