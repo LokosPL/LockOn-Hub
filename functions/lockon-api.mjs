@@ -3349,7 +3349,7 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/service/customer-quotes'){
     const session=await requireActive(request),u=session.user;
-    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do wycen klientów.'),{status:403});
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code)&&!hasSupportAccess(u))throw Object.assign(new Error('Brak uprawnień do wycen klientów.'),{status:403});
     const params=[];
     let where=' WHERE 1=1';
     if(!GLOBAL_ROLES.has(u.role_code)){
@@ -3400,7 +3400,7 @@ const route = async (request) => {
   const staffQuoteReplyMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/reply$/);
   if(method==='POST'&&staffQuoteReplyMatch){
     const session=await requireActive(request),u=session.user;
-    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do odpowiedzi klientowi.'),{status:403});
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code)&&!hasSupportAccess(u))throw Object.assign(new Error('Brak uprawnień do odpowiedzi klientowi.'),{status:403});
     const quote=await staffQuoteVisible(u,staffQuoteReplyMatch[1]);
     if(!quote)return json(request,{error:'NOT_FOUND'},404);
     if(['CLOSED','CANCELLED'].includes(quote.status))return json(request,{error:'QUOTE_CLOSED',message:'To zapytanie jest zamknięte.'},409);
@@ -3423,7 +3423,7 @@ const route = async (request) => {
   const staffQuotePriceMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/quote$/);
   if(method==='POST'&&staffQuotePriceMatch){
     const session=await requireActive(request),u=session.user;
-    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do wyceny.'),{status:403});
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code)&&!hasSupportAccess(u))throw Object.assign(new Error('Brak uprawnień do wyceny.'),{status:403});
     const quote=await staffQuoteVisible(u,staffQuotePriceMatch[1]);
     if(!quote)return json(request,{error:'NOT_FOUND'},404);
     if(['CLOSED','CANCELLED'].includes(quote.status))return json(request,{error:'QUOTE_CLOSED',message:'To zapytanie jest zamknięte.'},409);
@@ -3453,7 +3453,7 @@ const route = async (request) => {
   const staffQuoteCloseMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/close$/);
   if(method==='POST'&&staffQuoteCloseMatch){
     const session=await requireActive(request),u=session.user;
-    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zamknięcia zapytania.'),{status:403});
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code)&&!hasSupportAccess(u))throw Object.assign(new Error('Brak uprawnień do zamknięcia zapytania.'),{status:403});
     const quote=await staffQuoteVisible(u,staffQuoteCloseMatch[1]);
     if(!quote)return json(request,{error:'NOT_FOUND'},404);
     await q("UPDATE customer_quote_requests SET status='CLOSED',closed_at=now(),updated_at=now() WHERE id=$1",[quote.id]);
