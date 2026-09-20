@@ -604,7 +604,8 @@ const runConnectivityDiagnostics = async () => {
     apiOk,
     apiLatencyMs,
     apiError,
-    version: app.getVersion(),
+    version: APP_CONFIG.productVersion,
+    buildVersion: app.getVersion(),
     platform: process.platform,
     packaged: app.isPackaged,
     apiBaseUrl: getBackendApiBaseUrl()
@@ -615,7 +616,8 @@ const registerIpc = () => {
   secureHandle('app:getInfo', () => ({
     name: APP_CONFIG.name,
     author: APP_CONFIG.author,
-    version: app.getVersion(),
+    version: APP_CONFIG.productVersion,
+    buildVersion: app.getVersion(),
     platform: process.platform,
     packaged: app.isPackaged,
     apiBaseUrl: getBackendApiBaseUrl()
