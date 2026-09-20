@@ -38,7 +38,7 @@ jobs:
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Brak repo secret NEON_API_KEY. Bundle zostanie zbudowany i zachowany jako artefakt; deploy i HTTP smoke są pomijane."
+            echo "::notice::Brak repo secret NEON_API_KEY. Bundle zostanie zbudowany i zachowany jako artefakt; deploy wykona podłączony Neon connector, a HTTP smoke może zweryfikować aktywną rewizję."
           fi
 
       - name: Setup Node.js
@@ -177,5 +177,118 @@ jobs:
           node - <<'NODE'
           const d=require('./me.json');
           if(d.user?.role!=='OWNER') throw new Error('Temp dev login did not return OWNER');
-          if(!Array.isArray(d.points) || d.points.length<1) throw new Error('Temp owner has no service points');
+          if(!Array.isArray(d.points) || d.points.length<2) throw new Error('Temp owner needs at least two active points for logistics smoke');
+          if(!d.activePointId || !d.points.some((p)=>p.id===d.activePointId)) throw new Error('Temp session has no server-bound active point');
           NODE
+
+      - name: Temp service intake, PDF and logistics E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          token="$(node -e "const d=require('./auth.json'); process.stdout.write(d.token)")"
+          node - <<'NODE' > e2e-env.sh
+          const d=require('./me.json');
+          const home=d.points.find((p)=>p.id===d.activePointId);
+          const other=d.points.find((p)=>p.id!==d.activePointId);
+          if(!home||!other)throw new Error('Need two points');
+          const q=(v)=>"'" + String(v).replace(/'/g,"'\\''") + "'";
+          console.log('ORIGINAL_POINT='+q(home.id));
+          console.log('OTHER_POINT='+q(other.id));
+          NODE
+          . ./e2e-env.sh
+
+          api() {
+            local method="$1" path="$2" body="${3:-}"
+            if [ -n "$body" ]; then
+              curl --silent --show-error --fail-with-body                 --request "$method" "$TEMP_API_URL$path"                 --header "Authorization: Bearer $token"                 --header "Content-Type: application/json"                 --data "$body"
+            else
+              curl --silent --show-error --fail-with-body                 --request "$method" "$TEMP_API_URL$path"                 --header "Authorization: Bearer $token"
+            fi
+          }
+
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > active-other.json
+          node -e "const d=require('./active-other.json');if(d.activePointId!==process.argv[1])throw new Error('Active point switch failed')" "$OTHER_POINT"
+
+          run_suffix="${GITHUB_RUN_ID:-0}${GITHUB_RUN_ATTEMPT:-0}"
+          imei="$(printf '860000%09d' "$((GITHUB_RUN_ID % 1000000000))")"
+          imei="${imei:0:15}"
+          intake="$(node - <<'NODE' "$ORIGINAL_POINT" "$run_suffix" "$imei"
+          const [wrongPoint,suffix,imei]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            pointId:wrongPoint,
+            firstName:'CI',
+            lastName:'Smoke '+suffix,
+            email:'serviceos-ci-'+suffix+'@invalid.test',
+            phone:'+48123456789',
+            brand:'LockOn',
+            model:'CI Smoke',
+            imei,
+            serialNumber:'CI-'+suffix,
+            deviceNotes:'Automatyczny test temp Neon. Dane syntetyczne.',
+            issueDescription:'Automatyczny test intake, PDF i logistyki.',
+            orderType:'REPAIR'
+          }));
+          NODE
+          )"
+          api POST /service/orders "$intake" > intake.json
+          node - <<'NODE' "$OTHER_POINT"
+          const d=require('./intake.json');
+          const expected=process.argv[2];
+          if(!d.order?.id)throw new Error('Order was not created');
+          if(d.order.pointId!==expected)throw new Error('Backend trusted spoofed pointId instead of session active point');
+          if(d.order.handlingMode!=='STANDARD')throw new Error('Repair did not derive STANDARD handling mode');
+          if(d.serviceCard?.required!==true)throw new Error('Service card choice is not required');
+          if(d.notification?.queued!==true)throw new Error('Mandatory intake email was not queued');
+          NODE
+
+          order_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.id)")"
+          api POST "/service/orders/$order_id/service-card" '{"printMode":"PHYSICAL_AND_ONLINE"}' > card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./card.json');
+          if(!/^SV-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(d.staffScanCode||''))throw new Error('Manual staff scan code missing');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Generated card is not a real PDF');
+          if(pdf.length<10000)throw new Error('Generated card PDF is unexpectedly small');
+          fs.writeFileSync('service-card.pdf',pdf);
+          fs.writeFileSync('staff-scan-code.txt',d.staffScanCode);
+          NODE
+
+          command -v pdfinfo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils; }
+          pdfinfo service-card.pdf > pdfinfo.txt
+          grep -q '^Pages:[[:space:]]*1' pdfinfo.txt
+          grep -Eq '^Page size:[[:space:]]+841(\.8[0-9]*)? x 595(\.2[0-9]*)? pts \(A4\)' pdfinfo.txt
+          pdftotext -layout service-card.pdf service-card.txt
+          grep -q 'PRZETNIJ TUTAJ' service-card.txt
+          grep -q 'LockOn ServiceOS' service-card.txt
+
+          staff_code="$(cat staff-scan-code.txt)"
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > active-original.json
+
+          set +e
+          wrong_scan_http="$(curl --silent --show-error --output wrong-scan.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/scan"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({actingPointId:process.argv[1],code:process.argv[2]}))" "$OTHER_POINT" "$staff_code")")"
+          set -e
+          [ "$wrong_scan_http" = "409" ]
+          node -e "const d=require('./wrong-scan.json');if(d.error!=='TRANSFER_REQUIRED')throw new Error('Wrong-point scan was not rejected by server-bound active point')"
+
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
+          api POST "/service/orders/$order_id/transfer" "$(node -e "process.stdout.write(JSON.stringify({kind:'OUTBOUND_SERVICE',toPointId:process.argv[1],note:'CI temp smoke'}))" "$ORIGINAL_POINT")" > outbound.json
+
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
+          api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-outbound.json
+          node -e "const d=require('./scan-outbound.json');if(d.scanAction!=='SERVICE_ACCEPTED')throw new Error('Outbound transfer was not accepted by scan')"
+
+          api POST "/service/orders/$order_id/status" '{"status":"REPAIR_DONE","note":"CI temp smoke"}' > repair-done.json
+          node -e "const d=require('./repair-done.json');if(d.order?.status!=='REPAIR_DONE')throw new Error('Could not mark repair done at service point')"
+
+          api POST "/service/orders/$order_id/transfer" '{"kind":"RETURN_HOME","note":"CI temp smoke return"}' > return-home.json
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
+          api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-return.json
+          node - <<'NODE'
+          const d=require('./scan-return.json');
+          if(d.scanAction!=='RETURN_ACCEPTED_READY')throw new Error('Return-home scan did not auto-ready the repaired order');
+          if(d.order?.status!=='READY')throw new Error('Returned repaired order is not READY');
+          NODE
+
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
