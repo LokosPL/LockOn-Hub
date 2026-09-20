@@ -3894,7 +3894,8 @@ const route = async (request) => {
     const session=await requireActive(request),u=session.user,body=await readJson(request);
     if(!SERVICE_CREATE_ROLES.has(u.role_code)) throw Object.assign(new Error('Brak uprawnień do tworzenia zleceń.'),{status:403});
     const pointId=cleanText(body.pointId,80);await requirePoint(u,pointId);
-    const firstName=cleanText(body.firstName,80),lastName=cleanText(body.lastName,100),email=normalizeEmail(cleanText(body.email,180)),phone=cleanText(body.phone,50),phoneNorm=normalizePhone(phone),brand=cleanText(body.brand,80),model=cleanText(body.model,120),issue=cleanText(body.issueDescription,2000),orderType=String(body.orderType||'REPAIR').toUpperCase(),handlingMode=String(body.handlingMode||'STANDARD').toUpperCase();
+    const firstName=cleanText(body.firstName,80),lastName=cleanText(body.lastName,100),email=normalizeEmail(cleanText(body.email,180)),phone=cleanText(body.phone,50),phoneNorm=normalizePhone(phone),brand=cleanText(body.brand,80),model=cleanText(body.model,120),issue=cleanText(body.issueDescription,2000),orderType=String(body.orderType||'REPAIR').toUpperCase();
+    const handlingMode=orderType==='COMPLAINT'?'COMPLAINT_FLOW':'STANDARD';
     const imei=cleanText(body.imei,32).replace(/\s+/g,''),serialNumber=cleanText(body.serialNumber,120),deviceNotes=cleanText(body.deviceNotes,1000);
     const canSetIntakeEta=SERVICE_EDIT_ROLES.has(u.role_code);
     const etaText=canSetIntakeEta?cleanText(body.estimatedCompletionAt,64):'';
@@ -3916,7 +3917,6 @@ const route = async (request) => {
       throw Object.assign(new Error('Nie możesz przypisać zlecenia do innego technika.'),{status:403});
     }
     if(!firstName||!lastName||!brand||!model||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij dane klienta, urządzenia i usterki.'},400);
-    if(!['STANDARD','TRANSFER_ONLY'].includes(handlingMode))return json(request,{error:'HANDLING_MODE',message:'Nieprawidłowy sposób obsługi zlecenia.'},400);
     if(!email&&!phoneNorm)return json(request,{error:'CONTACT_REQUIRED',message:'Podaj adres e-mail lub numer telefonu klienta.'},400);
     if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json(request,{error:'EMAIL',message:'Adres e-mail klienta jest nieprawidłowy.'},400);
     if(phone&&phoneNorm.length<7)return json(request,{error:'PHONE',message:'Numer telefonu klienta jest zbyt krótki.'},400);
@@ -3962,29 +3962,22 @@ const route = async (request) => {
       await client.query("INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,changed_by_user_id) VALUES($1,$2,NULL,'RECEIVED',$3)",[makeId('hst'),oid,u.id]);
       await client.query('COMMIT');
 
+      await ensureServiceCardIdentity(oid);
       let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
       try{
-        const settings=await mailSettingsForPoint(pointId);
-        const customerPrefs=await customerNotificationPreferences(customer.id);
         if(!customer.email){
           notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
-        }else if(customerPrefs.serviceUpdates===false){
-          notification={queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED'};
-        }else if(settings.automatic_email_enabled!==true){
-          notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
-        }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes('RECEIVED')){
-          notification={queued:false,sent:false,reason:'STATUS_NOT_ENABLED'};
         }else{
           const nid=makeId('ntf');
           await q(
-            "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_STATUS_CHANGED',$5,$6::jsonb,'PENDING')",
-            [nid,u.id,customer.id,oid,customer.email,JSON.stringify({from:null,to:'RECEIVED',note:null})]
+            "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_INTAKE_CARD',$5,$6::jsonb,'PENDING')",
+            [nid,u.id,customer.id,oid,customer.email,JSON.stringify({from:null,to:'RECEIVED',note:null,mandatory:true})]
           );
           notification={queued:true,...(await processNotification(nid))};
         }
       }catch(notificationError){
-        console.error('[intake notification]',notificationError);
-        notification={queued:false,sent:false,reason:'NOTIFICATION_ERROR'};
+        console.error('[intake service card notification]',notificationError);
+        notification={queued:true,sent:false,reason:'NOTIFICATION_ERROR'};
       }
 
       try{
@@ -3992,7 +3985,7 @@ const route = async (request) => {
       }catch(auditError){
         console.error('[service order audit]',auditError);
       }
-      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,handlingMode,issueDescription:issue,status:'RECEIVED',assignedTechnicianId:handlingMode==='TRANSFER_ONLY'?null:assignedTechnicianId,estimatedCost:SERVICE_EDIT_ROLES.has(u.role_code)&&handlingMode!=='TRANSFER_ONLY'?estimatedCost:null,estimatedCompletionAt:order.estimated_completion_at||null,receivedAt:order.received_at},reusedCustomer:reused,reusedDevice,notification},201);
+      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,handlingMode,issueDescription:issue,status:'RECEIVED',assignedTechnicianId,estimatedCost:SERVICE_EDIT_ROLES.has(u.role_code)?estimatedCost:null,estimatedCompletionAt:order.estimated_completion_at||null,receivedAt:order.received_at},reusedCustomer:reused,reusedDevice,notification,serviceCard:{required:true,printMode:null,customerEmailRequired:Boolean(customer.email)}},201);
     }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
   }
 
