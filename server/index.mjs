@@ -93,6 +93,10 @@ const initialDb = () => ({
   serviceOrders: [],
   serviceOrderStatusHistory: [],
   serviceOrderNotes: [],
+  serviceOrderParts: [],
+  serviceOrderInvoices: [],
+  technicianPrivateNotes: [],
+  invoicePromptDismissals: [],
   notificationSettings: [],
   notificationHistory: [],
   supportConversations: [],
@@ -123,6 +127,10 @@ const loadDb = () => {
       serviceOrders: Array.isArray(raw.serviceOrders) ? raw.serviceOrders : [],
       serviceOrderStatusHistory: Array.isArray(raw.serviceOrderStatusHistory) ? raw.serviceOrderStatusHistory : [],
       serviceOrderNotes: Array.isArray(raw.serviceOrderNotes) ? raw.serviceOrderNotes : [],
+      serviceOrderParts: Array.isArray(raw.serviceOrderParts) ? raw.serviceOrderParts : [],
+      serviceOrderInvoices: Array.isArray(raw.serviceOrderInvoices) ? raw.serviceOrderInvoices : [],
+      technicianPrivateNotes: Array.isArray(raw.technicianPrivateNotes) ? raw.technicianPrivateNotes : [],
+      invoicePromptDismissals: Array.isArray(raw.invoicePromptDismissals) ? raw.invoicePromptDismissals : [],
       notificationSettings: Array.isArray(raw.notificationSettings) ? raw.notificationSettings : [],
       notificationHistory: Array.isArray(raw.notificationHistory) ? raw.notificationHistory : [],
       supportConversations: Array.isArray(raw.supportConversations) ? raw.supportConversations : [],
@@ -1015,6 +1023,117 @@ const handle = async (req, res) => {
     return json(res, 200, orders);
   }
 
+
+  if (method === 'GET' && url.pathname === '/service/technician-workspace') {
+    const user=requireActive(req,res);if(!user)return;
+    if(user.role!=='TECHNICIAN')return json(res,403,{error:'TECHNICIAN_ONLY',message:'Ten widok jest przeznaczony dla serwisanta.'});
+    const orders=db.serviceOrders
+      .filter((order)=>order.assignedTechnicianId===user.id&&!['COMPLETED','CANCELLED','REJECTED'].includes(order.status)&&canSeePoint(user,order.pointId))
+      .map((order)=>localOrderViewForUser(order,user));
+    const now=Date.now();
+    const counts={
+      active:orders.length,
+      received:orders.filter((order)=>order.status==='RECEIVED').length,
+      diagnosis:orders.filter((order)=>order.status==='DIAGNOSIS').length,
+      waitingParts:orders.filter((order)=>order.status==='WAITING_PARTS').length,
+      inRepair:orders.filter((order)=>order.status==='IN_REPAIR').length,
+      readyForPickup:orders.filter((order)=>['REPAIR_DONE','READY'].includes(order.status)).length,
+      overdue:orders.filter((order)=>order.estimatedCompletionAt&&new Date(order.estimatedCompletionAt).getTime()<now).length
+    };
+    return json(res,200,{technician:{id:user.id,name:user.name,email:user.email},counts,orders,generatedAt:nowIso()});
+  }
+
+  if ((method === 'GET' || method === 'POST') && url.pathname === '/service/technician-notes') {
+    const user=requireActive(req,res);if(!user)return;
+    if(user.role!=='TECHNICIAN')return json(res,403,{error:'TECHNICIAN_ONLY',message:'Prywatny pokój notatek jest dostępny dla serwisanta.'});
+    if(method==='GET'){
+      const notes=db.technicianPrivateNotes.filter((item)=>item.userId===user.id).sort((a,b)=>(Number(b.pinned)-Number(a.pinned))||String(b.updatedAt).localeCompare(String(a.updatedAt)));
+      return json(res,200,notes);
+    }
+    const body=await readBody(req),title=cleanText(body.title,120),note=cleanText(body.body,4000),pinned=body.pinned===true;
+    if(!note)return json(res,400,{error:'NOTE_REQUIRED',message:'Notatka nie może być pusta.'});
+    const created={id:id('tnn'),userId:user.id,title,body:note,pinned,createdAt:nowIso(),updatedAt:nowIso()};
+    db.technicianPrivateNotes.push(created);localAudit(user,'TECHNICIAN_PRIVATE_NOTE_CREATED','technician_note',created.id,null,{pinned,length:note.length});saveDb();
+    return json(res,201,created);
+  }
+
+  const localTechnicianNoteDelete=url.pathname.match(/^\/service\/technician-notes\/([^/]+)$/);
+  if(method==='DELETE'&&localTechnicianNoteDelete){
+    const user=requireActive(req,res);if(!user)return;
+    if(user.role!=='TECHNICIAN')return json(res,403,{error:'TECHNICIAN_ONLY'});
+    const before=db.technicianPrivateNotes.length;
+    db.technicianPrivateNotes=db.technicianPrivateNotes.filter((item)=>!(item.id===localTechnicianNoteDelete[1]&&item.userId===user.id));
+    if(db.technicianPrivateNotes.length===before)return json(res,404,{error:'NOT_FOUND'});
+    localAudit(user,'TECHNICIAN_PRIVATE_NOTE_DELETED','technician_note',localTechnicianNoteDelete[1]);saveDb();
+    return json(res,200,{ok:true});
+  }
+
+  const localCostingMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/costing$/);
+  if(localCostingMatch&&(method==='GET'||method==='POST')){
+    const user=requireActive(req,res);if(!user)return;
+    if(!SERVICE_EDIT_ROLES.has(user.role))return json(res,403,{error:'SERVICE_FINANCE_FORBIDDEN'});
+    const order=db.serviceOrders.find((item)=>item.id===localCostingMatch[1]);
+    if(!order)return json(res,404,{error:'NOT_FOUND'});
+    if(!canSeePoint(user,order.pointId))return json(res,403,{error:'POINT'});
+    if(user.role==='TECHNICIAN'&&order.assignedTechnicianId!==user.id)return json(res,403,{error:'TECHNICIAN_ORDER_REQUIRED'});
+    if(method==='POST'){
+      const body=await readBody(req);
+      const labor=Number(body.laborCostGross||0),other=Number(body.otherCostGross||0),parts=Array.isArray(body.parts)?body.parts:[];
+      if(!Number.isFinite(labor)||labor<0||!Number.isFinite(other)||other<0||parts.length>100)return json(res,400,{error:'COSTING'});
+      const normalized=[];
+      for(const raw of parts){
+        const description=cleanText(raw?.description,240),quantity=Number(raw?.quantity),unit=Number(raw?.unitCostGross);
+        if(!description||!Number.isFinite(quantity)||quantity<=0||!Number.isFinite(unit)||unit<0)return json(res,400,{error:'PARTS'});
+        normalized.push({
+          id:id('prt'),serviceOrderId:order.id,description,quantity,unitCostGross:unit,
+          invoiceReceived:raw?.invoiceReceived===true,invoiceNumber:cleanText(raw?.invoiceNumber,120)||null,
+          supplier:cleanText(raw?.supplier,180)||null,purchasedAt:cleanText(raw?.purchasedAt,10)||null,
+          createdAt:nowIso(),updatedAt:nowIso()
+        });
+      }
+      order.laborCostGross=labor;order.otherCostGross=other;
+      db.serviceOrderParts=db.serviceOrderParts.filter((item)=>item.serviceOrderId!==order.id).concat(normalized);
+      localAudit(user,'SERVICE_COSTING_UPDATED','service_order',order.id,order.pointId,{partsCount:normalized.length,laborCostGross:labor,otherCostGross:other});saveDb();
+    }
+    const parts=db.serviceOrderParts.filter((item)=>item.serviceOrderId===order.id).map((item)=>({...item,totalCostGross:Math.round(item.quantity*item.unitCostGross*100)/100}));
+    const partsCostGross=Math.round(parts.reduce((sum,item)=>sum+item.totalCostGross,0)*100)/100;
+    const laborCostGross=Number(order.laborCostGross||0),otherCostGross=Number(order.otherCostGross||0);
+    const internalCostGross=Math.round((partsCostGross+laborCostGross+otherCostGross)*100)/100;
+    const customerPrice=order.finalCost??order.estimatedCost??null;
+    return json(res,200,{
+      orderId:order.id,orderNumber:order.orderNumber,currency:order.currency||'PLN',parts,
+      invoices:[],partsCostGross,laborCostGross,otherCostGross,internalCostGross,
+      estimatedCost:order.estimatedCost??null,finalCost:order.finalCost??null,customerPrice,
+      marginGross:customerPrice==null?null:Math.round((customerPrice-internalCostGross)*100)/100
+    });
+  }
+
+  if(method==='GET'&&url.pathname==='/service/invoices'){
+    const user=requireActive(req,res);if(!user)return;
+    if(!SERVICE_EDIT_ROLES.has(user.role))return json(res,403,{error:'SERVICE_FINANCE_FORBIDDEN'});
+    return json(res,200,{period:cleanText(url.searchParams.get('month')||new Date().toISOString().slice(0,7),7),invoices:[]});
+  }
+  if(method==='GET'&&url.pathname==='/service/invoices/monthly-prompt'){
+    const user=requireActive(req,res);if(!user)return;
+    return json(res,200,{show:false,period:null,count:0,dismissed:false});
+  }
+  if(method==='POST'&&url.pathname==='/service/invoices/monthly-prompt/dismiss'){
+    const user=requireActive(req,res);if(!user)return;
+    const body=await readBody(req);
+    return json(res,200,{ok:true,period:cleanText(body.period,7)});
+  }
+  if(method==='POST'&&url.pathname==='/service/invoices/download-batch'){
+    const user=requireActive(req,res);if(!user)return;
+    if(!SERVICE_EDIT_ROLES.has(user.role))return json(res,403,{error:'SERVICE_FINANCE_FORBIDDEN'});
+    const body=await readBody(req);
+    return json(res,200,{period:cleanText(body.period,7),files:[],expiresInSeconds:0});
+  }
+  const localInvoiceUploadIntent=url.pathname.match(/^\/service\/orders\/([^/]+)\/invoices\/upload-intent$/);
+  if(method==='POST'&&localInvoiceUploadIntent){
+    const user=requireActive(req,res);if(!user)return;
+    return json(res,503,{error:'INVOICE_STORAGE_UNAVAILABLE',message:'Lokalny backend developerski nie przechowuje PDF. Użyj centralnego API Neon do testowania magazynu faktur.'});
+  }
+
   const serviceHistoryMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/history$/);
   if (method === 'GET' && serviceHistoryMatch) {
     const user = requireActive(req, res);
@@ -1121,6 +1240,7 @@ const handle = async (req, res) => {
     }
 
     const canManageAssignment = SERVICE_MANAGE_ROLES.has(user.role);
+    const canEditWorkflow = SERVICE_EDIT_ROLES.has(user.role);
     const canEditCosts = SERVICE_EDIT_ROLES.has(user.role);
     if (!canEditWorkflow && 'estimatedCompletionAt' in body && body.estimatedCompletionAt) return json(res, 403, { error:'FORBIDDEN', message:'Rola USER nie może zmieniać terminu realizacji.' });
     if (!canEditCosts && ('estimatedCost' in body || 'finalCost' in body)) return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do danych kosztowych zlecenia.' });
