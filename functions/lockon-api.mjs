@@ -4068,7 +4068,7 @@ const route = async (request) => {
       throw Object.assign(new Error('Nie możesz przypisać zlecenia do innego technika.'),{status:403});
     }
     if(!firstName||!lastName||!brand||!model||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij dane klienta, urządzenia i usterki.'},400);
-    if(!email&&!phoneNorm)return json(request,{error:'CONTACT_REQUIRED',message:'Podaj adres e-mail lub numer telefonu klienta.'},400);
+    if(!email||!phoneNorm)return json(request,{error:'CONTACT_REQUIRED',message:'Podaj adres e-mail i numer telefonu klienta. Karta serwisowa jest zawsze wysyłana e-mailem.'},400);
     if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json(request,{error:'EMAIL',message:'Adres e-mail klienta jest nieprawidłowy.'},400);
     if(phone&&phoneNorm.length<7)return json(request,{error:'PHONE',message:'Numer telefonu klienta jest zbyt krótki.'},400);
     if(imei&&!/^\d{14,16}$/.test(imei))return json(request,{error:'IMEI',message:'IMEI powinien zawierać 14–16 cyfr.'},400);
