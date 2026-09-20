@@ -1,6 +1,12 @@
 name: Verify Neon API bundle
 
 on:
+  push:
+    paths:
+      - "functions/lockon-api.mjs"
+      - "database/migrations/**"
+      - "database/schema.sql"
+      - ".github/workflows/neon-api-verify.yml"
   pull_request:
     paths:
       - "functions/lockon-api.mjs"
@@ -76,6 +82,9 @@ jobs:
           grep -q "COMPLAINT_FLOW" functions/lockon-api.mjs
           grep -q "customerPortalAutoUrl" functions/lockon-api.mjs
           grep -q "v1000-service-cards" database/migrations/2026-09-20-v1000-service-cards.sql
+          grep -q "service_orders_handling_mode_v1000_check" database/migrations/2026-09-20-v1000-service-cards.sql
+          grep -q "NOT VALID" database/migrations/2026-09-20-v1000-service-cards.sql
+          grep -q "VALIDATE CONSTRAINT" database/migrations/2026-09-20-v1000-service-cards.sql
           grep -q "magic!=='%PDF-'" functions/lockon-api.mjs
           grep -q "service_order_parts" database/migrations/2026-09-20-v021-service-finance-invoices.sql
           grep -q "service_order_invoices" database/migrations/2026-09-20-v021-service-finance-invoices.sql
