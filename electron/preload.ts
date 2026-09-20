@@ -33,6 +33,13 @@ contextBridge.exposeInMainWorld('lockOn', {
     factoryResetPreview: () => ipcRenderer.invoke('admin:factoryResetPreview'),
     factoryReset: (payload: unknown) => ipcRenderer.invoke('admin:factoryReset', payload)
   },
+  customers: {
+    list: (query?: string) => ipcRenderer.invoke('customers:list', query),
+    getCode: (customerId: string, rotate = false) => ipcRenderer.invoke('customers:getCode', customerId, rotate),
+    sendCode: (customerId: string) => ipcRenderer.invoke('customers:sendCode', customerId),
+    block: (customerId: string, blocked: boolean, reason?: string) => ipcRenderer.invoke('customers:block', customerId, blocked, reason),
+    logoutAll: (customerId: string) => ipcRenderer.invoke('customers:logoutAll', customerId)
+  },
   finance: {
     list: () => ipcRenderer.invoke('finance:list'),
     getTechnicianSettings: () => ipcRenderer.invoke('finance:getTechnicianSettings'),
