@@ -855,7 +855,7 @@ const handle = async (req, res) => {
     const deviceNotes = cleanText(body.deviceNotes, 1000);
     const issueDescription = cleanText(body.issueDescription, 2000);
     const orderType = String(body.orderType || 'REPAIR').toUpperCase();
-    const handlingMode = String(body.handlingMode || 'STANDARD').toUpperCase();
+    const handlingMode = orderType === 'COMPLAINT' ? 'COMPLAINT_FLOW' : 'STANDARD';
     const canEditWorkflow = SERVICE_EDIT_ROLES.has(user.role);
     const etaText = canEditWorkflow ? cleanText(body.estimatedCompletionAt, 64) : '';
     let estimatedCompletionAt = null;
@@ -878,8 +878,8 @@ const handle = async (req, res) => {
     if (!firstName || !lastName || !brand || !model || !issueDescription) {
       return json(res, 400, { error: 'VALIDATION', message: 'Uzupełnij klienta, markę, model i opis usterki.' });
     }
-    if (!email && !phoneNormalized) {
-      return json(res, 400, { error: 'CONTACT_REQUIRED', message: 'Podaj adres e-mail lub numer telefonu klienta.' });
+    if (!email || !phoneNormalized) {
+      return json(res, 400, { error: 'CONTACT_REQUIRED', message: 'Podaj adres e-mail i numer telefonu klienta.' });
     }
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return json(res, 400, { error: 'EMAIL', message: 'Adres e-mail klienta jest nieprawidłowy.' });
@@ -901,9 +901,6 @@ const handle = async (req, res) => {
     }
     if (!['REPAIR', 'COMPLAINT'].includes(orderType)) {
       return json(res, 400, { error: 'ORDER_TYPE', message: 'Nieprawidłowy typ zlecenia.' });
-    }
-    if (!['STANDARD','TRANSFER_ONLY'].includes(handlingMode)) {
-      return json(res, 400, { error:'HANDLING_MODE', message:'Nieprawidłowy sposób obsługi zlecenia.' });
     }
 
     let customer = db.customers.find((candidate) =>
@@ -983,12 +980,12 @@ const handle = async (req, res) => {
       handlingMode,
       issueDescription,
       status: 'RECEIVED',
-      assignedTechnicianId: handlingMode === 'TRANSFER_ONLY' ? null : assignedTechnicianId,
+      assignedTechnicianId,
       createdByUserId: user.id,
-      estimatedCost: handlingMode === 'TRANSFER_ONLY' ? null : estimatedCost,
+      estimatedCost,
       finalCost: null,
       currency: 'PLN',
-      estimatedCompletionAt: handlingMode === 'TRANSFER_ONLY' ? null : estimatedCompletionAt,
+      estimatedCompletionAt,
       receivedAt: nowIso(),
       createdAt: nowIso(),
       updatedAt: nowIso()
