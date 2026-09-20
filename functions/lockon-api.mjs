@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import { Pool } from 'pg';
 import { OAuth2Client } from 'google-auth-library';
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
 pool.on('error', (error) => console.error('[postgres idle client]', error));
@@ -40,7 +42,18 @@ const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const CUSTOMER_QUOTE_STAFF_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const CUSTOMER_PORTAL_SESSION_TTL_MS = 1000 * 60 * 60 * 24;
+const SERVICE_INVOICE_BUCKET = 'service-invoices';
+const SERVICE_INVOICE_MAX_BYTES = 20 * 1024 * 1024;
+const SERVICE_INVOICE_URL_TTL_SECONDS = 10 * 60;
 const googleVerifier = new OAuth2Client();
+const invoiceStorage = process.env.AWS_ENDPOINT_URL_S3 && process.env.AWS_REGION
+  ? new S3Client({
+      region: process.env.AWS_REGION,
+      endpoint: process.env.AWS_ENDPOINT_URL_S3,
+      forcePathStyle: true,
+      requestChecksumCalculation: 'WHEN_REQUIRED'
+    })
+  : null;
 
 const STATUS_LABELS = {
   RECEIVED: 'Przyjęto urządzenie',
