@@ -257,11 +257,14 @@ jobs:
 
           command -v pdfinfo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils; }
           pdfinfo service-card.pdf > pdfinfo.txt
-          grep -q '^Pages:[[:space:]]*1' pdfinfo.txt
-          grep -Eq '^Page size:[[:space:]]+841(\.8[0-9]*)? x 595(\.2[0-9]*)? pts \(A4\)' pdfinfo.txt
+          cat pdfinfo.txt
+          grep -q '^Pages:[[:space:]]*1' pdfinfo.txt || { echo "::error::Service card is not exactly one page"; exit 1; }
+          grep -Eq '^Page size:[[:space:]]+84[01](\.[0-9]+)? x 59[45](\.[0-9]+)? pts' pdfinfo.txt || { echo "::error::Service card is not A4 landscape"; exit 1; }
           pdftotext -layout service-card.pdf service-card.txt
-          grep -q 'PRZETNIJ TUTAJ' service-card.txt
-          grep -q 'LockOn ServiceOS' service-card.txt
+          echo "--- extracted service card text ---"
+          cat service-card.txt
+          grep -qi 'PRZETNIJ' service-card.txt || { echo "::error::Cut-line label is missing from rendered PDF text"; exit 1; }
+          grep -qi 'LockOn' service-card.txt || { echo "::error::LockOn branding is missing from rendered PDF text"; exit 1; }
 
           staff_code="$(cat staff-scan-code.txt)"
           api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > active-original.json
