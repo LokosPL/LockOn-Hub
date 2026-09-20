@@ -97,6 +97,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [result, setResult] = useState<ServiceCreateOrderResult | null>(null);
   const [cardChoice, setCardChoice] = useState<{orderId:string;orderNumber:number}|null>(null);
   const [cardBusy, setCardBusy] = useState(false);
+  const [serviceCardBusyId, setServiceCardBusyId] = useState<string|null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [gmail, setGmail] = useState<GmailConnectionStatus | null>(null);
@@ -441,6 +442,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     }catch(e){
       setError(e instanceof Error?e.message:'Nie udało się otworzyć karty serwisowej.');
     }finally{setCardBusy(false);}
+  };
+
+  const reopenServiceCard = async (order:ServiceOrderSummary,printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY') => {
+    if(serviceCardBusyId)return;
+    setServiceCardBusyId(order.id);setError('');setNotice('');
+    try{
+      await window.lockOn.service.openServiceCard(order.id,printMode);
+      setNotice(printMode==='PHYSICAL_AND_ONLINE'
+        ? 'Otworzono pełną kartę A4 z linią cięcia.'
+        : 'Otworzono kartę do urządzenia.');
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się otworzyć karty serwisowej.');}
+    finally{setServiceCardBusyId(null);}
   };
 
   const changeStatus = async (order: ServiceOrderSummary, status: string) => {
@@ -1029,6 +1042,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
                           {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót: ':'Do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
                         </div>}
+                      </section>
+
+                      <section className="service-workspace-card service-print-card">
+                        <div className="service-workspace-title"><Printer size={15}/><div><strong>Karta serwisowa</strong><span>QR klienta otwiera portal bez wpisywania kodu; QR urządzenia obsługuje logistykę pracownika.</span></div></div>
+                        <div className="service-print-card-actions">
+                          <button className="button secondary small" disabled={Boolean(serviceCardBusyId)} onClick={()=>void reopenServiceCard(order,'PHYSICAL_AND_ONLINE')}><Printer size={13}/> A4: klient + urządzenie</button>
+                          <button className="button secondary small" disabled={Boolean(serviceCardBusyId)} onClick={()=>void reopenServiceCard(order,'ONLINE_ONLY')}><Printer size={13}/> Tylko karta urządzenia</button>
+                        </div>
                       </section>
 
                       <section className="service-workspace-card">
