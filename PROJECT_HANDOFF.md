@@ -2,6 +2,8 @@
 
 > Ten plik jest źródłem ciągłości pracy nad projektem. Przed zmianami sprawdź aktualny `main`, latest release, workflows, repo strony oraz aktywną funkcję Neon. Nie zaczynaj projektu od zera.
 
+> **Ważne dla następnego chatu:** po komendzie użytkownika `GitHub Neon` przeczytaj również `NEXT_CHAT_START.md`, sprawdź stan repozytoriów/Neon narzędziami i czekaj na `START`. Po `START` wykonuj nowy backlog z `NEXT_CHAT_START.md` od Priorytetu 0 bez zbędnego opisywania planu.
+
 ## Repozytoria i środowisko
 
 - Aplikacja: `LokosPL/LockOn-Hub`
@@ -784,7 +786,7 @@ Dla każdego priorytetu:
 
 ## Jak zacząć w nowym czacie
 
-1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
+1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md` oraz **cały** `NEXT_CHAT_START.md`. Ten drugi plik zawiera bieżący backlog i protokół komend `GitHub Neon` → `START`.
 2. Sprawdź aktualny `main`, latest release, otwarte PR-y i wszystkie aktywne workflow w obu repozytoriach.
 3. Sprawdź Neon: projekt `wandering-field-13057181`, produkcyjną gałąź `br-steep-bonus-b1f1qh8u`, bazę `lockon`, aktywny deployment `lockonapi` oraz schemat.
 4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to **v0.20.3**, produkcyjny backend to **lockonapi v35**, a strona/PWA jest po **Site PR #35 / Pages #102** z Google login v2 dla klientów i cache `serviceos-shell-v24`. Pracownicze WWW nadal jest code-only. Nie rozpoczynaj historycznych priorytetów ponownie.
