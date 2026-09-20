@@ -80,6 +80,10 @@ jobs:
           grep -q "service_order_parts" database/migrations/2026-09-20-v021-service-finance-invoices.sql
           grep -q "service_order_invoices" database/migrations/2026-09-20-v021-service-finance-invoices.sql
           grep -q "technician_private_notes" database/migrations/2026-09-20-v021-service-finance-invoices.sql
+          grep -Fq "COALESCE(s.current_point_id,s.home_point_id,s.point_id)" functions/lockon-api.mjs
+          grep -Fq "t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')" functions/lockon-api.mjs
+          grep -Fq '!imei||!serialNumber||!deviceNotes' functions/lockon-api.mjs
+          grep -Fq 'SELECT id FROM service_orders WHERE id=$1 FOR UPDATE' functions/lockon-api.mjs
       - name: Bundle for Neon Functions
         run: |
           mkdir -p central-api-dist
