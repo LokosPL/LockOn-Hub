@@ -9,7 +9,7 @@ import pdfFonts from 'pdfmake/build/vfs_fonts.js';
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
 pool.on('error', (error) => console.error('[postgres idle client]', error));
 
-const OWNER_EMAIL = String(process.env.LOCKON_OWNER_EMAIL || 'nowogar@gmail.com').trim().toLowerCase();
+const OWNER_EMAIL = String(process.env.LOCKON_OWNER_EMAIL || '').trim().toLowerCase();
 const GOOGLE_DESKTOP_CLIENT_ID = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_ID || '').trim();
 const GOOGLE_DESKTOP_CLIENT_SECRET = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET || '').trim();
 const GOOGLE_CUSTOMER_WEB_CLIENT_ID = String(process.env.LOCKON_GOOGLE_WEB_CLIENT_ID || '').trim();
@@ -80,6 +80,38 @@ const DEFAULT_NOTIFY_STATUSES = Object.freeze(['RECEIVED','DIAGNOSIS','WAITING_P
 const nowIso = () => new Date().toISOString();
 const makeId = (prefix) => prefix + '_' + crypto.randomBytes(10).toString('hex');
 const normalizeEmail = (value = '') => String(value).trim().toLowerCase();
+const OWNER_OPERATIONAL_NAME = 'System LockOn';
+const OWNER_SUPPORT_NAME = 'Właściciel aplikacji';
+const isOwnerIdentity = (email, role = null) =>
+  String(role || '').trim().toUpperCase() === 'OWNER' ||
+  (Boolean(OWNER_EMAIL) && normalizeEmail(email) === OWNER_EMAIL);
+const operationalIdentityName = (name, email, role = null) =>
+  isOwnerIdentity(email, role) ? OWNER_OPERATIONAL_NAME : (name || email || null);
+const operationalIdentityEmail = (email, role = null) =>
+  isOwnerIdentity(email, role) ? null : (email || null);
+const supportIdentityName = (name, email, role = null) =>
+  isOwnerIdentity(email, role) ? OWNER_SUPPORT_NAME : (name || email || null);
+const supportIdentityEmail = (email, role = null) =>
+  isOwnerIdentity(email, role) ? null : (email || null);
+const sanitizeOperationalValue = (value) => {
+  if (Array.isArray(value)) return value.map(sanitizeOperationalValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeOperationalValue(item)]));
+  }
+  if (typeof value === 'string' && OWNER_EMAIL) {
+    if (normalizeEmail(value) === OWNER_EMAIL) return null;
+    let result = value;
+    let lower = result.toLowerCase();
+    let index = lower.indexOf(OWNER_EMAIL);
+    while (index >= 0) {
+      result = result.slice(0,index) + OWNER_OPERATIONAL_NAME + result.slice(index + OWNER_EMAIL.length);
+      lower = result.toLowerCase();
+      index = lower.indexOf(OWNER_EMAIL);
+    }
+    return result;
+  }
+  return value;
+};
 const normalizePhone = (value = '') => String(value).replace(/\D/g, '').slice(-15);
 const cleanText = (value, max = 240) => String(value ?? '').trim().slice(0, max);
 const normalizeTechnicianPercent = (value) => {
@@ -237,9 +269,9 @@ const loadPointsForUser = async (user) => {
 
 const publicUser = async (user) => ({
   id: user.id,
-  email: user.email,
-  name: user.name,
-  picture: user.picture_url || null,
+  email: operationalIdentityEmail(user.email, user.role_code),
+  name: operationalIdentityName(user.name, user.email, user.role_code),
+  picture: isOwnerIdentity(user.email, user.role_code) ? null : (user.picture_url || null),
   role: user.role_code || null,
   technicianSplitPercent: user.technician_split_percent == null ? null : Number(user.technician_split_percent),
   supportEnabled: user.support_enabled === true || user.role_code === 'SUPPORT',
@@ -362,7 +394,7 @@ const audit = async (actor, action, entityType, entityId = null, pointId = null,
   };
   await q(
     'INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,point_id,metadata) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)',
-    [makeId('aud'), actorUserId, action, entityType, entityId, pointId, JSON.stringify(enrichedMetadata)]
+    [makeId('aud'), actorUserId, action, entityType, entityId, pointId, JSON.stringify(sanitizeOperationalValue(enrichedMetadata))]
   );
 };
 
@@ -472,10 +504,10 @@ const loginProfile = async (profile, clientType, allowCreate) => {
   );
   let user = result.rows[0] || null;
 
-  if (profile.email === OWNER_EMAIL) {
+  if (OWNER_EMAIL && profile.email === OWNER_EMAIL) {
     await q(
       "INSERT INTO users(id,google_sub,email,name,picture_url,role_code,status,first_login_at,last_login_at,updated_at) VALUES('usr_owner',$1,$2,$3,$4,'OWNER','ACTIVE',now(),now(),now()) ON CONFLICT(id) DO UPDATE SET google_sub=EXCLUDED.google_sub,email=EXCLUDED.email,name=EXCLUDED.name,picture_url=EXCLUDED.picture_url,role_code='OWNER',status='ACTIVE',last_login_at=now(),updated_at=now()",
-      [profile.sub, OWNER_EMAIL, profile.name || 'Bartłomiej Motłoch', profile.picture]
+      [profile.sub, OWNER_EMAIL, profile.name || OWNER_OPERATIONAL_NAME, profile.picture]
     );
     user = await loadUser('usr_owner');
   } else if (!user && allowCreate) {
@@ -557,9 +589,9 @@ const orderView = (row) => ({
   issueDescription: row.issue_description,
   status: row.status,
   statusLabel: STATUS_LABELS[row.status] || row.status,
-  assignedTechnicianId: row.assigned_technician_id || null,
-  assignedTechnicianName: row.technician_name || null,
-  assignedTechnicianEmail: row.technician_email || null,
+  assignedTechnicianId: isOwnerIdentity(row.technician_email, row.technician_role) ? null : (row.assigned_technician_id || null),
+  assignedTechnicianName: isOwnerIdentity(row.technician_email, row.technician_role) ? null : (row.technician_name || null),
+  assignedTechnicianEmail: isOwnerIdentity(row.technician_email, row.technician_role) ? null : (row.technician_email || null),
   estimatedCost: row.estimated_cost == null ? null : Number(row.estimated_cost),
   finalCost: row.final_cost == null ? null : Number(row.final_cost),
   currency: row.currency || 'PLN',
@@ -592,9 +624,9 @@ const transferView = (row) => ({
   status: row.status,
   note: row.note || null,
   sentByUserId: row.sent_by_user_id,
-  sentByName: row.sent_by_name || row.sent_by_email || 'Użytkownik',
+  sentByName: operationalIdentityName(row.sent_by_name, row.sent_by_email, row.sent_by_role) || 'Użytkownik',
   acceptedByUserId: row.accepted_by_user_id || null,
-  acceptedByName: row.accepted_by_name || row.accepted_by_email || null,
+  acceptedByName: row.accepted_by_user_id ? operationalIdentityName(row.accepted_by_name, row.accepted_by_email, row.accepted_by_role) : null,
   requestedAt: row.requested_at,
   shippedAt: row.shipped_at || null,
   deliveredAt: row.delivered_at || null,
@@ -784,7 +816,7 @@ const sortOrdersByWorkflow = (orders) => [...orders].sort((a,b) => {
 const loadTransfersForOrders = async (orderIds) => {
   if (!orderIds.length) return new Map();
   const { rows } = await q(
-    "SELECT t.*,fp.name AS from_point_name,fp.city AS from_point_city,tp.name AS to_point_name,tp.city AS to_point_city,su.name AS sent_by_name,su.email AS sent_by_email,au.name AS accepted_by_name,au.email AS accepted_by_email FROM service_order_transfers t JOIN points fp ON fp.id=t.from_point_id JOIN points tp ON tp.id=t.to_point_id JOIN users su ON su.id=t.sent_by_user_id LEFT JOIN users au ON au.id=t.accepted_by_user_id WHERE t.service_order_id=ANY($1::text[]) ORDER BY t.requested_at DESC",
+    "SELECT t.*,fp.name AS from_point_name,fp.city AS from_point_city,tp.name AS to_point_name,tp.city AS to_point_city,su.name AS sent_by_name,su.email AS sent_by_email,su.role_code AS sent_by_role,au.name AS accepted_by_name,au.email AS accepted_by_email,au.role_code AS accepted_by_role FROM service_order_transfers t JOIN points fp ON fp.id=t.from_point_id JOIN points tp ON tp.id=t.to_point_id JOIN users su ON su.id=t.sent_by_user_id LEFT JOIN users au ON au.id=t.accepted_by_user_id WHERE t.service_order_id=ANY($1::text[]) ORDER BY t.requested_at DESC",
     [orderIds]
   );
   const map = new Map();
@@ -919,7 +951,7 @@ const serviceInvoiceView = (row) => ({
   invoiceDate:row.invoice_date||null,
   grossAmount:row.gross_amount==null?null:Number(row.gross_amount),
   uploadedByUserId:row.uploaded_by_user_id,
-  uploadedByName:row.uploaded_by_name||null,
+  uploadedByName:row.uploaded_by_user_id ? operationalIdentityName(row.uploaded_by_name,row.uploaded_by_email,row.uploaded_by_role) : null,
   createdAt:row.created_at,
   readyAt:row.ready_at||null
 });
@@ -931,7 +963,7 @@ const loadOrderCosting = async (user, orderId) => {
     [orderId]
   )).rows.map(servicePartView);
   const invoices=(await q(
-    "SELECT i.*,s.order_number,u.name AS uploaded_by_name FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.service_order_id=$1 AND i.status='READY' ORDER BY COALESCE(i.invoice_date,i.created_at::date) DESC,i.created_at DESC",
+    "SELECT i.*,s.order_number,u.name AS uploaded_by_name,u.email AS uploaded_by_email,u.role_code AS uploaded_by_role FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.service_order_id=$1 AND i.status='READY' ORDER BY COALESCE(i.invoice_date,i.created_at::date) DESC,i.created_at DESC",
     [orderId]
   )).rows.map(serviceInvoiceView);
   const partsTotal=roundMoney(parts.reduce((sum,item)=>sum+item.totalCostGross,0));
@@ -1012,7 +1044,7 @@ const listAccessibleInvoices = async (user, period) => {
     access=" AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$3 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$3 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id))";
   }
   const {rows}=await q(
-    "SELECT i.*,s.order_number,(c.first_name||' '||c.last_name) AS customer_name,(d.brand||' '||d.model) AS device_label,u.name AS uploaded_by_name FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.status='READY' AND COALESCE(i.invoice_date,i.created_at::date)>=$1::date AND COALESCE(i.invoice_date,i.created_at::date)<$2::date"+access+" ORDER BY COALESCE(i.invoice_date,i.created_at::date) DESC,i.created_at DESC LIMIT 300",
+    "SELECT i.*,s.order_number,(c.first_name||' '||c.last_name) AS customer_name,(d.brand||' '||d.model) AS device_label,u.name AS uploaded_by_name,u.email AS uploaded_by_email,u.role_code AS uploaded_by_role FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.status='READY' AND COALESCE(i.invoice_date,i.created_at::date)>=$1::date AND COALESCE(i.invoice_date,i.created_at::date)<$2::date"+access+" ORDER BY COALESCE(i.invoice_date,i.created_at::date) DESC,i.created_at DESC LIMIT 300",
     params
   );
   return rows.map(serviceInvoiceView);
@@ -1026,7 +1058,7 @@ const getVisibleOrderByNumber = async (user, number) => {
     access = " AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')))";
   }
   const { rows } = await q(
-    "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts ca ON ca.customer_id=c.id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
+    "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts ca ON ca.customer_id=c.id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
     params
   );
   if (!rows[0]) return null;
@@ -1036,12 +1068,12 @@ const getVisibleOrderByNumber = async (user, number) => {
 const listVisibleOrders = async (user) => {
   if (GLOBAL_ROLES.has(user.role_code)) {
     const { rows } = await q(
-      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150"
+      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150"
     );
     return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150",
     [user.id]
   );
   return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
@@ -1050,13 +1082,13 @@ const listVisibleOrders = async (user) => {
 const listVisibleCustomerOrders = async (user, customerId) => {
   if (GLOBAL_ROLES.has(user.role_code)) {
     const { rows } = await q(
-      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 ORDER BY s.created_at DESC LIMIT 100",
+      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 ORDER BY s.created_at DESC LIMIT 100",
       [customerId]
     );
     return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY s.created_at DESC LIMIT 100",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY s.created_at DESC LIMIT 100",
     [customerId, user.id]
   );
   return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
@@ -1572,7 +1604,7 @@ const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
       [customerId]
     ),
     q(
-      "SELECT r.*,rp.name AS requested_point_name,rrp.name AS routed_point_name,u.name AS technician_name FROM customer_quote_requests r JOIN points rp ON rp.id=r.requested_point_id JOIN points rrp ON rrp.id=r.routed_point_id LEFT JOIN users u ON u.id=r.assigned_technician_id WHERE r.customer_id=$1 ORDER BY r.updated_at DESC",
+      "SELECT r.*,rp.name AS requested_point_name,rrp.name AS routed_point_name,u.name AS technician_name,u.email AS technician_email,u.role_code AS technician_role FROM customer_quote_requests r JOIN points rp ON rp.id=r.requested_point_id JOIN points rrp ON rrp.id=r.routed_point_id LEFT JOIN users u ON u.id=r.assigned_technician_id WHERE r.customer_id=$1 ORDER BY r.updated_at DESC",
       [customerId]
     ),
     q("SELECT id,name,city FROM points WHERE active=true ORDER BY city,name")
@@ -1582,14 +1614,14 @@ const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
   let messageRows = [];
   if (quoteIds.length) {
     messageRows = (await q(
-      "SELECT m.id,m.request_id,m.sender_kind,m.body,m.created_at,u.name AS sender_name FROM customer_quote_messages m LEFT JOIN users u ON u.id=m.sender_user_id WHERE m.request_id=ANY($1::text[]) ORDER BY m.created_at ASC",
+      "SELECT m.id,m.request_id,m.sender_kind,m.body,m.created_at,u.name AS sender_name,u.email AS sender_email,u.role_code AS sender_role FROM customer_quote_messages m LEFT JOIN users u ON u.id=m.sender_user_id WHERE m.request_id=ANY($1::text[]) ORDER BY m.created_at ASC",
       [quoteIds]
     )).rows;
   }
   const messagesByRequest = new Map();
   for (const row of messageRows) {
     const list = messagesByRequest.get(row.request_id) || [];
-    list.push({id:row.id,senderKind:row.sender_kind,senderName:row.sender_name||null,body:row.body,createdAt:row.created_at});
+    list.push({id:row.id,senderKind:row.sender_kind,senderName:row.sender_kind==='STAFF'?operationalIdentityName(row.sender_name,row.sender_email,row.sender_role):(row.sender_name||null),body:row.body,createdAt:row.created_at});
     messagesByRequest.set(row.request_id,list);
   }
 
@@ -1629,7 +1661,7 @@ const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
     points:pointsResult.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
     quoteRequests:quotesResult.rows.map((row)=>({
       id:row.id,requestedPointId:row.requested_point_id,requestedPointName:row.requested_point_name,
-      routedPointId:row.routed_point_id,routedPointName:row.routed_point_name,assignedTechnicianName:row.technician_name||null,
+      routedPointId:row.routed_point_id,routedPointName:row.routed_point_name,assignedTechnicianName:isOwnerIdentity(row.technician_email,row.technician_role)?null:(row.technician_name||null),
       serviceOrderId:row.service_order_id||null,deviceDescription:row.device_description,issueDescription:row.issue_description,
       status:row.status,quoteAmount:row.quote_amount==null?null:Number(row.quote_amount),currency:row.currency||'PLN',
       quoteNote:row.quote_note||null,routingReason:row.routing_reason,createdAt:row.created_at,updatedAt:row.updated_at,
@@ -2138,7 +2170,7 @@ const repairSelfSupportAssignment = async (session) => {
 
 const conversationPayload = async (userId) => {
   const conversation = (await q(
-    "SELECT sc.*,ass.name AS assigned_support_name FROM support_conversations sc LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.user_id=$1 AND sc.status='OPEN' ORDER BY sc.updated_at DESC LIMIT 1",
+    "SELECT sc.*,ass.name AS assigned_support_name,ass.email AS assigned_support_email,ass.role_code AS assigned_support_role FROM support_conversations sc LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.user_id=$1 AND sc.status='OPEN' ORDER BY sc.updated_at DESC LIMIT 1",
     [userId]
   )).rows[0] || await getOrCreateConversation(userId);
   const { rows } = await q(
@@ -2151,7 +2183,7 @@ const conversationPayload = async (userId) => {
     consultantRequestedAt: conversation.consultant_requested_at || null,
     consultantJoinedAt: conversation.consultant_joined_at || conversation.taken_at || null,
     assignedSupportUserId: conversation.assigned_support_user_id || null,
-    assignedSupportName: conversation.assigned_support_name || null,
+    assignedSupportName: conversation.assigned_support_user_id ? supportIdentityName(conversation.assigned_support_name,conversation.assigned_support_email,conversation.assigned_support_role) : null,
     consultantState: conversation.assigned_support_user_id ? 'JOINED' : conversation.consultant_requested_at ? 'WAITING' : 'BOT',
     messages: rows.map(supportMessageView)
   };
@@ -2322,13 +2354,13 @@ const assistantReply = async (session, message) => {
 
       if (lower.includes('notatk') && SERVICE_EDIT_ROLES.has(user.role_code)) {
         const { rows } = await q(
-          'SELECT n.body,n.created_at,usr.name AS author_name,usr.email AS author_email FROM service_order_notes n JOIN users usr ON usr.id=n.author_user_id WHERE n.service_order_id=$1 ORDER BY n.created_at DESC LIMIT 3',
+          'SELECT n.body,n.created_at,usr.name AS author_name,usr.email AS author_email,usr.role_code AS author_role FROM service_order_notes n JOIN users usr ON usr.id=n.author_user_id WHERE n.service_order_id=$1 ORDER BY n.created_at DESC LIMIT 3',
           [order.id]
         );
         if (rows.length) {
           lines.push('Ostatnie notatki wewnętrzne:');
           for (const note of rows) {
-            lines.push('- ' + (note.author_name || note.author_email || 'Użytkownik') + ' · ' + new Date(note.created_at).toLocaleString('pl-PL') + ': ' + cleanText(note.body, 240));
+            lines.push('- ' + (operationalIdentityName(note.author_name,note.author_email,note.author_role) || 'Użytkownik') + ' · ' + new Date(note.created_at).toLocaleString('pl-PL') + ': ' + cleanText(note.body, 240));
           }
         } else {
           lines.push('Brak notatek wewnętrznych.');
@@ -2337,7 +2369,7 @@ const assistantReply = async (session, message) => {
 
       if (lower.includes('histori') || lower.includes('statusy')) {
         const { rows } = await q(
-          'SELECT h.from_status,h.to_status,h.note,h.created_at,usr.name AS changed_by_name,usr.email AS changed_by_email FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.created_at DESC LIMIT 6',
+          'SELECT h.from_status,h.to_status,h.note,h.created_at,usr.name AS changed_by_name,usr.email AS changed_by_email,usr.role_code AS changed_by_role FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.created_at DESC LIMIT 6',
           [order.id]
         );
         if (rows.length) {
@@ -2345,7 +2377,7 @@ const assistantReply = async (session, message) => {
           for (const item of rows.reverse()) {
             const from = item.from_status ? (STATUS_LABELS[item.from_status] || item.from_status) + ' → ' : '';
             const to = STATUS_LABELS[item.to_status] || item.to_status;
-            const who = item.changed_by_name || item.changed_by_email || 'System';
+            const who = operationalIdentityName(item.changed_by_name,item.changed_by_email,item.changed_by_role) || 'System';
             lines.push('- ' + from + to + ' · ' + new Date(item.created_at).toLocaleString('pl-PL') + ' · ' + who + (item.note ? ' · ' + cleanText(item.note, 180) : ''));
           }
         }
@@ -2741,7 +2773,10 @@ const route = async (request) => {
     const body = await readJson(request);
     const role = String(body.role || '').trim().toUpperCase();
     if (!DEV_TEST_ROLES.has(role)) return json(request, { error:'DEV_ROLE_INVALID', message:'Nieprawidłowa rola testowa.' }, 400);
-    if (role === 'OWNER') return json(request, await loginProfile({ sub:'dev-owner', email:OWNER_EMAIL, name:'Bartłomiej Motłoch', picture:null }, 'DESKTOP', true));
+    if (role === 'OWNER') {
+      if (!OWNER_EMAIL) return json(request,{error:'OWNER_EMAIL_NOT_CONFIGURED'},503);
+      return json(request, await loginProfile({ sub:'dev-owner', email:OWNER_EMAIL, name:OWNER_OPERATIONAL_NAME, picture:null }, 'DESKTOP', true));
+    }
 
     const roleSlug = role.toLowerCase();
     const userId = 'usr_ci_' + roleSlug;
@@ -2765,7 +2800,8 @@ const route = async (request) => {
 
   if (method === 'POST' && url.pathname === '/auth/dev-owner') {
     if (!ALLOW_DEV_LOGIN) return json(request, { error: 'NOT_FOUND' }, 404);
-    return json(request, await loginProfile({ sub: 'dev-owner', email: OWNER_EMAIL, name: 'Bartłomiej Motłoch', picture: null }, 'DESKTOP', true));
+    if (!OWNER_EMAIL) return json(request,{error:'OWNER_EMAIL_NOT_CONFIGURED'},503);
+    return json(request, await loginProfile({ sub: 'dev-owner', email: OWNER_EMAIL, name: OWNER_OPERATIONAL_NAME, picture: null }, 'DESKTOP', true));
   }
 
   if (method === 'GET' && url.pathname === '/me') {
@@ -2991,18 +3027,21 @@ const route = async (request) => {
       q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=p.id AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL) t ON true ORDER BY p.name"),
       q("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,support_enabled,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
       q("SELECT a.id,a.actor_user_id AS user_id,u.email,u.name,u.role_code AS role,u.status,a.created_at FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id WHERE a.action LIKE 'LOGIN_%' ORDER BY a.created_at DESC LIMIT 100"),
-      q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC"),
+      q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,u.role_code AS technician_role,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC"),
       q("SELECT client_type,count(*)::int AS count FROM auth_sessions WHERE revoked_at IS NULL AND expires_at>now() AND absolute_expires_at>now() GROUP BY client_type"),
-      q("SELECT a.id,a.action,a.entity_type,a.entity_id,a.point_id,a.metadata,a.created_at,u.name AS actor_name,u.email AS actor_email FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id ORDER BY a.created_at DESC LIMIT 80"),
+      q("SELECT a.id,a.action,a.entity_type,a.entity_id,a.point_id,a.metadata,a.created_at,u.name AS actor_name,u.email AS actor_email,u.role_code AS actor_role FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id ORDER BY a.created_at DESC LIMIT 80"),
       q("SELECT status,count(*)::int AS count FROM service_order_transfers GROUP BY status"),
       q("SELECT (SELECT count(*)::int FROM customer_portal_accounts WHERE google_sub IS NOT NULL) AS google_accounts,(SELECT count(*)::int FROM customer_portal_accounts WHERE blocked_at IS NOT NULL) AS blocked_accounts,(SELECT count(*)::int FROM customer_portal_sessions WHERE expires_at>now()) AS active_customer_sessions")
     ]);
     const mappedUsers = [];
-    for (const user of users.rows) mappedUsers.push(await publicUser(user));
+    for (const user of users.rows) {
+      if (isOwnerIdentity(user.email,user.role_code)) continue;
+      mappedUsers.push(await publicUser(user));
+    }
     const revenues = pendingRevenue.rows.map((r) => ({
       id:r.id,userId:r.user_id,pointId:r.point_id,amount:Number(r.amount),workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,
       splitTechnicianPercent:Number(r.technician_percent ?? 50),splitBossPercent:100-Number(r.technician_percent ?? 50),technicianShare:0,bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at||null,
-      technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}
+      technician:{id:r.user_id,name:operationalIdentityName(r.technician_name,r.technician_email,r.technician_role),email:operationalIdentityEmail(r.technician_email,r.technician_role)},point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}
     }));
     const sessionCounts=Object.fromEntries(sessions.rows.map((row)=>[row.client_type,Number(row.count)]));
     const transferCounts=Object.fromEntries(transferSummary.rows.map((row)=>[row.status,Number(row.count)]));
@@ -3011,7 +3050,7 @@ const route = async (request) => {
       users: mappedUsers,
       pendingUsers: mappedUsers.filter((u) => u.status === 'PENDING' && !u.blocked),
       blockedUsers: mappedUsers.filter((u) => u.blocked),
-      loginEvents: loginEvents.rows.map((e) => ({id:e.id,userId:e.user_id,email:e.email||'',name:e.name||'',role:e.role||null,status:e.status||'PENDING',pointIds:[],createdAt:e.created_at})),
+      loginEvents: loginEvents.rows.map((e) => ({id:e.id,userId:e.user_id,email:operationalIdentityEmail(e.email,e.role)||'',name:operationalIdentityName(e.name,e.email,e.role)||'System',role:e.role||null,status:e.status||'PENDING',pointIds:[],createdAt:e.created_at})),
       pendingRevenue: revenues,
       system: {
         activeSessions: Object.values(sessionCounts).reduce((sum,value)=>sum+Number(value||0),0),
@@ -3031,7 +3070,7 @@ const route = async (request) => {
         entityType:row.entity_type,
         entityId:row.entity_id||null,
         pointId:row.point_id||null,
-        actorName:row.actor_name||row.actor_email||'System',
+        actorName:operationalIdentityName(row.actor_name,row.actor_email,row.actor_role)||'System',
         metadata:row.metadata||{},
         createdAt:row.created_at
       }))
@@ -3071,7 +3110,7 @@ const route = async (request) => {
     const sql =
       "SELECT a.id,a.actor_user_id,a.action,a.entity_type,a.entity_id,a.point_id,a.metadata,a.created_at," +
       "u.name AS actor_name,u.email AS actor_email,u.role_code AS actor_role,p.name AS point_name," +
-      "target_u.name AS target_user_name,target_u.email AS target_user_email,target_p.name AS target_point_name," +
+      "target_u.name AS target_user_name,target_u.email AS target_user_email,target_u.role_code AS target_user_role,target_p.name AS target_point_name," +
       "COALESCE(s.order_number,sn.order_number,sr.order_number,sq.order_number) AS order_number," +
       "trim(coalesce(c.first_name,'')||' '||coalesce(c.last_name,'')) AS customer_name," +
       "trim(coalesce(d.brand,'')||' '||coalesce(d.model,'')) AS device_name," +
@@ -3096,21 +3135,21 @@ const route = async (request) => {
     const { rows } = await q(sql, params);
     return json(request, {
       events: rows.map((row) => {
-        const metadata = row.metadata || {};
+        const metadata = sanitizeOperationalValue(row.metadata || {});
         const actionTransferStatus = String(row.action || '').startsWith('SERVICE_TRANSFER_')
           ? String(row.action).slice('SERVICE_TRANSFER_'.length)
           : null;
         return {
           id: row.id,
           actorUserId: row.actor_user_id || null,
-          actorName: row.actor_name || row.actor_email || 'System',
-          actorEmail: row.actor_email || null,
+          actorName: operationalIdentityName(row.actor_name,row.actor_email,row.actor_role) || 'System',
+          actorEmail: operationalIdentityEmail(row.actor_email,row.actor_role),
           actorRole: row.actor_role || metadata.actorRole || null,
           pointId: row.point_id || null,
           pointName: row.point_name || null,
           entityType: row.entity_type,
           entityId: row.entity_id || null,
-          entityName: row.target_user_name || row.target_user_email || row.target_point_name || null,
+          entityName: operationalIdentityName(row.target_user_name,row.target_user_email,row.target_user_role) || row.target_point_name || null,
           action: row.action,
           before: metadata.before ?? metadata.from ?? null,
           after: metadata.after ?? metadata.to ?? null,
@@ -3413,7 +3452,7 @@ const route = async (request) => {
   if(method==='GET'&&url.pathname==='/finance/revenues'){
     const session=await requireActive(request);const u=session.user;
     if(!FINANCE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do rozliczeń.'),{status:403});
-    const baseSelect="SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active,so.order_number FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id LEFT JOIN service_orders so ON so.id=r.service_order_id ";
+    const baseSelect="SELECT r.*,usr.name AS technician_name,usr.email AS technician_email,usr.role_code AS technician_role,p.name AS point_name,p.city AS point_city,p.active AS point_active,so.order_number FROM revenue_entries r JOIN users usr ON usr.id=r.user_id JOIN points p ON p.id=r.point_id LEFT JOIN service_orders so ON so.id=r.service_order_id ";
     let rows;
     if(GLOBAL_ROLES.has(u.role_code)) rows=(await q(baseSelect+"ORDER BY r.occurred_at DESC,r.created_at DESC")).rows;
     else if(u.role_code==='TECHNICIAN') rows=(await q(baseSelect+"WHERE r.user_id=$1 ORDER BY r.occurred_at DESC,r.created_at DESC",[u.id])).rows;
@@ -3429,7 +3468,7 @@ const route = async (request) => {
         splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,
         technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,
         submittedAt:r.created_at,reviewedAt:r.approved_at||null,
-        technician:{id:r.user_id,name:r.technician_name,email:r.technician_email},
+        technician:{id:r.user_id,name:operationalIdentityName(r.technician_name,r.technician_email,r.technician_role),email:operationalIdentityEmail(r.technician_email,r.technician_role)},
         point:{id:r.point_id,name:r.point_name,city:r.point_city,active:r.point_active}
       };
     });
@@ -3501,7 +3540,7 @@ const route = async (request) => {
     if(u.role_code==='USER')return json(request,{pointCount:0,activeUsers:0,pendingUsers:0,approvedRevenue:0,pendingRevenue:0,bossShare:0,technicianShare:0});
     const ids=await visiblePointIds(u);
     const revenue=(await q("SELECT amount,status,user_id,technician_percent FROM revenue_entries WHERE point_id=ANY($1::text[])",[ids])).rows;
-    const users=(await q("SELECT COUNT(DISTINCT u.id)::int AS count FROM users u LEFT JOIN user_point_access a ON a.user_id=u.id WHERE u.status='ACTIVE' AND ($2::boolean OR a.point_id=ANY($1::text[]))",[ids,GLOBAL_ROLES.has(u.role_code)])).rows[0].count;
+    const users=(await q("SELECT COUNT(DISTINCT u.id)::int AS count FROM users u LEFT JOIN user_point_access a ON a.user_id=u.id WHERE u.status='ACTIVE' AND u.role_code IS DISTINCT FROM 'OWNER' AND ($2::boolean OR a.point_id=ANY($1::text[]))",[ids,GLOBAL_ROLES.has(u.role_code)])).rows[0].count;
     const approved=revenue.filter((r)=>r.status==='APPROVED'||r.status==='SETTLED'),pending=revenue.filter((r)=>r.status==='PENDING');
     const approvedSum=approved.reduce((s,r)=>s+Number(r.amount),0),pendingSum=pending.reduce((s,r)=>s+Number(r.amount),0);
     const technicianShareAll=approved.reduce((sum,row)=>sum+splitRevenueAmount(Number(row.amount),row.technician_percent).technicianShare,0);
@@ -3753,7 +3792,7 @@ const route = async (request) => {
     if(!order)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,order.id);
     const {rows}=await q(
-      "SELECT h.id,h.from_status,h.to_status,h.note,h.created_at,h.changed_by_user_id,usr.name AS changed_by_name,usr.email AS changed_by_email FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.created_at ASC,h.id ASC",
+      "SELECT h.id,h.from_status,h.to_status,h.note,h.created_at,h.changed_by_user_id,usr.name AS changed_by_name,usr.email AS changed_by_email,usr.role_code AS changed_by_role FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.created_at ASC,h.id ASC",
       [order.id]
     );
     return json(request,rows.map((row)=>({
@@ -3765,7 +3804,7 @@ const route = async (request) => {
       note:row.note||null,
       changedAt:row.created_at,
       changedByUserId:row.changed_by_user_id||null,
-      changedByName:row.changed_by_name||row.changed_by_email||'System'
+      changedByName:operationalIdentityName(row.changed_by_name,row.changed_by_email,row.changed_by_role)||'System'
     })));
   }
 
@@ -3780,7 +3819,7 @@ const route = async (request) => {
     if(method==='GET'){
       if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do notatek wewnętrznych zlecenia.'),{status:403});
       const {rows}=await q(
-        'SELECT n.id,n.body,n.created_at,n.author_user_id,usr.name AS author_name,usr.email AS author_email FROM service_order_notes n JOIN users usr ON usr.id=n.author_user_id WHERE n.service_order_id=$1 ORDER BY n.created_at DESC,n.id DESC',
+        'SELECT n.id,n.body,n.created_at,n.author_user_id,usr.name AS author_name,usr.email AS author_email,usr.role_code AS author_role FROM service_order_notes n JOIN users usr ON usr.id=n.author_user_id WHERE n.service_order_id=$1 ORDER BY n.created_at DESC,n.id DESC',
         [order.id]
       );
       return json(request,rows.map((row)=>({
@@ -3788,7 +3827,7 @@ const route = async (request) => {
         body:row.body,
         createdAt:row.created_at,
         authorUserId:row.author_user_id,
-        authorName:row.author_name||row.author_email
+        authorName:operationalIdentityName(row.author_name,row.author_email,row.author_role)
       })));
     }
 
@@ -3798,7 +3837,7 @@ const route = async (request) => {
     const id=makeId('not');
     await q('INSERT INTO service_order_notes(id,service_order_id,author_user_id,body) VALUES($1,$2,$3,$4)',[id,order.id,u.id,note]);
     await audit(session,'SERVICE_NOTE_ADDED','service_order',order.id,order.point_id,{length:note.length});
-    return json(request,{id,body:note,createdAt:nowIso(),authorUserId:u.id,authorName:u.name||u.email},201);
+    return json(request,{id,body:note,createdAt:nowIso(),authorUserId:u.id,authorName:operationalIdentityName(u.name,u.email,u.role_code)},201);
   }
 
 
@@ -3914,7 +3953,7 @@ const route = async (request) => {
     }
     await q("UPDATE service_order_invoices SET status='READY',ready_at=now() WHERE id=$1 AND status='UPLOADING'",[invoice.id]);
     await audit(session,'SERVICE_INVOICE_UPLOADED','service_order_invoice',invoice.id,invoice.point_id,{orderId:invoice.service_order_id,sizeBytes:remoteSize});
-    const row=(await q("SELECT i.*,s.order_number,u.name AS uploaded_by_name FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.id=$1",[invoice.id])).rows[0];
+    const row=(await q("SELECT i.*,s.order_number,u.name AS uploaded_by_name,u.email AS uploaded_by_email,u.role_code AS uploaded_by_role FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.id=$1",[invoice.id])).rows[0];
     return json(request,serviceInvoiceView(row));
   }
 
@@ -4388,27 +4427,27 @@ const route = async (request) => {
       where += " AND r.status=$" + params.length;
     }
     const rows=(await q(
-      "SELECT r.*,c.first_name,c.last_name,c.email,c.phone,rp.name AS requested_point_name,rrp.name AS routed_point_name,u.name AS technician_name,s.order_number FROM customer_quote_requests r JOIN customers c ON c.id=r.customer_id JOIN points rp ON rp.id=r.requested_point_id JOIN points rrp ON rrp.id=r.routed_point_id LEFT JOIN users u ON u.id=r.assigned_technician_id LEFT JOIN service_orders s ON s.id=r.service_order_id"+where+" ORDER BY CASE WHEN r.status='OPEN' THEN 0 WHEN r.status='QUOTED' THEN 1 ELSE 2 END,r.updated_at DESC LIMIT 150",
+      "SELECT r.*,c.first_name,c.last_name,c.email,c.phone,rp.name AS requested_point_name,rrp.name AS routed_point_name,u.name AS technician_name,u.email AS technician_email,u.role_code AS technician_role,s.order_number FROM customer_quote_requests r JOIN customers c ON c.id=r.customer_id JOIN points rp ON rp.id=r.requested_point_id JOIN points rrp ON rrp.id=r.routed_point_id LEFT JOIN users u ON u.id=r.assigned_technician_id LEFT JOIN service_orders s ON s.id=r.service_order_id"+where+" ORDER BY CASE WHEN r.status='OPEN' THEN 0 WHEN r.status='QUOTED' THEN 1 ELSE 2 END,r.updated_at DESC LIMIT 150",
       params
     )).rows;
     const ids=rows.map((row)=>row.id);
     let messages=[];
     if(ids.length){
       messages=(await q(
-        "SELECT m.id,m.request_id,m.sender_kind,m.body,m.created_at,u.name AS sender_name FROM customer_quote_messages m LEFT JOIN users u ON u.id=m.sender_user_id WHERE m.request_id=ANY($1::text[]) ORDER BY m.created_at ASC",
+        "SELECT m.id,m.request_id,m.sender_kind,m.body,m.created_at,u.name AS sender_name,u.email AS sender_email,u.role_code AS sender_role FROM customer_quote_messages m LEFT JOIN users u ON u.id=m.sender_user_id WHERE m.request_id=ANY($1::text[]) ORDER BY m.created_at ASC",
         [ids]
       )).rows;
     }
     const byRequest=new Map();
     for(const row of messages){
       const list=byRequest.get(row.request_id)||[];
-      list.push({id:row.id,senderKind:row.sender_kind,senderName:row.sender_name||null,body:row.body,createdAt:row.created_at});
+      list.push({id:row.id,senderKind:row.sender_kind,senderName:row.sender_kind==='STAFF'?operationalIdentityName(row.sender_name,row.sender_email,row.sender_role):(row.sender_name||null),body:row.body,createdAt:row.created_at});
       byRequest.set(row.request_id,list);
     }
     return json(request,rows.map((row)=>({
       id:row.id,customerId:row.customer_id,customerName:[row.first_name,row.last_name].filter(Boolean).join(' '),customerEmail:row.email||null,customerPhone:row.phone||null,
       requestedPointId:row.requested_point_id,requestedPointName:row.requested_point_name,routedPointId:row.routed_point_id,routedPointName:row.routed_point_name,
-      assignedTechnicianId:row.assigned_technician_id||null,assignedTechnicianName:row.technician_name||null,
+      assignedTechnicianId:isOwnerIdentity(row.technician_email,row.technician_role)?null:(row.assigned_technician_id||null),assignedTechnicianName:isOwnerIdentity(row.technician_email,row.technician_role)?null:(row.technician_name||null),
       serviceOrderId:row.service_order_id||null,orderNumber:row.order_number?Number(row.order_number):null,
       deviceDescription:row.device_description,issueDescription:row.issue_description,status:row.status,
       quoteAmount:row.quote_amount==null?null:Number(row.quote_amount),currency:row.currency||'PLN',quoteNote:row.quote_note||null,
@@ -4506,7 +4545,7 @@ const route = async (request) => {
       where += ' AND t.status=' + '$' + String(params.length);
     }
     const {rows}=await q(
-      "SELECT t.*,fp.name AS from_point_name,fp.city AS from_point_city,tp.name AS to_point_name,tp.city AS to_point_city,su.name AS sent_by_name,su.email AS sent_by_email,au.name AS accepted_by_name,au.email AS accepted_by_email,s.order_number,c.first_name,c.last_name,d.brand,d.model FROM service_order_transfers t JOIN points fp ON fp.id=t.from_point_id JOIN points tp ON tp.id=t.to_point_id JOIN users su ON su.id=t.sent_by_user_id LEFT JOIN users au ON au.id=t.accepted_by_user_id JOIN service_orders s ON s.id=t.service_order_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id" + where + " ORDER BY t.requested_at DESC LIMIT 150",
+      "SELECT t.*,fp.name AS from_point_name,fp.city AS from_point_city,tp.name AS to_point_name,tp.city AS to_point_city,su.name AS sent_by_name,su.email AS sent_by_email,su.role_code AS sent_by_role,au.name AS accepted_by_name,au.email AS accepted_by_email,au.role_code AS accepted_by_role,s.order_number,c.first_name,c.last_name,d.brand,d.model FROM service_order_transfers t JOIN points fp ON fp.id=t.from_point_id JOIN points tp ON tp.id=t.to_point_id JOIN users su ON su.id=t.sent_by_user_id LEFT JOIN users au ON au.id=t.accepted_by_user_id JOIN service_orders s ON s.id=t.service_order_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id" + where + " ORDER BY t.requested_at DESC LIMIT 150",
       params
     );
     return json(request,rows.map((row)=>({
@@ -4664,7 +4703,7 @@ const route = async (request) => {
         pointId,
         senderPointId:row.point_id,
         inherited,
-        email:row.sender_email,
+        email:operationalIdentityEmail(row.sender_email),
         status:row.status,
         lastError:'Połączenie Gmail jest niekompletne i wymaga ponownej autoryzacji.',
         connectedAt:row.connected_at,
@@ -4679,7 +4718,7 @@ const route = async (request) => {
         pointId,
         senderPointId:row.point_id,
         inherited,
-        email:row.sender_email,
+        email:operationalIdentityEmail(row.sender_email),
         status:row.status,
         lastError:row.last_error||'Zgoda Google dla Gmail wygasła albo została cofnięta.',
         connectedAt:row.connected_at,
@@ -4701,7 +4740,7 @@ const route = async (request) => {
         pointId,
         senderPointId:row.point_id,
         inherited,
-        email:row.sender_email,
+        email:operationalIdentityEmail(row.sender_email),
         status:'ACTIVE',
         lastError:null,
         connectedAt:row.connected_at,
@@ -4719,7 +4758,7 @@ const route = async (request) => {
           pointId,
         senderPointId:row.point_id,
         inherited,
-          email:row.sender_email,
+          email:operationalIdentityEmail(row.sender_email),
           status:'REVOKED',
           lastError:message,
           connectedAt:row.connected_at,
@@ -4733,7 +4772,7 @@ const route = async (request) => {
         pointId,
         senderPointId:row.point_id,
         inherited,
-        email:row.sender_email,
+        email:operationalIdentityEmail(row.sender_email),
         status:row.status,
         lastError:'Nie udało się teraz potwierdzić połączenia Gmail. ServiceOS spróbuje ponownie automatycznie.',
         connectedAt:row.connected_at,
@@ -4764,7 +4803,7 @@ const route = async (request) => {
     );
     const recovery=await recoverNoSenderNotifications(pointId);
     await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
-    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    return json(request,{connected:true,needsReconnect:false,pointId,email:operationalIdentityEmail(profile.email),status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
   }
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/connect'){
@@ -4784,7 +4823,7 @@ const route = async (request) => {
     const recovery=await recoverNoSenderNotifications(pointId);
 
     await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
-    return json(request,{connected:true,needsReconnect:false,pointId,email:profile.email,status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    return json(request,{connected:true,needsReconnect:false,pointId,email:operationalIdentityEmail(profile.email),status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
   }
 
   if(method==='DELETE'&&url.pathname==='/integrations/gmail'){
@@ -4960,15 +4999,15 @@ const route = async (request) => {
     const ids=await visiblePointIds(u);
     const global=u.role_code==='OWNER'||GLOBAL_ROLES.has(u.role_code);
     const sql=global
-      ? "SELECT usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,max(s.last_seen_at) AS last_seen_at,array_agg(DISTINCT s.client_type) AS client_types,sc.id AS conversation_id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name AS assigned_support_name,sc.updated_at AS conversation_updated_at FROM users usr JOIN auth_sessions s ON s.user_id=usr.id AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() LEFT JOIN LATERAL (SELECT x.* FROM support_conversations x WHERE x.user_id=usr.id AND x.status='OPEN' ORDER BY x.updated_at DESC LIMIT 1) sc ON true LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE usr.status='ACTIVE' AND usr.blocked_at IS NULL AND usr.id<>$1 AND s.last_seen_at>now()-interval '10 minutes' GROUP BY usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,sc.id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name,sc.updated_at ORDER BY max(s.last_seen_at) DESC"
-      : "SELECT usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,max(s.last_seen_at) AS last_seen_at,array_agg(DISTINCT s.client_type) AS client_types,sc.id AS conversation_id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name AS assigned_support_name,sc.updated_at AS conversation_updated_at FROM users usr JOIN auth_sessions s ON s.user_id=usr.id AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() LEFT JOIN LATERAL (SELECT x.* FROM support_conversations x WHERE x.user_id=usr.id AND x.status='OPEN' ORDER BY x.updated_at DESC LIMIT 1) sc ON true LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE usr.status='ACTIVE' AND usr.blocked_at IS NULL AND usr.id<>$1 AND s.last_seen_at>now()-interval '10 minutes' AND EXISTS(SELECT 1 FROM user_point_access target_access WHERE target_access.user_id=usr.id AND target_access.point_id=ANY($2::text[])) GROUP BY usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,sc.id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name,sc.updated_at ORDER BY max(s.last_seen_at) DESC";
+      ? "SELECT usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,max(s.last_seen_at) AS last_seen_at,array_agg(DISTINCT s.client_type) AS client_types,sc.id AS conversation_id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name AS assigned_support_name,ass.email AS assigned_support_email,ass.role_code AS assigned_support_role,sc.updated_at AS conversation_updated_at FROM users usr JOIN auth_sessions s ON s.user_id=usr.id AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() LEFT JOIN LATERAL (SELECT x.* FROM support_conversations x WHERE x.user_id=usr.id AND x.status='OPEN' ORDER BY x.updated_at DESC LIMIT 1) sc ON true LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE usr.status='ACTIVE' AND usr.blocked_at IS NULL AND usr.id<>$1 AND s.last_seen_at>now()-interval '10 minutes' GROUP BY usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,sc.id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name,ass.email,ass.role_code,sc.updated_at ORDER BY max(s.last_seen_at) DESC"
+      : "SELECT usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,max(s.last_seen_at) AS last_seen_at,array_agg(DISTINCT s.client_type) AS client_types,sc.id AS conversation_id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name AS assigned_support_name,ass.email AS assigned_support_email,ass.role_code AS assigned_support_role,sc.updated_at AS conversation_updated_at FROM users usr JOIN auth_sessions s ON s.user_id=usr.id AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() LEFT JOIN LATERAL (SELECT x.* FROM support_conversations x WHERE x.user_id=usr.id AND x.status='OPEN' ORDER BY x.updated_at DESC LIMIT 1) sc ON true LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE usr.status='ACTIVE' AND usr.blocked_at IS NULL AND usr.id<>$1 AND s.last_seen_at>now()-interval '10 minutes' AND (usr.role_code='OWNER' OR EXISTS(SELECT 1 FROM user_point_access target_access WHERE target_access.user_id=usr.id AND target_access.point_id=ANY($2::text[]))) GROUP BY usr.id,usr.name,usr.email,usr.role_code,usr.support_enabled,sc.id,sc.consultant_requested_at,sc.assigned_support_user_id,ass.name,ass.email,ass.role_code,sc.updated_at ORDER BY max(s.last_seen_at) DESC";
     const rows=global?(await q(sql,[u.id])).rows:(await q(sql,[u.id,ids])).rows;
     return json(request,rows.map(row=>({
-      userId:row.id,name:row.name,email:row.email,role:row.role_code||null,supportEnabled:row.support_enabled===true,
+      userId:row.id,name:supportIdentityName(row.name,row.email,row.role_code),email:supportIdentityEmail(row.email,row.role_code),role:row.role_code||null,supportEnabled:row.support_enabled===true,
       online:true,lastSeenAt:row.last_seen_at,clientTypes:row.client_types||[],
       conversationId:row.consultant_requested_at?row.conversation_id:null,
       consultantState:row.assigned_support_user_id?'JOINED':row.consultant_requested_at?'WAITING':'BOT',
-      assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_support_name||null,
+      assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_support_user_id?supportIdentityName(row.assigned_support_name,row.assigned_support_email,row.assigned_support_role):null,
       conversationUpdatedAt:row.consultant_requested_at?row.conversation_updated_at:null
     })));
   }
@@ -4978,12 +5017,12 @@ const route = async (request) => {
     requireSupportAccess(u);
     const ids=await visiblePointIds(u);
     const {rows}=GLOBAL_ROLES.has(u.role_code)
-      ? await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL AND sc.user_id<>$1 ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[u.id])
-      : await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL AND sc.point_id=ANY($1::text[]) AND sc.user_id<>$2 ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[ids,u.id]);
+      ? await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,usr.role_code AS user_role,p.name AS point_name,ass.name AS assigned_name,ass.email AS assigned_email,ass.role_code AS assigned_role FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL AND sc.user_id<>$1 ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[u.id])
+      : await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,usr.role_code AS user_role,p.name AS point_name,ass.name AS assigned_name,ass.email AS assigned_email,ass.role_code AS assigned_role FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL AND sc.point_id=ANY($1::text[]) AND sc.user_id<>$2 ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[ids,u.id]);
     const tickets=[];
     for(const row of rows){
       const messages=(await q("SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 AND (metadata->>'target'='CONSULTANT' OR sender_kind='SUPPORT' OR (sender_kind='USER' AND metadata->>'target' IS NULL AND $2::timestamptz IS NOT NULL AND created_at >= $2::timestamptz)) ORDER BY created_at ASC LIMIT 200",[row.id,row.consultant_joined_at||row.taken_at||null])).rows;
-      tickets.push({id:row.id,userId:row.user_id,userName:row.user_name,userEmail:row.user_email,pointId:row.point_id,pointName:row.point_name||'Brak punktu',status:row.status,assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_name||null,consultantRequestedAt:row.consultant_requested_at||null,consultantJoinedAt:row.consultant_joined_at||row.taken_at||null,createdAt:row.created_at,updatedAt:row.updated_at,messages:messages.map(supportMessageView)});
+      tickets.push({id:row.id,userId:row.user_id,userName:supportIdentityName(row.user_name,row.user_email,row.user_role),userEmail:supportIdentityEmail(row.user_email,row.user_role),pointId:row.point_id,pointName:row.point_name||'Brak punktu',status:row.status,assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_support_user_id?supportIdentityName(row.assigned_name,row.assigned_email,row.assigned_role):null,consultantRequestedAt:row.consultant_requested_at||null,consultantJoinedAt:row.consultant_joined_at||row.taken_at||null,createdAt:row.created_at,updatedAt:row.updated_at,messages:messages.map(supportMessageView)});
     }
     return json(request,tickets);
   }
@@ -5003,7 +5042,7 @@ const route = async (request) => {
       const firstJoin=!ticket.assigned_support_user_id;
       const claimed=(await q("UPDATE support_conversations SET assigned_support_user_id=$2,taken_at=COALESCE(taken_at,now()),consultant_joined_at=COALESCE(consultant_joined_at,now()),updated_at=now() WHERE id=$1 AND (assigned_support_user_id IS NULL OR assigned_support_user_id=$2) RETURNING id",[ticket.id,u.id])).rows[0];
       if(!claimed)return json(request,{error:'SUPPORT_ALREADY_ASSIGNED',message:'Ta rozmowa została właśnie przejęta przez innego konsultanta.'},409);
-      if(firstJoin)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SYSTEM',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,(u.name||u.email||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_JOINED'})]);
+      if(firstJoin)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SYSTEM',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,(supportIdentityName(u.name,u.email,u.role_code)||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_JOINED'})]);
       await audit(session,'SUPPORT_TAKEN','support_conversation',ticket.id,ticket.point_id,{firstJoin});
     }else if(action==='reply'){
       const message=cleanText(body.message,2000);if(!message)return json(request,{error:'MESSAGE_REQUIRED'},400);
@@ -5013,7 +5052,7 @@ const route = async (request) => {
       const firstJoin=!ticket.assigned_support_user_id;
       const claimed=(await q("UPDATE support_conversations SET assigned_support_user_id=COALESCE(assigned_support_user_id,$2),taken_at=COALESCE(taken_at,now()),consultant_joined_at=COALESCE(consultant_joined_at,now()),updated_at=now() WHERE id=$1 AND (assigned_support_user_id IS NULL OR assigned_support_user_id=$2) RETURNING id",[ticket.id,u.id])).rows[0];
       if(!claimed)return json(request,{error:'SUPPORT_ALREADY_ASSIGNED',message:'Ta rozmowa została właśnie przejęta przez innego konsultanta.'},409);
-      if(firstJoin)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SYSTEM',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,(u.name||u.email||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_JOINED'})]);
+      if(firstJoin)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SYSTEM',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,(supportIdentityName(u.name,u.email,u.role_code)||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_JOINED'})]);
       await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SUPPORT',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,message,JSON.stringify({target:'CONSULTANT'})]);
       await audit(session,'SUPPORT_REPLIED','support_conversation',ticket.id,ticket.point_id,{length:message.length,firstJoin});
     }else{

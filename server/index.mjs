@@ -25,7 +25,7 @@ loadLocalEnv();
 const PORT = Number(process.env.LOCKON_API_PORT || 8787);
 const HOST = process.env.LOCKON_API_HOST || '127.0.0.1';
 const DATA_FILE = process.env.LOCKON_DATA_FILE || path.join(process.cwd(), 'server', 'data', 'database.json');
-const OWNER_EMAIL = (process.env.LOCKON_OWNER_EMAIL || 'nowogar@gmail.com').trim().toLowerCase();
+const OWNER_EMAIL = (process.env.LOCKON_OWNER_EMAIL || '').trim().toLowerCase();
 const GOOGLE_CLIENT_ID = (process.env.LOCKON_GOOGLE_CLIENT_ID || '996585439932-e10mu53j95s6u13vrua841tm4oco38so.apps.googleusercontent.com').trim();
 const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
@@ -46,7 +46,17 @@ const FINANCE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'
 
 const nowIso = () => new Date().toISOString();
 const id = (prefix) => `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
-const normalizeEmail = (value = '') => value.trim().toLowerCase();
+const normalizeEmail = (value = '') => String(value).trim().toLowerCase();
+const OWNER_OPERATIONAL_NAME = 'System LockOn';
+const OWNER_SUPPORT_NAME = 'Właściciel aplikacji';
+const isOwnerIdentity = (user) => Boolean(user) && (
+  user.role === 'OWNER' ||
+  (Boolean(OWNER_EMAIL) && normalizeEmail(user.email) === OWNER_EMAIL)
+);
+const operationalIdentityName = (user) => isOwnerIdentity(user) ? OWNER_OPERATIONAL_NAME : (user?.name || user?.email || null);
+const operationalIdentityEmail = (user) => isOwnerIdentity(user) ? null : (user?.email || null);
+const supportIdentityName = (user) => isOwnerIdentity(user) ? OWNER_SUPPORT_NAME : (user?.name || user?.email || null);
+const supportIdentityEmail = (user) => isOwnerIdentity(user) ? null : (user?.email || null);
 const cleanText = (value, max = 240) => String(value ?? '').trim().slice(0, max);
 const normalizeTechnicianPercent = (value) => {
   if (value === null || value === undefined || value === '') return null;
@@ -158,7 +168,7 @@ const saveDb = () => {
 
 const localAudit = (actor, action, entityType, entityId = null, pointId = null, metadata = {}) => {
   db.auditLog.unshift({
-    id:id('aud'), actorUserId:actor?.id || null, actorName:actor?.name || actor?.email || 'System',
+    id:id('aud'), actorUserId:actor?.id || null, actorName:operationalIdentityName(actor) || 'System',
     actorRole:actor?.role || null, action, entityType, entityId, pointId,
     metadata:{...metadata,clientType:metadata.clientType || 'DESKTOP'}, createdAt:nowIso()
   });
@@ -170,9 +180,9 @@ const pointSummary = (point) => ({ id: point.id, name: point.name, city: point.c
 
 const publicUser = (user) => ({
   id: user.id,
-  email: user.email,
-  name: user.name,
-  picture: user.picture,
+  email: operationalIdentityEmail(user),
+  name: operationalIdentityName(user),
+  picture: isOwnerIdentity(user) ? null : user.picture,
   role: user.role ?? null,
   technicianSplitPercent: user.technicianSplitPercent ?? null,
   supportEnabled: user.supportEnabled === true || user.role === 'SUPPORT' || user.role === 'OWNER',
@@ -203,13 +213,14 @@ const findUserById = (userId) => db.users.find((u) => u.id === userId);
 const sessionTokenHash = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
 const ensureOwner = (profile = {}) => {
+  if (!OWNER_EMAIL) return null;
   let owner = findUserByEmail(OWNER_EMAIL);
   if (!owner) {
     owner = {
       id: id('usr'),
       googleSub: profile.sub || null,
       email: OWNER_EMAIL,
-      name: profile.name || 'Bartłomiej Motłoch',
+      name: profile.name || OWNER_OPERATIONAL_NAME,
       picture: profile.picture || null,
       role: 'OWNER',
       supportEnabled: true,
@@ -235,7 +246,7 @@ const ensureOwner = (profile = {}) => {
   return owner;
 };
 
-ensureOwner();
+if (OWNER_EMAIL) ensureOwner();
 saveDb();
 
 const json = (res, status, body) => {
@@ -376,8 +387,8 @@ const recordLogin = (user) => {
   db.loginEvents.unshift({
     id: id('log'),
     userId: user.id,
-    email: user.email,
-    name: user.name,
+    email: operationalIdentityEmail(user),
+    name: operationalIdentityName(user),
     role: user.role ?? null,
     status: user.status,
     pointIds: user.pointIds || [],
@@ -407,7 +418,7 @@ const loginProfile = (profile) => {
   let user = findUserByGoogleSub(profile.sub) || findUserByEmail(profile.email);
   const timestamp = nowIso();
 
-  if (normalizeEmail(profile.email) === OWNER_EMAIL) {
+  if (OWNER_EMAIL && normalizeEmail(profile.email) === OWNER_EMAIL) {
     user = ensureOwner(profile);
   } else if (!user) {
     user = {
@@ -471,8 +482,9 @@ const localOrderView = (order) => {
     imei: device?.imei || null,
     serialNumber: device?.serialNumber || null,
     deviceNotes: device?.notes || null,
-    assignedTechnicianName: technician?.name || null,
-    assignedTechnicianEmail: technician?.email || null,
+    assignedTechnicianId: isOwnerIdentity(technician) ? null : (order.assignedTechnicianId || null),
+    assignedTechnicianName: isOwnerIdentity(technician) ? null : (technician?.name || null),
+    assignedTechnicianEmail: isOwnerIdentity(technician) ? null : (technician?.email || null),
     statusLabel: LOCAL_STATUS_LABELS[order.status] || order.status,
     currency: order.currency || 'PLN'
   };
@@ -505,7 +517,7 @@ const revenueView = (entry) => {
     splitBossPercent: split.bossPercent,
     technicianShare: approved ? split.technicianShare : 0,
     bossShare: approved ? split.bossShare : 0,
-    technician: technician ? { id: technician.id, name: technician.name, email: technician.email } : null,
+    technician: technician ? { id: technician.id, name: operationalIdentityName(technician), email: operationalIdentityEmail(technician) } : null,
     point: point ? pointSummary(point) : null
   };
 };
@@ -531,7 +543,8 @@ const handle = async (req, res) => {
 
   if (method === 'POST' && url.pathname === '/auth/dev-owner') {
     if (!ALLOW_DEV_LOGIN) return json(res, 404, { error: 'NOT_FOUND' });
-    const result = loginProfile({ email: OWNER_EMAIL, name: 'Bartłomiej Motłoch', sub: 'dev-owner', picture: null });
+    if (!OWNER_EMAIL) return json(res,503,{error:'OWNER_EMAIL_NOT_CONFIGURED'});
+    const result = loginProfile({ email: OWNER_EMAIL, name: OWNER_OPERATIONAL_NAME, sub: 'dev-owner', picture: null });
     return json(res, 200, result);
   }
 
@@ -573,9 +586,14 @@ const handle = async (req, res) => {
   if (method === 'GET' && url.pathname === '/admin/overview') {
     const owner = requireRole(req, res, ['OWNER']);
     if (!owner) return;
-    const pendingUsers = db.users.filter((u) => u.status === 'PENDING').map(publicUser);
-    const users = db.users.map(publicUser);
-    const logins = db.loginEvents.slice(0, 100);
+    const employeeUsers = db.users.filter((u) => !isOwnerIdentity(u));
+    const pendingUsers = employeeUsers.filter((u) => u.status === 'PENDING').map(publicUser);
+    const users = employeeUsers.map(publicUser);
+    const logins = db.loginEvents.slice(0, 100).map((event)=>({
+      ...event,
+      email:event.role==='OWNER'?null:event.email,
+      name:event.role==='OWNER'?OWNER_OPERATIONAL_NAME:event.name
+    }));
     const pendingRevenue = db.revenueEntries.filter((r) => r.status === 'PENDING').map(revenueView);
     const activeSessions=db.sessions.filter((session)=>Number(session.expiresAt)>Date.now()&&Number(session.absoluteExpiresAt||session.expiresAt)>Date.now()).length;
     return json(res, 200, {
@@ -609,6 +627,7 @@ const handle = async (req, res) => {
       return true;
     }).slice(0,300).map((event) => ({
       ...event,
+      actorName:event.actorRole==='OWNER'?OWNER_OPERATIONAL_NAME:event.actorName,
       actorEmail:null, pointName:db.points.find((point)=>point.id===event.pointId)?.name || null,
       before:event.metadata?.before ?? event.metadata?.from ?? null,
       after:event.metadata?.after ?? event.metadata?.to ?? null,
@@ -1167,7 +1186,7 @@ const handle = async (req, res) => {
           note: item.note || null,
           changedAt: item.createdAt,
           changedByUserId: item.changedByUserId || null,
-          changedByName: changedBy?.name || changedBy?.email || 'System'
+          changedByName: operationalIdentityName(changedBy) || 'System'
         };
       });
     return json(res, 200, history);
@@ -1194,7 +1213,7 @@ const handle = async (req, res) => {
             body: item.body,
             createdAt: item.createdAt,
             authorUserId: item.authorUserId,
-            authorName: author?.name || author?.email || 'Użytkownik'
+            authorName: operationalIdentityName(author) || 'Użytkownik'
           };
         });
       return json(res, 200, notes);
@@ -1207,7 +1226,7 @@ const handle = async (req, res) => {
     const created = { id: id('not'), serviceOrderId: order.id, authorUserId: user.id, body: note, createdAt: nowIso() };
     db.serviceOrderNotes.push(created);
     saveDb();
-    return json(res, 201, { ...created, authorName: user.name || user.email });
+    return json(res, 201, { ...created, authorName: operationalIdentityName(user) });
   }
 
   const localDetailsMatch = url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
@@ -1449,7 +1468,7 @@ const handle = async (req, res) => {
     consultantRequestedAt:conversation.consultantRequestedAt || null,
     consultantJoinedAt:conversation.consultantJoinedAt || conversation.takenAt || null,
     assignedSupportUserId:conversation.assignedSupportUserId || null,
-    assignedSupportName:conversation.assignedSupportUserId ? (findUserById(conversation.assignedSupportUserId)?.name || null) : null,
+    assignedSupportName:conversation.assignedSupportUserId ? supportIdentityName(findUserById(conversation.assignedSupportUserId)) : null,
     consultantState:conversation.assignedSupportUserId ? 'JOINED' : conversation.consultantRequestedAt ? 'WAITING' : 'BOT',
     messages:db.supportMessages
       .filter((item)=>item.conversationId===conversation.id)
@@ -1536,17 +1555,17 @@ const handle = async (req, res) => {
     }
     const rows=db.users.filter((candidate)=>{
       if(candidate.id===support.id||candidate.status!=='ACTIVE'||candidate.blockedAt||!latestSessionByUser.has(candidate.id))return false;
-      return global||(candidate.pointIds||[]).some((pointId)=>visiblePoints.has(pointId));
+      return global||candidate.role==='OWNER'||(candidate.pointIds||[]).some((pointId)=>visiblePoints.has(pointId));
     }).map((candidate)=>{
       const conversation=db.supportConversations.filter((item)=>item.userId===candidate.id&&item.status==='OPEN').sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt)))[0]||null;
       const session=latestSessionByUser.get(candidate.id);
       return {
-        userId:candidate.id,name:candidate.name,email:candidate.email,role:candidate.role||null,supportEnabled:candidate.supportEnabled===true,
+        userId:candidate.id,name:supportIdentityName(candidate),email:supportIdentityEmail(candidate),role:candidate.role||null,supportEnabled:candidate.supportEnabled===true,
         online:true,lastSeenAt:new Date(Number(session.lastSeenAt||Date.now())).toISOString(),clientTypes:['DESKTOP'],
         conversationId:conversation?.consultantRequestedAt?conversation.id:null,
         consultantState:conversation?.assignedSupportUserId?'JOINED':conversation?.consultantRequestedAt?'WAITING':'BOT',
         assignedSupportUserId:conversation?.assignedSupportUserId||null,
-        assignedSupportName:conversation?.assignedSupportUserId?(findUserById(conversation.assignedSupportUserId)?.name||null):null,
+        assignedSupportName:conversation?.assignedSupportUserId?supportIdentityName(findUserById(conversation.assignedSupportUserId)):null,
         conversationUpdatedAt:conversation?.consultantRequestedAt?conversation.updatedAt:null
       };
     });
@@ -1564,10 +1583,10 @@ const handle = async (req, res) => {
         const owner=findUserById(conversation.userId);
         const point=db.points.find((item)=>item.id===conversation.pointId);
         return {
-          id:conversation.id,userId:conversation.userId,userName:owner?.name||'Użytkownik',userEmail:owner?.email||'',
+          id:conversation.id,userId:conversation.userId,userName:supportIdentityName(owner)||'Użytkownik',userEmail:supportIdentityEmail(owner),
           pointId:conversation.pointId||null,pointName:point?.name||'Brak punktu',status:conversation.status,
           assignedSupportUserId:conversation.assignedSupportUserId||null,
-          assignedSupportName:conversation.assignedSupportUserId?(findUserById(conversation.assignedSupportUserId)?.name||null):null,
+          assignedSupportName:conversation.assignedSupportUserId?supportIdentityName(findUserById(conversation.assignedSupportUserId)):null,
           consultantRequestedAt:conversation.consultantRequestedAt||null,consultantJoinedAt:conversation.consultantJoinedAt||conversation.takenAt||null,
           createdAt:conversation.createdAt,updatedAt:conversation.updatedAt,
           messages:db.supportMessages
@@ -1601,7 +1620,7 @@ const handle = async (req, res) => {
       conversation.consultantJoinedAt=conversation.consultantJoinedAt||nowIso();
       if(firstJoin)db.supportMessages.push({
         id:id('msg'),conversationId:conversation.id,author:'system',
-        text:(support.name||support.email||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',
+        text:(supportIdentityName(support)||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',
         target:'CONSULTANT',event:'CONSULTANT_JOINED',createdAt:nowIso()
       });
       localAudit(support,'SUPPORT_TAKEN','support_conversation',conversation.id,conversation.pointId,{firstJoin});
@@ -1616,7 +1635,7 @@ const handle = async (req, res) => {
         conversation.consultantJoinedAt=conversation.consultantJoinedAt||nowIso();
         db.supportMessages.push({
           id:id('msg'),conversationId:conversation.id,author:'system',
-          text:(support.name||support.email||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',
+          text:(supportIdentityName(support)||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',
           target:'CONSULTANT',event:'CONSULTANT_JOINED',createdAt:nowIso()
         });
       }
@@ -1816,8 +1835,8 @@ const handle = async (req, res) => {
     const visibleEntries = db.revenueEntries.filter((entry) => revenueVisibleTo(user, entry));
     const visiblePointIds = GLOBAL_ROLES.has(user.role) ? db.points.map((p) => p.id) : user.pointIds || [];
     const visibleUsers = GLOBAL_ROLES.has(user.role)
-      ? db.users.filter((u) => u.status === 'ACTIVE')
-      : db.users.filter((u) => u.status === 'ACTIVE' && (u.pointIds || []).some((pid) => visiblePointIds.includes(pid)));
+      ? db.users.filter((u) => u.status === 'ACTIVE' && !isOwnerIdentity(u))
+      : db.users.filter((u) => u.status === 'ACTIVE' && !isOwnerIdentity(u) && (u.pointIds || []).some((pid) => visiblePointIds.includes(pid)));
     const approved = visibleEntries.filter((r) => r.status === 'APPROVED');
     const pending = visibleEntries.filter((r) => r.status === 'PENDING');
     const ownApproved = approved.filter((r) => r.userId === user.id);

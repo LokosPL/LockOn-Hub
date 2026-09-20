@@ -177,6 +177,7 @@ jobs:
           node - <<'NODE'
           const d=require('./me.json');
           if(d.user?.role!=='OWNER') throw new Error('Temp dev login did not return OWNER');
+          if(d.user?.name!=='System LockOn' || d.user?.email!==null || d.user?.picture!==null) throw new Error('OWNER private identity leaked from /me');
           if(!Array.isArray(d.points) || d.points.length<2) throw new Error('Temp owner needs at least two active points for logistics smoke');
           if(!d.activePointId || !d.points.some((p)=>p.id===d.activePointId)) throw new Error('Temp session has no server-bound active point');
           NODE
@@ -284,6 +285,42 @@ jobs:
           NODE
 
           order_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.id)")"
+          owner_id="$(node -e "const d=require('./me.json');process.stdout.write(d.user.id)")"
+
+          note_marker="OWNER-NOTE-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          api POST "/service/orders/$order_id/notes" "$(node -e "process.stdout.write(JSON.stringify({body:process.argv[1]}))" "$note_marker")" > owner-note-create.json
+          node - <<'NODE' "$owner_id" "$note_marker"
+          const d=require('./owner-note-create.json');
+          const [ownerId,marker]=process.argv.slice(2);
+          if(d.authorUserId!==ownerId || d.authorName!=='System LockOn' || d.body!==marker) throw new Error('OWNER note create response leaked identity');
+          NODE
+
+          api GET "/service/orders/$order_id/notes" > owner-notes.json
+          node - <<'NODE' "$owner_id" "$note_marker"
+          const notes=require('./owner-notes.json');
+          const [ownerId,marker]=process.argv.slice(2);
+          const note=notes.find(x=>x.authorUserId===ownerId&&x.body===marker);
+          if(!note || note.authorName!=='System LockOn') throw new Error('OWNER note history is not anonymized');
+          NODE
+
+          api GET "/service/orders/$order_id/history" > owner-history.json
+          node - <<'NODE' "$owner_id"
+          const history=require('./owner-history.json'), ownerId=process.argv[2];
+          const own=history.filter(x=>x.changedByUserId===ownerId);
+          if(!own.length) throw new Error('OWNER status history fixture missing');
+          if(own.some(x=>x.changedByName!=='System LockOn')) throw new Error('OWNER status history leaked identity');
+          NODE
+
+          api GET "/service/technicians?pointId=$OTHER_POINT" > owner-technicians.json
+          node - <<'NODE' "$owner_id" "$OTHER_POINT"
+          const technicians=require('./owner-technicians.json'), me=require('./me.json');
+          const [ownerId,pointId]=process.argv.slice(2);
+          if(technicians.some(x=>x.id===ownerId)) throw new Error('OWNER appeared in technician selector');
+          const point=me.points.find(x=>x.id===pointId);
+          if(!point) throw new Error('Point missing from owner profile');
+          if(Number(point.activeTechnicianCount)!==technicians.length) throw new Error('OWNER or non-technician affects active technician count');
+          NODE
+
           api POST "/service/orders/$order_id/service-card" '{"printMode":"PHYSICAL_AND_ONLINE"}' > card.json
           node - <<'NODE'
           const fs=require('fs');
@@ -336,6 +373,19 @@ jobs:
           NODE
 
           api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
+
+          api GET /service/orders > owner-orders-after-transfer.json
+          node - <<'NODE' "$owner_id" "$order_id"
+          const orders=require('./owner-orders-after-transfer.json');
+          const [ownerId,orderId]=process.argv.slice(2);
+          const order=orders.find(x=>x.id===orderId);
+          if(!order) throw new Error('OWNER transfer regression order missing');
+          const transfers=order.transfers||[];
+          const sent=transfers.filter(x=>x.sentByUserId===ownerId);
+          const accepted=transfers.filter(x=>x.acceptedByUserId===ownerId);
+          if(!sent.length || !accepted.length) throw new Error('OWNER transfer actor fixtures missing');
+          if(sent.some(x=>x.sentByName!=='System LockOn') || accepted.some(x=>x.acceptedByName!=='System LockOn')) throw new Error('OWNER transfer identity leaked');
+          NODE
 
 
       - name: Temp complaint flow E2E
@@ -451,10 +501,22 @@ jobs:
           curl --silent --show-error --fail-with-body             --request PUT "$upload_url"             --header "content-type: application/pdf"             --header "x-amz-meta-sha256: $sha256"             --data-binary @service-card.pdf > /dev/null
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/invoices/$invoice_id/complete"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data '{}' > invoice-complete.json
-          node -e "const d=require('./invoice-complete.json');if(d.id!==process.argv[1]||!d.readyAt)throw new Error('Invoice did not become READY')" "$invoice_id"
+          owner_id="$(node -e "const d=require('./me.json');process.stdout.write(d.user.id)")"
+          node - <<'NODE' "$invoice_id" "$owner_id"
+          const d=require('./invoice-complete.json');
+          const [invoiceId,ownerId]=process.argv.slice(2);
+          if(d.id!==invoiceId||!d.readyAt) throw new Error('Invoice did not become READY');
+          if(d.uploadedByUserId!==ownerId || d.uploadedByName!=='System LockOn') throw new Error('OWNER invoice uploader identity leaked');
+          NODE
 
           curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/invoices?month=$period"             --header "Authorization: Bearer $owner_token" > invoices-list.json
-          node -e "const d=require('./invoices-list.json');if(!d.invoices?.some(x=>x.id===process.argv[1]))throw new Error('Ready invoice missing from warehouse')" "$invoice_id"
+          node - <<'NODE' "$invoice_id" "$owner_id"
+          const d=require('./invoices-list.json');
+          const [invoiceId,ownerId]=process.argv.slice(2);
+          const invoice=d.invoices?.find(x=>x.id===invoiceId);
+          if(!invoice) throw new Error('Ready invoice missing from warehouse');
+          if(invoice.uploadedByUserId!==ownerId || invoice.uploadedByName!=='System LockOn') throw new Error('OWNER invoice list identity leaked');
+          NODE
 
           for role_token in "$user_token" "$support_token"; do
             denied="$(curl --silent --show-error --output invoice-denied.json --write-out '%{http_code}'               --request POST "$TEMP_API_URL/service/invoices/$invoice_id/download-intent"               --header "Authorization: Bearer $role_token"               --header "Content-Type: application/json"               --data '{}')"
@@ -547,3 +609,59 @@ jobs:
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data '{}' > hotline-leave.json
           node -e "const d=require('./hotline-leave.json');if(d.consultantState!=='BOT')throw new Error('Bot did not remain after consultant channel closed')"
+
+
+      - name: Temp OWNER hotline identity regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner_token="$(node -e "const d=require('./role-OWNER.json');process.stdout.write(d.token)")"
+          owner_id="$(node -e "const d=require('./role-OWNER.json');process.stdout.write(d.user.id)")"
+          support_token="$(node -e "const d=require('./role-SUPPORT.json');process.stdout.write(d.token)")"
+          boss_token="$(node -e "const d=require('./role-BOSS.json');process.stdout.write(d.token)")"
+          boss_id="$(node -e "const d=require('./role-BOSS.json');process.stdout.write(d.user.id)")"
+          point_id="$(node -e "const d=require('./role-SUPPORT.json');process.stdout.write(d.activePointId||d.points?.[0]?.id||'')")"
+          [ -n "$point_id" ]
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/presence"             --header "Authorization: Bearer $support_token" > owner-presence.json
+          node - <<'NODE' "$owner_id"
+          const rows=require('./owner-presence.json'), ownerId=process.argv[2];
+          const owner=rows.find(x=>x.userId===ownerId);
+          if(!owner) throw new Error('OWNER missing from hotline presence regression');
+          if(owner.name!=='Właściciel aplikacji' || owner.email!==null || owner.role!=='OWNER') throw new Error('OWNER hotline presence identity is not protected');
+          NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data '{}' > owner-hotline-reset.json
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/request"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1],message:'OWNER privacy regression'}))" "$point_id")" > owner-hotline-request.json
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/tickets"             --header "Authorization: Bearer $support_token" > owner-hotline-tickets-before.json
+          node - <<'NODE' "$boss_id" > owner-hotline-ticket-id.txt
+          const tickets=require('./owner-hotline-tickets-before.json'), bossId=process.argv[2];
+          const ticket=tickets.find(x=>x.userId===bossId);
+          if(!ticket) throw new Error('OWNER hotline regression ticket missing');
+          process.stdout.write(ticket.id);
+          NODE
+          ticket_id="$(cat owner-hotline-ticket-id.txt)"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/tickets/$ticket_id/take"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data '{}' > owner-hotline-take.json
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/conversation"             --header "Authorization: Bearer $boss_token" > owner-hotline-conversation.json
+          node - <<'NODE' "$owner_id"
+          const d=require('./owner-hotline-conversation.json'), ownerId=process.argv[2];
+          if(d.assignedSupportUserId!==ownerId || d.assignedSupportName!=='Właściciel aplikacji') throw new Error('OWNER consultant label is invalid');
+          const joined=(d.messages||[]).find(m=>String(m.text||'').includes('Właściciel aplikacji')&&String(m.text||'').includes('dołączył do rozmowy'));
+          if(!joined) throw new Error('OWNER join system message is not anonymized');
+          if(JSON.stringify(d).includes('System LockOn')) throw new Error('Operational OWNER alias leaked into Help instead of hotline label');
+          NODE
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/tickets"             --header "Authorization: Bearer $support_token" > owner-hotline-tickets-after.json
+          node - <<'NODE' "$ticket_id" "$owner_id"
+          const tickets=require('./owner-hotline-tickets-after.json');
+          const [ticketId,ownerId]=process.argv.slice(2);
+          const ticket=tickets.find(x=>x.id===ticketId);
+          if(!ticket) throw new Error('OWNER-assigned hotline ticket missing');
+          if(ticket.assignedSupportUserId!==ownerId || ticket.assignedSupportName!=='Właściciel aplikacji') throw new Error('OWNER ticket assignment leaked identity');
+          NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data '{}' > owner-hotline-cleanup.json
