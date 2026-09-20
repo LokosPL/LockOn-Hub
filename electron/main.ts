@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   screen,
@@ -9,6 +10,7 @@ import {
 } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import net from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -414,11 +416,67 @@ const secureHandle = (channel: string, listener: SecureHandler) => {
   });
 };
 
-const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf' | 'sup' | 'cqr') => {
+const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf' | 'sup' | 'cqr' | 'inv' | 'tnn') => {
   const text = String(value ?? '');
   const pattern = new RegExp('^' + prefix + '_[a-f0-9]{20}' + '$');
   if (!pattern.test(text)) throw new Error('Nieprawidłowy identyfikator.');
   return text;
+};
+
+const INVOICE_PDF_MAX_BYTES = 20 * 1024 * 1024;
+
+const safeDownloadFileName = (value: unknown) => {
+  const base = String(value ?? 'faktura.pdf')
+    .trim()
+    .replace(/[\\/\0-\x1f<>:"|?*]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .slice(0, 180) || 'faktura.pdf';
+  return /\.pdf$/i.test(base) ? base : base + '.pdf';
+};
+
+const uniqueDownloadPath = (directory: string, fileName: string) => {
+  const safe = safeDownloadFileName(fileName);
+  const ext = path.extname(safe);
+  const stem = safe.slice(0, safe.length - ext.length);
+  let candidate = path.join(directory, safe);
+  for (let index = 2; fs.existsSync(candidate) && index < 1000; index += 1) {
+    candidate = path.join(directory, stem + ' (' + index + ')' + ext);
+  }
+  return candidate;
+};
+
+const sha256File = async (filePath: string) => {
+  const hash = createHash('sha256');
+  const stream = fs.createReadStream(filePath);
+  for await (const chunk of stream) hash.update(chunk as Buffer);
+  return hash.digest('hex');
+};
+
+const assertPdfFile = async (filePath: string) => {
+  const stat = await fs.promises.stat(filePath);
+  if (!stat.isFile() || stat.size <= 0) throw new Error('Wybrany plik jest pusty.');
+  if (stat.size > INVOICE_PDF_MAX_BYTES) throw new Error('Faktura PDF może mieć maksymalnie 20 MB.');
+  const handle = await fs.promises.open(filePath, 'r');
+  try {
+    const prefix = Buffer.alloc(5);
+    await handle.read(prefix, 0, 5, 0);
+    if (prefix.toString('ascii') !== '%PDF-') throw new Error('Wybrany plik nie jest prawidłowym dokumentem PDF.');
+  } finally {
+    await handle.close();
+  }
+  return stat;
+};
+
+const fetchPdfToFile = async (url: string, destination: string) => {
+  const response = await fetch(url, { cache:'no-store', redirect:'error', signal:AbortSignal.timeout(60_000) });
+  if (!response.ok) throw new Error('Pobranie faktury nie powiodło się (HTTP ' + response.status + ').');
+  const type = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (type && type !== 'application/pdf' && type !== 'application/octet-stream') throw new Error('Serwer zwrócił nieprawidłowy typ pliku.');
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length <= 0 || bytes.length > INVOICE_PDF_MAX_BYTES || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw new Error('Pobrany dokument nie jest prawidłowym PDF.');
+  }
+  await fs.promises.writeFile(destination, bytes, { flag:'wx' });
 };
 
 const measureFetch = async (url: string, init: RequestInit = {}, timeoutMs = 15_000) => {
