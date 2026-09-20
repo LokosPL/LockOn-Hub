@@ -33,6 +33,8 @@ const scales: Array<{ id: UiScale; name: string; description: string }> = [
 export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleChange }: SettingsPageProps) {
   const actualRole = auth.role as UserRole;
   const [preferences, setPreferences] = useState(loadUiPreferences);
+  const [scaleBusy, setScaleBusy] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
 
   const changeTheme = (theme: UiTheme) => {
     applyTheme(theme);
@@ -40,8 +42,17 @@ export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleCh
   };
 
   const changeScale = async (scale: UiScale) => {
-    await applyScale(scale);
-    setPreferences((current) => ({ ...current, scale }));
+    if (scaleBusy) return;
+    setScaleBusy(true);
+    setSettingsError('');
+    try {
+      await applyScale(scale);
+      setPreferences((current) => ({ ...current, scale }));
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : 'Nie udało się zmienić skali interfejsu.');
+    } finally {
+      setScaleBusy(false);
+    }
   };
 
   return (
@@ -95,12 +106,14 @@ export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleCh
           </div>
         </div>
 
+        {settingsError && <div className="settings-action-error" role="alert">{settingsError}</div>}
         <div className="scale-choice-grid">
           {scales.map((scale) => (
             <button
               type="button"
               key={scale.id}
               className={'scale-choice ' + (preferences.scale === scale.id ? 'selected' : '')}
+              disabled={scaleBusy}
               onClick={() => void changeScale(scale.id)}
             >
               <strong>{scale.name}</strong>
