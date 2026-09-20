@@ -156,7 +156,6 @@ jobs:
           fi
 
       - name: Temp health, CORS and authenticated smoke
-        if: steps.neon_credential.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
