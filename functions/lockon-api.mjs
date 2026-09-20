@@ -1090,9 +1090,15 @@ const routeCustomerQuote = async (requestedPointId) => {
   return { routedPointId: destination.to_point_id, technicianId: tech?.id || null, routingReason: 'MOST_USED_TRANSFER_DESTINATION' };
 };
 
-const loadCustomerPortalPayload = async (customerId) => {
+const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
   const customer = (await q("SELECT id,first_name,last_name,email,phone,created_at FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
-  const portalIdentity = customer ? await ensureCustomerPortalCode(customerId) : null;
+  if (!customer) throw Object.assign(new Error('Nie znaleziono klienta.'),{status:404});
+  const [portalIdentity, account] = await Promise.all([
+    ensureCustomerPortalCode(customerId),
+    customerPortalAccount(customerId)
+  ]);
+  const authMethod = portalSession?.auth_method === 'GOOGLE' ? 'GOOGLE' : 'CODE';
+  const fullAccess = authMethod === 'GOOGLE' && Boolean(account?.google_sub);
   const [ordersResult,quotesResult,pointsResult] = await Promise.all([
     q(
       "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_completion_at,s.estimated_cost,s.final_cost,s.currency,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,d.imei,d.serial_number,p.id AS point_id,p.name AS point_name,hp.id AS home_point_id,hp.name AS home_point_name,cp.id AS current_point_id,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.customer_id=$1 ORDER BY s.received_at DESC,s.order_number DESC",
@@ -1123,6 +1129,24 @@ const loadCustomerPortalPayload = async (customerId) => {
   return {
     customerPortalCode:portalIdentity?.code || null,
     customerPortalUrl:PUBLIC_PORTAL_URL + '/klient.html',
+    access:{
+      mode:fullAccess?'FULL':'VIEW_ONLY',
+      authMethod,
+      canWrite:fullAccess,
+      googleLinked:Boolean(account?.google_sub)
+    },
+    account:{
+      googleLinked:Boolean(account?.google_sub),
+      googleEmail:account?.google_email||null,
+      googleName:account?.google_name||null,
+      googlePicture:account?.google_picture_url||null,
+      notificationPreferences:{
+        serviceUpdates:account?.notify_service_updates !== false,
+        readyForPickup:account?.notify_ready_for_pickup !== false,
+        quoteUpdates:account?.notify_quote_updates !== false,
+        messages:account?.notify_messages !== false
+      }
+    },
     customer:{id:customer.id,firstName:customer.first_name,lastName:customer.last_name,email:customer.email||null,phone:customer.phone||null,customerSince:customer.created_at},
     orders:ordersResult.rows.map((row)=>({
       id:row.id,orderNumber:Number(row.order_number),orderType:row.order_type,handlingMode:row.handling_mode||'STANDARD',
