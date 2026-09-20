@@ -5,9 +5,8 @@ ALTER TABLE auth_sessions
   ADD COLUMN IF NOT EXISTS active_point_id text REFERENCES points(id);
 
 UPDATE auth_sessions s
-SET active_point_id = candidate.point_id
-FROM LATERAL (
-  SELECT p.id AS point_id
+SET active_point_id = (
+  SELECT p.id
   FROM users u
   JOIN points p ON p.active=true
   LEFT JOIN user_point_access a ON a.user_id=u.id AND a.point_id=p.id
@@ -15,7 +14,7 @@ FROM LATERAL (
     AND (u.role_code IN ('OWNER','BOSS') OR a.user_id IS NOT NULL)
   ORDER BY p.name,p.id
   LIMIT 1
-) candidate
+)
 WHERE s.active_point_id IS NULL;
 
 CREATE INDEX IF NOT EXISTS auth_sessions_active_point_idx
