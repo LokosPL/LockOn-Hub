@@ -3437,8 +3437,14 @@ const route = async (request) => {
     const remoteSize=Number(head.ContentLength||0);
     const remoteHash=String(head.Metadata?.sha256||'').toLowerCase();
     const remoteType=String(head.ContentType||'').split(';')[0].trim().toLowerCase();
-    if(remoteSize!==Number(invoice.size_bytes)||remoteHash!==String(invoice.sha256).toLowerCase()||remoteType!=='application/pdf'){
-      return json(request,{error:'PDF_VERIFY_FAILED',message:'Przesłany plik nie przeszedł weryfikacji integralności.'},409);
+    let magic='';
+    try{
+      const prefix=await storage.send(new GetObjectCommand({Bucket:SERVICE_INVOICE_BUCKET,Key:invoice.object_key,Range:'bytes=0-4'}));
+      const bytes=await prefix.Body?.transformToByteArray();
+      magic=bytes?Buffer.from(bytes).toString('ascii'):'';
+    }catch{}
+    if(remoteSize!==Number(invoice.size_bytes)||remoteHash!==String(invoice.sha256).toLowerCase()||remoteType!=='application/pdf'||magic!=='%PDF-'){
+      return json(request,{error:'PDF_VERIFY_FAILED',message:'Przesłany plik nie przeszedł weryfikacji PDF i integralności.'},409);
     }
     await q("UPDATE service_order_invoices SET status='READY',ready_at=now() WHERE id=$1 AND status='UPLOADING'",[invoice.id]);
     await audit(session,'SERVICE_INVOICE_UPLOADED','service_order_invoice',invoice.id,invoice.point_id,{orderId:invoice.service_order_id,sizeBytes:remoteSize});
