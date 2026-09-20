@@ -888,3 +888,40 @@ CREATE TABLE IF NOT EXISTS invoice_monthly_prompt_dismissals (
 INSERT INTO schema_migrations(version,description)
 VALUES ('2026-09-20-v021-service-finance-invoices','Parts and labor costing, private PDF invoice archive, technician notes and monthly invoice prompt')
 ON CONFLICT (version) DO NOTHING;
+
+
+-- 2026-09-20 v1.0.0.0: service cards, customer QR and staff scan logistics.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='service_orders_handling_mode_check') THEN
+    ALTER TABLE service_orders DROP CONSTRAINT service_orders_handling_mode_check;
+  END IF;
+  ALTER TABLE service_orders
+    ADD CONSTRAINT service_orders_handling_mode_check
+    CHECK (handling_mode IN ('STANDARD','COMPLAINT_FLOW','TRANSFER_ONLY'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS service_order_cards (
+  service_order_id text PRIMARY KEY REFERENCES service_orders(id) ON DELETE CASCADE,
+  print_mode text CHECK (print_mode IS NULL OR print_mode IN ('PHYSICAL_AND_ONLINE','ONLINE_ONLY')),
+  staff_scan_token_hash text NOT NULL UNIQUE,
+  staff_scan_token_ciphertext text NOT NULL,
+  staff_scan_code_hash text NOT NULL UNIQUE,
+  staff_scan_code_ciphertext text NOT NULL,
+  generated_at timestamptz NOT NULL DEFAULT now(),
+  last_printed_at timestamptz,
+  print_count integer NOT NULL DEFAULT 0 CHECK (print_count >= 0),
+  customer_email_sent_at timestamptz,
+  customer_email_last_error text,
+  last_scanned_at timestamptz,
+  last_scanned_by_user_id text REFERENCES users(id),
+  last_scan_point_id text REFERENCES points(id),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS service_order_cards_scan_token_idx ON service_order_cards(staff_scan_token_hash);
+CREATE INDEX IF NOT EXISTS service_order_cards_scan_code_idx ON service_order_cards(staff_scan_code_hash);
+
+INSERT INTO schema_migrations(version,description)
+VALUES ('2026-09-20-v1000-service-cards','A4 service cards, customer auto-login QR, staff scan QR and automatic intake handling')
+ON CONFLICT (version) DO NOTHING;
