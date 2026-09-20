@@ -108,7 +108,7 @@ export function CustomerAccountsPage() {
     }catch(error){
       if(requestId===listRequestRef.current&&!silent)setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się pobrać klientów.'});
     }finally{
-      if(requestId===listRequestRef.current&&!silent&&busyRef.current==='load')setBusySafe('');
+      if(requestId===listRequestRef.current&&busyRef.current==='load')setBusySafe('');
     }
   };
 
@@ -326,7 +326,7 @@ export function CustomerAccountsPage() {
     const prefs=selected.notificationPreferences;
     return <div className="customer-accounts-page customer-control-center page-enter">
       <section className="customer-detail-heading">
-        <button className="customer-back-button" disabled={Boolean(busy)} onClick={()=>{detailRequestRef.current+=1;setBusySafe('');setSelectedId(null);setDetail(null);setQuotes([]);}}><ArrowLeft size={16}/> Klienci</button>
+        <button className="customer-back-button" disabled={Boolean(busy)} onClick={()=>{if(busyRef.current)return;detailRequestRef.current+=1;setBusySafe('');setSelectedId(null);setDetail(null);setQuotes([]);}}><ArrowLeft size={16}/> Klienci</button>
         <div className="customer-detail-title">
           <div className="customer-detail-avatar">{selected.googlePicture?<img src={selected.googlePicture} alt="" referrerPolicy="no-referrer"/>:initials(selected.name)}</div>
           <div>
