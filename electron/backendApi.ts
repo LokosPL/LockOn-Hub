@@ -35,6 +35,7 @@ export interface BackendUser {
 export interface BackendAuthPayload {
   user: BackendUser;
   points: BackendPoint[];
+  activePointId?: string | null;
 }
 
 export interface BackendLoginPayload extends BackendAuthPayload {
