@@ -1497,6 +1497,8 @@ const queueTransferNotification = async (actor, orderId, transfer, transferStatu
     if (!orderData?.email) return { queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL' };
 
     const settings = await mailSettingsForPoint(orderData.point_id);
+    const customerPrefs = await customerNotificationPreferences(orderData.customer_id);
+    if (customerPrefs.serviceUpdates === false) return { queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED' };
     if (settings.automatic_email_enabled !== true) return { queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED' };
 
     const notificationId = makeId('ntf');
@@ -3099,8 +3101,11 @@ const route = async (request) => {
       let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
       try{
         const settings=await mailSettingsForPoint(pointId);
+        const customerPrefs=await customerNotificationPreferences(customer.id);
         if(!customer.email){
           notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
+        }else if(customerPrefs.serviceUpdates===false){
+          notification={queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED'};
         }else if(settings.automatic_email_enabled!==true){
           notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
         }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes('RECEIVED')){
@@ -3266,8 +3271,13 @@ const route = async (request) => {
     try{
       const customer=(await q('SELECT email FROM customers WHERE id=$1',[found.customer_id])).rows[0];
       const settings=await mailSettingsForPoint(found.point_id);
+      const customerPrefs=await customerNotificationPreferences(found.customer_id);
       if(!customer?.email){
         notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
+      }else if(next==='READY'&&customerPrefs.readyForPickup===false){
+        notification={queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED'};
+      }else if(next!=='READY'&&customerPrefs.serviceUpdates===false){
+        notification={queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED'};
       }else if(settings.automatic_email_enabled!==true){
         notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
       }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes(next)){
