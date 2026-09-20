@@ -684,6 +684,18 @@ const registerIpc = () => {
     const safeQuery=String(query ?? '').trim().slice(0,120);
     return backendRequest('/customer-accounts' + (safeQuery ? '?q='+encodeURIComponent(safeQuery) : ''), {}, token);
   });
+  secureHandle('customers:updateProfile', async (customerId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/customer-accounts/${encodeURIComponent(safeId(customerId,'cst'))}/profile`, {
+      method:'POST',body:JSON.stringify(payload)
+    },token);
+  });
+  secureHandle('customers:unlinkGoogle', async (customerId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/customer-accounts/${encodeURIComponent(safeId(customerId,'cst'))}/google/unlink`, {
+      method:'POST',body:'{}'
+    },token);
+  });
   secureHandle('customers:getCode', async (customerId: string, rotate = false) => {
     const token = requireSessionToken();
     return backendRequest(`/customer-accounts/${encodeURIComponent(safeId(customerId,'cst'))}/code`, {

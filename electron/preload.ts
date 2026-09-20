@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('lockOn', {
   },
   customers: {
     list: (query?: string) => ipcRenderer.invoke('customers:list', query),
+    updateProfile: (customerId: string, payload: unknown) => ipcRenderer.invoke('customers:updateProfile', customerId, payload),
+    unlinkGoogle: (customerId: string) => ipcRenderer.invoke('customers:unlinkGoogle', customerId),
     getCode: (customerId: string, rotate = false) => ipcRenderer.invoke('customers:getCode', customerId, rotate),
     sendCode: (customerId: string) => ipcRenderer.invoke('customers:sendCode', customerId),
     block: (customerId: string, blocked: boolean, reason?: string) => ipcRenderer.invoke('customers:block', customerId, blocked, reason),
