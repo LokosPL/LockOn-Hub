@@ -11,6 +11,8 @@ export function UpdatePrompt() {
   const [update, setUpdate] = useState<UpdateState>(initialState);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState('');
 
   useEffect(() => {
     void window.lockOn.app.getInfo().then(setAppInfo).catch(() => undefined);
@@ -18,8 +20,24 @@ export function UpdatePrompt() {
     return window.lockOn.updater.onStatus((state) => {
       setUpdate(state);
       if (state.status === 'downloaded') setDismissedVersion(null);
+      if (state.status !== 'downloaded') {
+        setInstalling(false);
+        setInstallError('');
+      }
     });
   }, []);
+
+  const installNow = async () => {
+    if (installing || update.status !== 'downloaded') return;
+    setInstalling(true);
+    setInstallError('');
+    try {
+      await window.lockOn.updater.install();
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : 'Nie udało się uruchomić instalacji aktualizacji.');
+      setInstalling(false);
+    }
+  };
 
   const version =
     update.status === 'available' || update.status === 'downloaded' || update.status === 'not-available'
@@ -76,12 +94,13 @@ export function UpdatePrompt() {
             Masz teraz v{appInfo?.version ?? '—'}. Chcesz zaktualizować aplikację teraz?
             ServiceOS sam zamknie się na moment, zaktualizuje i uruchomi ponownie.
           </span>
+          {installError && <small className="global-update-action-error">{installError}</small>}
           <div className="global-update-inline-actions">
-            <button className="button primary small" onClick={() => void window.lockOn.updater.install()}>Tak, aktualizuj</button>
-            <button className="button ghost small" onClick={() => setDismissedVersion(update.version)}>Później</button>
+            <button className="button primary small" disabled={installing} onClick={() => void installNow()}>{installing ? 'Uruchamiam…' : 'Tak, aktualizuj'}</button>
+            <button className="button ghost small" disabled={installing} onClick={() => setDismissedVersion(update.version)}>Później</button>
           </div>
         </div>
-        <button className="global-update-dismiss" onClick={() => setDismissedVersion(update.version)} aria-label="Później"><X size={16}/></button>
+        <button className="global-update-dismiss" disabled={installing} onClick={() => setDismissedVersion(update.version)} aria-label="Później"><X size={16}/></button>
       </aside>
     );
   }
