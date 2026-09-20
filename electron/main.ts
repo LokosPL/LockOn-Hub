@@ -6,6 +6,7 @@ import {
   Menu,
   screen,
   session,
+  shell,
   type IpcMainInvokeEvent
 } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -479,6 +480,19 @@ const fetchPdfToFile = async (url: string, destination: string) => {
   await fs.promises.writeFile(destination, bytes, { flag:'wx' });
 };
 
+const writeApiPdfToTemp = async (base64: string, fileName: string) => {
+  const bytes=Buffer.from(String(base64||''),'base64');
+  if(bytes.length<=0||bytes.length>8*1024*1024||bytes.subarray(0,5).toString('ascii')!=='%PDF-'){
+    throw new Error('Serwer zwrócił nieprawidłową kartę serwisową PDF.');
+  }
+  const dir=path.join(app.getPath('temp'),'LockOn-ServiceOS','service-cards');
+  await fs.promises.mkdir(dir,{recursive:true});
+  const destination=path.join(dir,safeDownloadFileName(fileName));
+  await fs.promises.writeFile(destination,bytes);
+  return destination;
+};
+
+
 const measureFetch = async (url: string, init: RequestInit = {}, timeoutMs = 15_000) => {
   const started = performance.now();
   const response = await fetch(url, {
@@ -862,6 +876,29 @@ const registerIpc = () => {
       method: 'POST',
       body: JSON.stringify(payload)
     }, token);
+  });
+  secureHandle('service:openServiceCard', async (orderId: string, printMode: 'PHYSICAL_AND_ONLINE' | 'ONLINE_ONLY') => {
+    const token=requireSessionToken();
+    const mode=printMode==='PHYSICAL_AND_ONLINE'?'PHYSICAL_AND_ONLINE':'ONLINE_ONLY';
+    const result=await backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/service-card`,{
+      method:'POST',
+      body:JSON.stringify({printMode:mode})
+    },token) as {fileName:string;pdfBase64:string;staffScanCode?:string};
+    const filePath=await writeApiPdfToTemp(result.pdfBase64,result.fileName);
+    const openError=await shell.openPath(filePath);
+    if(openError)throw new Error('Nie udało się otworzyć karty serwisowej: '+openError);
+    return {opened:true,filePath,fileName:result.fileName,printMode:mode,staffScanCode:result.staffScanCode};
+  });
+  secureHandle('service:scanServiceCard', async (payload: any) => {
+    const token=requireSessionToken();
+    return backendRequest('/service/scan',{
+      method:'POST',
+      body:JSON.stringify({
+        actingPointId:String(payload?.actingPointId??'').trim().slice(0,80),
+        token:String(payload?.token??'').trim().slice(0,100),
+        code:String(payload?.code??'').trim().slice(0,32)
+      })
+    },token);
   });
   secureHandle('service:listOrders', async () => {
     const token = requireSessionToken();
