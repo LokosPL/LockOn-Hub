@@ -850,6 +850,157 @@ const requireOrder = async (user, orderId) => {
   }
 };
 
+const roundMoney = (value) => Math.round(Number(value || 0) * 100) / 100;
+const nullableMoney = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 && number <= 10_000_000
+    ? roundMoney(number)
+    : null;
+};
+
+const requireServiceFinanceOrder = async (user, orderId) => {
+  if (!SERVICE_EDIT_ROLES.has(user.role_code)) {
+    throw Object.assign(new Error('Brak uprawnień do kosztów części, robocizny i faktur.'), { status:403, code:'SERVICE_FINANCE_FORBIDDEN' });
+  }
+  await requireOrder(user, orderId);
+  const order=(await q(
+    'SELECT id,order_number,point_id,home_point_id,assigned_technician_id,estimated_cost,final_cost,labor_cost_gross,other_cost_gross,currency FROM service_orders WHERE id=$1 LIMIT 1',
+    [orderId]
+  )).rows[0];
+  if(!order) throw Object.assign(new Error('Nie znaleziono zlecenia.'),{status:404,code:'NOT_FOUND'});
+  if(user.role_code==='TECHNICIAN' && order.assigned_technician_id!==user.id){
+    throw Object.assign(new Error('Koszty i faktury tego zlecenia może edytować przypisany serwisant.'),{status:403,code:'TECHNICIAN_ORDER_REQUIRED'});
+  }
+  return order;
+};
+
+const servicePartView = (row) => ({
+  id:row.id,
+  description:row.description,
+  quantity:Number(row.quantity),
+  unitCostGross:Number(row.unit_cost_gross),
+  totalCostGross:roundMoney(Number(row.quantity)*Number(row.unit_cost_gross)),
+  invoiceReceived:row.invoice_received===true,
+  invoiceNumber:row.invoice_number||null,
+  supplier:row.supplier||null,
+  purchasedAt:row.purchased_at||null,
+  createdAt:row.created_at,
+  updatedAt:row.updated_at
+});
+
+const serviceInvoiceView = (row) => ({
+  id:row.id,
+  orderId:row.service_order_id,
+  orderNumber:row.order_number==null?null:Number(row.order_number),
+  customerName:row.customer_name||null,
+  device:row.device_label||null,
+  fileName:row.file_name,
+  sizeBytes:Number(row.size_bytes),
+  invoiceNumber:row.invoice_number||null,
+  supplier:row.supplier||null,
+  invoiceDate:row.invoice_date||null,
+  grossAmount:row.gross_amount==null?null:Number(row.gross_amount),
+  uploadedByUserId:row.uploaded_by_user_id,
+  uploadedByName:row.uploaded_by_name||null,
+  createdAt:row.created_at,
+  readyAt:row.ready_at||null
+});
+
+const loadOrderCosting = async (user, orderId) => {
+  const order=await requireServiceFinanceOrder(user,orderId);
+  const parts=(await q(
+    'SELECT id,description,quantity,unit_cost_gross,invoice_received,invoice_number,supplier,purchased_at,created_at,updated_at FROM service_order_parts WHERE service_order_id=$1 ORDER BY created_at ASC,id ASC',
+    [orderId]
+  )).rows.map(servicePartView);
+  const invoices=(await q(
+    "SELECT i.*,s.order_number,u.name AS uploaded_by_name FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.service_order_id=$1 AND i.status='READY' ORDER BY COALESCE(i.invoice_date,i.created_at::date) DESC,i.created_at DESC",
+    [orderId]
+  )).rows.map(serviceInvoiceView);
+  const partsTotal=roundMoney(parts.reduce((sum,item)=>sum+item.totalCostGross,0));
+  const laborCostGross=order.labor_cost_gross==null?0:Number(order.labor_cost_gross);
+  const otherCostGross=order.other_cost_gross==null?0:Number(order.other_cost_gross);
+  const internalCostGross=roundMoney(partsTotal+laborCostGross+otherCostGross);
+  const customerPrice=order.final_cost==null?(order.estimated_cost==null?null:Number(order.estimated_cost)):Number(order.final_cost);
+  return {
+    orderId:order.id,
+    orderNumber:Number(order.order_number),
+    currency:String(order.currency||'PLN').trim(),
+    parts,
+    invoices,
+    partsCostGross:partsTotal,
+    laborCostGross:roundMoney(laborCostGross),
+    otherCostGross:roundMoney(otherCostGross),
+    internalCostGross,
+    estimatedCost:order.estimated_cost==null?null:Number(order.estimated_cost),
+    finalCost:order.final_cost==null?null:Number(order.final_cost),
+    customerPrice,
+    marginGross:customerPrice==null?null:roundMoney(customerPrice-internalCostGross)
+  };
+};
+
+const requireInvoiceStorage = () => {
+  if (!invoiceStorage) {
+    throw Object.assign(new Error('Magazyn faktur PDF nie jest obecnie dostępny.'), { status:503, code:'INVOICE_STORAGE_UNAVAILABLE' });
+  }
+  return invoiceStorage;
+};
+
+const safePdfFileName = (value) => {
+  const base=String(value||'faktura.pdf').trim().replace(/[\\/\0-\x1f<>:"|?*]+/g,'_').replace(/\s+/g,' ').slice(0,180);
+  return /\.pdf$/i.test(base)?base:(base+'.pdf');
+};
+
+const invoicePeriodBounds = (period) => {
+  const match=/^(\d{4})-(\d{2})$/.exec(String(period||''));
+  if(!match) return null;
+  const year=Number(match[1]),month=Number(match[2]);
+  if(year<2020||year>2200||month<1||month>12)return null;
+  const start=match[1]+'-'+match[2]+'-01';
+  const nextMonth=month===12?1:month+1;
+  const nextYear=month===12?year+1:year;
+  const end=String(nextYear).padStart(4,'0')+'-'+String(nextMonth).padStart(2,'0')+'-01';
+  return {period:match[1]+'-'+match[2],start,end};
+};
+
+const warsawCalendarDate = () => {
+  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{
+    timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit'
+  }).formatToParts(new Date()).filter((item)=>item.type!=='literal').map((item)=>[item.type,item.value]));
+  return {year:Number(parts.year),month:Number(parts.month),day:Number(parts.day)};
+};
+
+const monthlyInvoicePromptPeriod = () => {
+  const now=warsawCalendarDate();
+  if(now.day>=25) return String(now.year).padStart(4,'0')+'-'+String(now.month).padStart(2,'0');
+  if(now.day<=5){
+    const month=now.month===1?12:now.month-1;
+    const year=now.month===1?now.year-1:now.year;
+    return String(year).padStart(4,'0')+'-'+String(month).padStart(2,'0');
+  }
+  return null;
+};
+
+const listAccessibleInvoices = async (user, period) => {
+  if(!SERVICE_EDIT_ROLES.has(user.role_code)) throw Object.assign(new Error('Brak dostępu do magazynu faktur.'),{status:403,code:'SERVICE_FINANCE_FORBIDDEN'});
+  const bounds=invoicePeriodBounds(period);
+  if(!bounds) throw Object.assign(new Error('Nieprawidłowy miesiąc.'),{status:400,code:'INVOICE_PERIOD'});
+  const params=[bounds.start,bounds.end];
+  let access='';
+  if(user.role_code==='TECHNICIAN'){
+    params.push(user.id);
+    access=' AND s.assigned_technician_id=$3';
+  }else if(!GLOBAL_ROLES.has(user.role_code)){
+    params.push(user.id);
+    access=" AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$3 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$3 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id))";
+  }
+  const {rows}=await q(
+    "SELECT i.*,s.order_number,(c.first_name||' '||c.last_name) AS customer_name,(d.brand||' '||d.model) AS device_label,u.name AS uploaded_by_name FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.status='READY' AND COALESCE(i.invoice_date,i.created_at::date)>=$1::date AND COALESCE(i.invoice_date,i.created_at::date)<$2::date"+access+" ORDER BY COALESCE(i.invoice_date,i.created_at::date) DESC,i.created_at DESC LIMIT 300",
+    params
+  );
+  return rows.map(serviceInvoiceView);
+};
+
 const getVisibleOrderByNumber = async (user, number) => {
   const params = [Number(number)];
   let access = '';
