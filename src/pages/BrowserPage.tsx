@@ -24,6 +24,7 @@ export function BrowserPage() {
   const [browser, setBrowser] = useState<BrowserState>(initialState);
   const [input, setInput] = useState(initialState.url);
   const [actionBusy, setActionBusy] = useState(false);
+  const actionBusyRef = useRef(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -71,7 +72,8 @@ export function BrowserPage() {
   }, []);
 
   const runAction = async (action: () => Promise<unknown>, fallback: string) => {
-    if (actionBusy) return;
+    if (actionBusyRef.current) return;
+    actionBusyRef.current = true;
     setActionBusy(true);
     setError('');
     try {
@@ -79,6 +81,7 @@ export function BrowserPage() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : fallback);
     } finally {
+      actionBusyRef.current = false;
       setActionBusy(false);
     }
   };
