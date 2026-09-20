@@ -912,11 +912,12 @@ const registerIpc = () => {
     const token = requireSessionToken();
     return backendRequest('/support/conversation', {}, token);
   });
-  secureHandle('assistant:send', async (message: string) => {
+  secureHandle('assistant:send', async (message: string, target?: 'BOT' | 'CONSULTANT') => {
     const token = requireSessionToken();
+    const channel = target === 'CONSULTANT' ? 'CONSULTANT' : 'BOT';
     return backendRequest('/assistant/chat', {
       method: 'POST',
-      body: JSON.stringify({ message: String(message ?? '').trim().slice(0, 1500) })
+      body: JSON.stringify({ message: String(message ?? '').trim().slice(0, 1500), target: channel })
     }, token);
   });
   secureHandle('diagnostics:internetSpeed', async () => {
@@ -936,6 +937,7 @@ const registerIpc = () => {
   secureHandle('support:take', async (ticketId: string) => backendRequest('/support/tickets/' + encodeURIComponent(safeId(ticketId,'sup')) + '/take', {method:'POST',body:'{}'}, requireSessionToken()));
   secureHandle('support:reply', async (ticketId: string, message: string) => backendRequest('/support/tickets/' + encodeURIComponent(safeId(ticketId,'sup')) + '/reply', {method:'POST',body:JSON.stringify({message:String(message ?? '').trim().slice(0,2000)})}, requireSessionToken()));
   secureHandle('support:close', async (ticketId: string) => backendRequest('/support/tickets/' + encodeURIComponent(safeId(ticketId,'sup')) + '/close', {method:'POST',body:'{}'}, requireSessionToken()));
+  secureHandle('support:leave', async () => backendRequest('/support/leave', {method:'POST',body:'{}'}, requireSessionToken()));
   secureHandle('website:createAuthCode', async () => {
     const token = requireSessionToken();
     return backendRequest('/website/auth-code', { method: 'POST', body: '{}' }, token);
