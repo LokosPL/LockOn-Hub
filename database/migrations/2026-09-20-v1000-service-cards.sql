@@ -2,15 +2,39 @@
 -- Additive except widening the allowed handling_mode values.
 
 DO $$
+DECLARE
+  current_definition text;
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='service_orders_handling_mode_check') THEN
-    ALTER TABLE service_orders DROP CONSTRAINT service_orders_handling_mode_check;
+  SELECT pg_get_constraintdef(oid)
+    INTO current_definition
+    FROM pg_constraint
+   WHERE conrelid='service_orders'::regclass
+     AND conname='service_orders_handling_mode_check';
+
+  IF current_definition IS NULL OR position('COMPLAINT_FLOW' in current_definition)=0 THEN
+    IF NOT EXISTS (
+      SELECT 1
+        FROM pg_constraint
+       WHERE conrelid='service_orders'::regclass
+         AND conname='service_orders_handling_mode_v1000_check'
+    ) THEN
+      ALTER TABLE service_orders
+        ADD CONSTRAINT service_orders_handling_mode_v1000_check
+        CHECK (handling_mode IN ('STANDARD','COMPLAINT_FLOW','TRANSFER_ONLY')) NOT VALID;
+    END IF;
+
+    ALTER TABLE service_orders
+      VALIDATE CONSTRAINT service_orders_handling_mode_v1000_check;
+
+    IF current_definition IS NOT NULL THEN
+      ALTER TABLE service_orders
+        DROP CONSTRAINT service_orders_handling_mode_check;
+    END IF;
+
+    ALTER TABLE service_orders
+      RENAME CONSTRAINT service_orders_handling_mode_v1000_check
+      TO service_orders_handling_mode_check;
   END IF;
-  ALTER TABLE service_orders
-    ADD CONSTRAINT service_orders_handling_mode_check
-    CHECK (handling_mode IN ('STANDARD','COMPLAINT_FLOW','TRANSFER_ONLY'));
-EXCEPTION WHEN duplicate_object THEN
-  NULL;
 END $$;
 
 CREATE TABLE IF NOT EXISTS service_order_cards (
