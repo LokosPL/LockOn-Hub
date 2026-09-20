@@ -122,8 +122,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.product_version }}
+          BUILD_VERSION: ${{ steps.version.outputs.build_version }}
         run: |
-          gh release create "v$env:VERSION" "release/LockOn-ServiceOS-Setup.exe" "release/LockOn-ServiceOS-Setup.exe.blockmap" "release/latest.yml" "release/SHA256SUMS.txt" --title "LockOn ServiceOS v$env:VERSION" --notes-file release-notes.md --latest
+          gh release create "v$env:BUILD_VERSION" "release/LockOn-ServiceOS-Setup.exe" "release/LockOn-ServiceOS-Setup.exe.blockmap" "release/latest.yml" "release/SHA256SUMS.txt" --title "LockOn ServiceOS v$env:VERSION" --notes-file release-notes.md --latest
 ) {
             Write-Error "RELEASE_VERSION musi mieć format czteroczłonowy, np. 1.0.0.0."
             exit 1
