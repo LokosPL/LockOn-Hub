@@ -1,0 +1,49 @@
+name: v0.20.4 production smoke
+
+on:
+  push:
+    branches: ["hotfix/v0.20.4-reliability-security"]
+    paths:
+      - ".github/workflows/v0204-prod-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      API_URL: https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech/
+    steps:
+      - name: Verify production health and auth boundaries
+        shell: bash
+        run: |
+          node <<'NODE'
+          const api=process.env.API_URL;
+          const req=async(path,method='GET',body)=>{
+            const response=await fetch(new URL(path.replace(/^\//,''),api),{
+              method,
+              headers:body===undefined?{}:{'Content-Type':'application/json'},
+              body:body===undefined?undefined:JSON.stringify(body)
+            });
+            let payload=null;try{payload=await response.json();}catch{}
+            return {status:response.status,payload};
+          };
+          const health=await req('/health');
+          if(health.status!==200||health.payload?.ok!==true)throw new Error('health failed: '+JSON.stringify(health));
+          for(const path of [
+            '/me',
+            '/support/conversation',
+            '/customer-accounts',
+            '/integrations/gmail?pointId=pnt_4e66398ed2bffa894cc4',
+            '/notifications/settings?pointId=pnt_4e66398ed2bffa894cc4',
+            '/notifications/history?pointId=pnt_4e66398ed2bffa894cc4'
+          ]){
+            const result=await req(path);
+            if(result.status!==401)throw new Error(path+' expected 401, got '+result.status+' '+JSON.stringify(result.payload));
+          }
+          const assistant=await req('/assistant/chat','POST',{message:'smoke',target:'BOT'});
+          if(assistant.status!==401)throw new Error('assistant expected 401, got '+assistant.status);
+          console.log('V0204_PRODUCTION_SMOKE_OK');
+          NODE
