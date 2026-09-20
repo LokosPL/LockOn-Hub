@@ -2,7 +2,7 @@ name: Production API smoke
 
 on:
   push:
-    branches: ["feature/v0.21-service-finance-invoices"]
+    branches: ["feature/v0.21-service-finance-invoices", "main"]
     paths:
       - ".github/workflows/prod-smoke.yml"
       - ".github/workflows/ci.yml"
@@ -47,9 +47,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          code="$(curl --silent --show-error --output dev-owner.json --write-out '%{http_code}'             --request POST "$PROD_API_URL/auth/dev-owner"             --header 'Content-Type: application/json'             --data '{}')"
-          test "$code" = "404"
-          node -e "const d=require('./dev-owner.json');if(d.error!=='NOT_FOUND')throw new Error('Unexpected dev-owner response')"
+          for endpoint in dev-owner dev-role; do
+            code="$(curl --silent --show-error --output "$endpoint.json" --write-out '%{http_code}' --request POST "$PROD_API_URL/auth/$endpoint" --header 'Content-Type: application/json' --data '{}')"
+            test "$code" = "404"
+            node -e "const d=require('./'+process.argv[1]+'.json');if(d.error!=='NOT_FOUND')throw new Error('Unexpected dev-login response')" "$endpoint"
+          done
 
       - name: Production auth guard
         shell: bash
