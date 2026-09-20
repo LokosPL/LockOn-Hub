@@ -251,10 +251,16 @@ const publicUser = async (user) => ({
   lastLoginAt: user.last_login_at
 });
 
-const authPayload = async (user) => ({
+const authPayload = async (user, activePointId = null) => ({
   user: await publicUser(user),
-  points: await loadPointsForUser(user)
+  points: await loadPointsForUser(user),
+  activePointId: activePointId || null
 });
+
+const defaultActivePointIdForUser = async (user) => {
+  const points=await loadPointsForUser(user);
+  return points[0]?.id || null;
+};
 
 const createSession = async (userId, clientType) => {
   const token = crypto.randomBytes(32).toString('base64url');
@@ -262,11 +268,13 @@ const createSession = async (userId, clientType) => {
   const webSession = clientType === 'WEB';
   const ttl = webSession ? WEB_SESSION_TTL_MS : SESSION_TTL_MS;
   const absoluteTtl = webSession ? WEB_SESSION_ABSOLUTE_TTL_MS : SESSION_ABSOLUTE_TTL_MS;
+  const user=await loadUser(userId);
+  const activePointId=user?await defaultActivePointIdForUser(user):null;
   await q(
-    'INSERT INTO auth_sessions(id,user_id,token_hash,client_type,created_at,last_seen_at,expires_at,absolute_expires_at) VALUES($1,$2,$3,$4,now(),now(),$5,$6)',
-    [makeId('ses'), userId, tokenHash(token), clientType, new Date(now + ttl), new Date(now + absoluteTtl)]
+    'INSERT INTO auth_sessions(id,user_id,token_hash,client_type,active_point_id,created_at,last_seen_at,expires_at,absolute_expires_at) VALUES($1,$2,$3,$4,$5,now(),now(),$6,$7)',
+    [makeId('ses'), userId, tokenHash(token), clientType, activePointId, new Date(now + ttl), new Date(now + absoluteTtl)]
   );
-  return token;
+  return {token,activePointId};
 };
 
 const currentSession = async (request) => {
@@ -276,7 +284,7 @@ const currentSession = async (request) => {
   if (!token) return null;
   const hash = tokenHash(token);
   const { rows } = await q(
-    "SELECT s.id AS session_id,s.user_id,s.client_type,s.created_at AS session_created_at,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.technician_split_percent,u.support_enabled,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
+    "SELECT s.id AS session_id,s.user_id,s.client_type,s.active_point_id,s.created_at AS session_created_at,u.id,u.google_sub,u.email,u.name,u.picture_url,u.role_code,u.technician_split_percent,u.support_enabled,u.status,u.blocked_at,u.blocked_reason,u.first_login_at,u.last_login_at FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND s.absolute_expires_at>now() AND u.blocked_at IS NULL LIMIT 1",
     [hash]
   );
   const row = rows[0];
@@ -292,6 +300,7 @@ const currentSession = async (request) => {
   return {
     sessionId: row.session_id,
     clientType: row.client_type,
+    activePointId: row.active_point_id || null,
     createdAt: row.session_created_at,
     user: {
       id: row.id,
@@ -492,9 +501,9 @@ const loginProfile = async (profile, clientType, allowCreate) => {
     throw Object.assign(new Error('Konto nie jest aktywne.'), { status: 403, code: 'ACCOUNT_NOT_ACTIVE' });
   }
 
-  const token = await createSession(user.id, clientType);
+  const session = await createSession(user.id, clientType);
   await audit({ user, clientType }, 'LOGIN_' + clientType, 'user', user.id, null, {});
-  return { token, ...(await authPayload(user)) };
+  return { token:session.token, ...(await authPayload(user,session.activePointId)) };
 };
 
 const visiblePointIds = async (user) => {
@@ -2732,7 +2741,17 @@ const route = async (request) => {
 
   if (method === 'GET' && url.pathname === '/me') {
     const session = await requireUser(request);
-    return json(request, await authPayload(session.user));
+    return json(request, await authPayload(session.user,session.activePointId));
+  }
+
+  if(method==='POST'&&url.pathname==='/me/active-point'){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    const pointId=cleanText(body.pointId,80);
+    if(!pointId)return json(request,{error:'ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt.'},400);
+    await requirePoint(u,pointId);
+    await q('UPDATE auth_sessions SET active_point_id=$2,last_seen_at=now() WHERE id=$1',[session.sessionId,pointId]);
+    await audit(session,'SESSION_ACTIVE_POINT_CHANGED','point',pointId,pointId,{clientType:session.clientType});
+    return json(request,await authPayload(u,pointId));
   }
 
   if (method === 'POST' && url.pathname === '/auth/logout') {
@@ -2769,13 +2788,14 @@ const route = async (request) => {
       }
       const token = crypto.randomBytes(32).toString('base64url');
       const now = Date.now();
+      const activePointId=await defaultActivePointIdForUser(userResult.rows[0]);
       await client.query(
-        'INSERT INTO auth_sessions(id,user_id,token_hash,client_type,created_at,last_seen_at,expires_at,absolute_expires_at) VALUES($1,$2,$3,$4,now(),now(),$5,$6)',
-        [makeId('ses'), userResult.rows[0].id, tokenHash(token), 'WEB', new Date(now + SESSION_TTL_MS), new Date(now + SESSION_ABSOLUTE_TTL_MS)]
+        'INSERT INTO auth_sessions(id,user_id,token_hash,client_type,active_point_id,created_at,last_seen_at,expires_at,absolute_expires_at) VALUES($1,$2,$3,$4,$5,now(),now(),$6,$7)',
+        [makeId('ses'), userResult.rows[0].id, tokenHash(token), 'WEB', activePointId, new Date(now + SESSION_TTL_MS), new Date(now + SESSION_ABSOLUTE_TTL_MS)]
       );
       await client.query('COMMIT');
       clearPublicAuthAttempts(redeemRateKey);
-      return json(request, { token, ...(await authPayload(userResult.rows[0])) });
+      return json(request, { token, ...(await authPayload(userResult.rows[0],activePointId)) });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
@@ -3592,7 +3612,7 @@ const route = async (request) => {
   if(method==='POST'&&url.pathname==='/service/scan'){
     const session=await requireActive(request),u=session.user,body=await readJson(request);
     if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do skanowania urządzeń.'),{status:403,code:'SERVICE_SCAN_FORBIDDEN'});
-    const actingPointId=cleanText(body.actingPointId,80);
+    const actingPointId=session.activePointId;
     if(!actingPointId)return json(request,{error:'ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt przed skanowaniem.'},400);
     await requirePoint(u,actingPointId);
 
@@ -4045,7 +4065,9 @@ const route = async (request) => {
   if(method==='POST'&&url.pathname==='/service/orders'){
     const session=await requireActive(request),u=session.user,body=await readJson(request);
     if(!SERVICE_CREATE_ROLES.has(u.role_code)) throw Object.assign(new Error('Brak uprawnień do tworzenia zleceń.'),{status:403});
-    const pointId=cleanText(body.pointId,80);await requirePoint(u,pointId);
+    const pointId=session.activePointId;
+    if(!pointId)return json(request,{error:'ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt przed przyjęciem urządzenia.'},400);
+    await requirePoint(u,pointId);
     const firstName=cleanText(body.firstName,80),lastName=cleanText(body.lastName,100),email=normalizeEmail(cleanText(body.email,180)),phone=cleanText(body.phone,50),phoneNorm=normalizePhone(phone),brand=cleanText(body.brand,80),model=cleanText(body.model,120),issue=cleanText(body.issueDescription,2000),orderType=String(body.orderType||'REPAIR').toUpperCase();
     const handlingMode=orderType==='COMPLAINT'?'COMPLAINT_FLOW':'STANDARD';
     const imei=cleanText(body.imei,32).replace(/\s+/g,''),serialNumber=cleanText(body.serialNumber,120),deviceNotes=cleanText(body.deviceNotes,1000);
@@ -4144,7 +4166,7 @@ const route = async (request) => {
   const statusMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/status$/);
   if(method==='POST'&&statusMatch){
     const session=await requireActive(request),u=session.user;
-    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500),actingPointId=cleanText(body.actingPointId,80);
+    const body=await readJson(request),next=String(body.status||'').toUpperCase(),note=cleanText(body.note,500),actingPointId=session.activePointId;
     const canEditStatus=SERVICE_EDIT_ROLES.has(u.role_code);
     const canCancelOnly=u.role_code==='USER'&&next==='CANCELLED';
     if(!canEditStatus&&!canCancelOnly)throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
