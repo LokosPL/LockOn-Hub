@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: 24
       - name: Install function build dependencies
-        run: npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 esbuild@0.25.12
+        run: npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 esbuild@0.25.12
       - name: Check source syntax
         run: node --check functions/lockon-api.mjs
       - name: Verify v0.20 support and customer contracts
@@ -65,6 +65,15 @@ jobs:
           grep -q 'customer_portal_accounts' database/migrations/2026-09-20-customer-accounts-google.sql
           grep -q "auth_method IN ('CODE','GOOGLE')" database/migrations/2026-09-20-customer-accounts-google.sql
           grep -q '/customer-accounts' functions/lockon-api.mjs
+          grep -q "SERVICE_INVOICE_BUCKET = 'service-invoices'" functions/lockon-api.mjs
+          grep -q "TECHNICIAN_ORDER_REQUIRED" functions/lockon-api.mjs
+          grep -q "/service/technician-workspace" functions/lockon-api.mjs
+          grep -q "/service/technician-notes" functions/lockon-api.mjs
+          grep -q "/service/invoices/download-batch" functions/lockon-api.mjs
+          grep -q "magic!=='%PDF-'" functions/lockon-api.mjs
+          grep -q "service_order_parts" database/migrations/2026-09-20-v021-service-finance-invoices.sql
+          grep -q "service_order_invoices" database/migrations/2026-09-20-v021-service-finance-invoices.sql
+          grep -q "technician_private_notes" database/migrations/2026-09-20-v021-service-finance-invoices.sql
       - name: Bundle for Neon Functions
         run: |
           mkdir -p central-api-dist
