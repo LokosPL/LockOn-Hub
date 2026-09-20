@@ -1,0 +1,42 @@
+name: v0.20.5 production smoke
+
+on:
+  push:
+    branches: ["tmp/v0205-neon-smoke"]
+    paths:
+      - ".github/workflows/v0205-prod-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_URL: https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech/
+    steps:
+      - name: Verify production API
+        shell: bash
+        run: |
+          node <<'NODE'
+          const base=process.env.API_URL;
+          const request=async(path,init={})=>{
+            const r=await fetch(new URL(path.replace(/^\//,''),base),init);
+            let body={};try{body=await r.json();}catch{}
+            return {status:r.status,body};
+          };
+          const health=await request('/health',{cache:'no-store'});
+          if(health.status!==200||health.body?.ok!==true) throw new Error('health '+JSON.stringify(health));
+          const me=await request('/me',{cache:'no-store'});
+          if(me.status!==401) throw new Error('/me unauth expected 401 got '+JSON.stringify(me));
+          const employee=await request('/website/redeem',{
+            method:'POST',headers:{'content-type':'application/json','x-real-ip':'203.0.113.206'},body:JSON.stringify({code:'ZZZZZZZZ'})
+          });
+          if(employee.status!==401) throw new Error('/website/redeem expected 401 got '+JSON.stringify(employee));
+          const customer=await request('/public/customer-portal/login',{
+            method:'POST',headers:{'content-type':'application/json','x-real-ip':'203.0.113.207'},body:JSON.stringify({code:'LK-AAAA-AAAA-AAAA-AAAA'})
+          });
+          if(customer.status!==401) throw new Error('customer login expected 401 got '+JSON.stringify(customer));
+          console.log('V0205_PROD_SMOKE_OK');
+          NODE
