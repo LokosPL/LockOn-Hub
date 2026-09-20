@@ -91,6 +91,22 @@ jobs:
             if (-not $settings.Contains($_)) { throw "Missing settings action guard: $_" }
           }
 
+      - name: Verify service finance UI contracts
+        shell: pwsh
+        run: |
+          $service = Get-Content src/pages/ServicePage.tsx -Raw
+          @("TechnicianCalendar","InvoiceWarehouse","TechnicianNotesRoom","OrderCostingCard") | ForEach-Object {
+            if (-not $service.Contains($_)) { throw "Missing v0.21 service workspace contract: $_" }
+          }
+          $costing = Get-Content src/components/OrderCostingCard.tsx -Raw
+          @("Mam FV zakupu","Kwota za robociznę","Dodaj FV w PDF","Marża informacyjna") | ForEach-Object {
+            if (-not $costing.Contains($_)) { throw "Missing costing UI contract: $_" }
+          }
+          $electron = Get-Content electron/main.ts -Raw
+          @("assertPdfFile","sha256File","%PDF-","service:downloadInvoiceBatch") | ForEach-Object {
+            if (-not $electron.Contains($_)) { throw "Missing secure invoice IPC contract: $_" }
+          }
+
       - name: Typecheck renderer
         run: npm run typecheck
 
