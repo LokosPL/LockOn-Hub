@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BadgeDollarSign, BellRing, CalendarClock, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus,
-  Clock3, History, IdCard, Mail, MailCheck, MapPin, MessageSquareText, PackageCheck, RefreshCw, RotateCcw, Save, Search, Send,
+  BadgeDollarSign, BellRing, CalendarClock, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus,
+  Clock3, FileArchive, History, IdCard, Mail, MailCheck, MapPin, MessageSquareText, NotebookPen, PackageCheck, RefreshCw, RotateCcw, Save, Search, Send,
   Settings2, Smartphone, StickyNote, Truck, UserCog, UserRound, XCircle
 } from 'lucide-react';
+import { InvoiceWarehouse } from '../components/InvoiceWarehouse';
+import { MonthlyInvoicePrompt } from '../components/MonthlyInvoicePrompt';
+import { OrderCostingCard } from '../components/OrderCostingCard';
+import { TechnicianCalendar } from '../components/TechnicianCalendar';
+import { TechnicianNotesRoom } from '../components/TechnicianNotesRoom';
 import type {
   AdminPoint,
   AuthState,
@@ -76,8 +81,11 @@ const deliveryLabel = (status: NotificationHistoryItem['status']) => ({
   CANCELLED: 'Anulowano'
 }[status]);
 
+type ServiceTab = 'CALENDAR' | 'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAILS' | 'INVOICES' | 'TECH_NOTES';
+
 export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
-  const [tab, setTab] = useState<'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAILS'>('NEW');
+  const isActualTechnician = auth.role === 'TECHNICIAN';
+  const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'NEW');
   const [form, setForm] = useState(emptyForm);
   const [query, setQuery] = useState('');
   const [orderFilter, setOrderFilter] = useState('ALL');
@@ -719,6 +727,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     });
   };
 
+  const openOrderFromWorkspace = (order: ServiceOrderSummary) => {
+    setTab('ORDERS');
+    if (expandedOrderId !== order.id) void toggleOrderHistory(order);
+    window.setTimeout(() => document.querySelector('[data-service-order-id="'+CSS.escape(order.id)+'"]')?.scrollIntoView({behavior:'smooth',block:'center'}), 120);
+  };
+
   const retryNotification = async (id: string) => {
     setNotificationBusy(true); setError(''); setNotice('');
     try {
@@ -739,14 +753,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           <p>Przyjęcie telefonu, reklamacje, statusy oraz centralne powiadomienia klienta.</p>
         </div>
         <div className="service-tabs">
+          {isActualTechnician && <button className={tab === 'CALENDAR' ? 'active' : ''} onClick={() => setTab('CALENDAR')}><CalendarDays size={15}/> Plan pracy</button>}
           <button className={tab === 'NEW' ? 'active' : ''} onClick={() => setTab('NEW')}><ClipboardPlus size={15}/> Nowe zlecenie</button>
           <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia</button>
           <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
           {canHandleCustomerQuotes && <button className={tab === 'QUOTES' ? 'active' : ''} onClick={() => {setTab('QUOTES');void loadCustomerQuotes(pointId);}}><MessageSquareText size={15}/> Wyceny klientów{customerQuotes.filter((item)=>item.status==='OPEN').length > 0 && <b className="service-tab-count">{customerQuotes.filter((item)=>item.status==='OPEN').length}</b>}</button>}
+          {canEditCosts && <button className={tab === 'INVOICES' ? 'active' : ''} onClick={() => setTab('INVOICES')}><FileArchive size={15}/> Magazyn faktur</button>}
+          {isActualTechnician && <button className={tab === 'TECH_NOTES' ? 'active' : ''} onClick={() => setTab('TECH_NOTES')}><NotebookPen size={15}/> Moje notatki</button>}
           {canManageGmail && <button className={tab === 'EMAILS' ? 'active' : ''} onClick={() => { setTab('EMAILS'); void loadMailData(pointId); }}><BellRing size={15}/> Powiadomienia</button>}
         </div>
       </section>
 
+      {isActualTechnician && <MonthlyInvoicePrompt onOpenWarehouse={() => setTab('INVOICES')}/>}
       {showGmailOnboarding && (
         <section className="panel-card service-mail-card">
           <div className="service-mail-copy">
@@ -773,6 +791,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       </div>}
       {notice && <div className="service-success"><span>{notice}</span></div>}
       {error && <div className="service-error">{error}</div>}
+
+      {tab === 'CALENDAR' && isActualTechnician && <TechnicianCalendar onOpenOrder={openOrderFromWorkspace}/>}
+      {tab === 'INVOICES' && canEditCosts && <InvoiceWarehouse/>}
+      {tab === 'TECH_NOTES' && isActualTechnician && <TechnicianNotesRoom/>}
 
       {tab === 'NEW' && (
         <div className="service-grid">
@@ -842,6 +864,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
               const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
               const canCancelHere = canCancelService && canOperateCurrentPoint && !order.openTransfer;
+              const canUseOrderFinance = canEditCosts && (!isActualTechnician || order.assignedTechnicianId === auth.user?.id);
               return (
                 <article key={order.id} data-service-order-id={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''} workflow-${(order.workflow?.attentionCode || 'ACTIVE').toLowerCase()}`}>
                   <div className="service-order-row">
@@ -919,6 +942,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           {canEditIntakeHere && <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
                         </section>
                       )}
+
+                      {canUseOrderFinance && <OrderCostingCard order={order}/>}
 
                       <section className="service-workspace-card service-transfer-card">
                         <div className="service-workspace-title"><Truck size={15}/><div><strong>Logistyka urządzenia</strong><span>Punkt macierzysty jest stały, a transport jest prowadzony niezależnie od statusu naprawy.</span></div></div>
