@@ -86,7 +86,7 @@ contextBridge.exposeInMainWorld('lockOn', {
   },
   assistant: {
     getConversation: () => ipcRenderer.invoke('assistant:getConversation'),
-    send: (message: string) => ipcRenderer.invoke('assistant:send', message)
+    send: (message: string, target?: 'BOT' | 'CONSULTANT') => ipcRenderer.invoke('assistant:send', message, target)
   },
   diagnostics: {
     internetSpeed: () => ipcRenderer.invoke('diagnostics:internetSpeed'),
@@ -98,7 +98,8 @@ contextBridge.exposeInMainWorld('lockOn', {
     listTickets: () => ipcRenderer.invoke('support:listTickets'),
     take: (ticketId: string) => ipcRenderer.invoke('support:take', ticketId),
     reply: (ticketId: string, message: string) => ipcRenderer.invoke('support:reply', ticketId, message),
-    close: (ticketId: string) => ipcRenderer.invoke('support:close', ticketId)
+    close: (ticketId: string) => ipcRenderer.invoke('support:close', ticketId),
+    leave: () => ipcRenderer.invoke('support:leave')
   },
   website: {
     createAuthCode: () => ipcRenderer.invoke('website:createAuthCode')
