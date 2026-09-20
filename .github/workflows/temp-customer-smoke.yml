@@ -1,0 +1,26 @@
+name: Smoke customer accounts Neon temp
+
+on:
+  push:
+    paths:
+      - ".github/workflows/temp-customer-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Smoke temporary customer backend
+        shell: bash
+        env:
+          BASE: https://br-frosty-shadow-b17elnrj-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+        run: |
+          set -euo pipefail
+          h="$(mktemp)"; code="$(curl -sS -o "$h" -w '%{http_code}' "$BASE/health")"; test "$code" = 200; grep -q '"ok":true' "$h"
+          cfg="$(mktemp)"; code="$(curl -sS -o "$cfg" -w '%{http_code}' -H 'Origin: https://app.serviceos.pl' "$BASE/public/customer-portal/config")"; test "$code" = 200; grep -q '"googleEnabled":true' "$cfg"
+          bad="$(mktemp)"; code="$(curl -sS -o "$bad" -w '%{http_code}' -H 'Origin: https://app.serviceos.pl' -H 'Content-Type: application/json' --data '{"customerId":"BAD"}' "$BASE/public/customer-portal/login")"; test "$code" = 400; grep -q '"error":"CUSTOMER_ID"' "$bad"
+          google="$(mktemp)"; code="$(curl -sS -o "$google" -w '%{http_code}' -H 'Origin: https://app.serviceos.pl' -H 'Content-Type: application/json' --data '{"idToken":"not-real"}' "$BASE/public/customer-portal/google/login")"; test "$code" = 401; grep -q '"error":"GOOGLE_AUTH_FAILED"' "$google"
+          staff="$(mktemp)"; code="$(curl -sS -o "$staff" -w '%{http_code}' -H 'Origin: https://app.serviceos.pl' "$BASE/customer-accounts")"; test "$code" = 401
