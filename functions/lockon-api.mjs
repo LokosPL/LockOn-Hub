@@ -1974,7 +1974,7 @@ const processNotification = async (notificationId) => {
     try {
       const portalIdentity = await ensureCustomerPortalCode(item.customer_id);
       item.customer_portal_code = portalIdentity.code;
-      item.customer_portal_url = PUBLIC_PORTAL_URL + '/klient.html';
+      item.customer_portal_url = customerPortalAutoUrl(portalIdentity.code,item.service_order_id);
     } catch (error) {
       console.error('[customer portal code]', error);
       item.customer_portal_code = '';
@@ -1994,11 +1994,19 @@ const processNotification = async (notificationId) => {
       "UPDATE notification_outbox SET status='PROCESSING',attempts=$2,last_error=NULL,subject=$3,body_text=$4,body_html=$5,updated_at=now() WHERE id=$1",
       [notificationId, attempt, subject, textBody, htmlBody]
     );
-    const sent = await sendGmail(item, item.recipient, subject, textBody, htmlBody, rendered.displayName);
+    const attachments=[];
+    if(item.template_key==='SERVICE_INTAKE_CARD'){
+      const card=await renderServiceCardPdf(item.service_order_id,'CUSTOMER');
+      attachments.push({fileName:card.fileName,contentType:'application/pdf',content:card.buffer});
+    }
+    const sent = await sendGmail(item, item.recipient, subject, textBody, htmlBody, rendered.displayName, attachments);
     await q(
       "UPDATE notification_outbox SET status='SENT',sent_at=now(),provider_message_id=$2,last_error=NULL,updated_at=now() WHERE id=$1",
       [notificationId, sent.id]
     );
+    if(item.template_key==='SERVICE_INTAKE_CARD'){
+      await q("UPDATE service_order_cards SET customer_email_sent_at=now(),customer_email_last_error=NULL,updated_at=now() WHERE service_order_id=$1",[item.service_order_id]);
+    }
     if(item.sender_point_id) await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1", [item.sender_point_id]);
     return { sent: true, status: 'SENT', messageId: sent.id, attempts: attempt };
   } catch (error) {
@@ -2007,6 +2015,9 @@ const processNotification = async (notificationId) => {
       "UPDATE notification_outbox SET status='FAILED',last_error=$2,available_at=$3,updated_at=now() WHERE id=$1",
       [notificationId, message, nextAttemptAt]
     );
+    if(item.template_key==='SERVICE_INTAKE_CARD'){
+      await q("UPDATE service_order_cards SET customer_email_last_error=$2,updated_at=now() WHERE service_order_id=$1",[item.service_order_id,message]).catch(()=>undefined);
+    }
     if(isGmailReauthError(error)){
       if(item.sender_point_id) await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1", [item.sender_point_id, message]);
     }else{
