@@ -27,6 +27,7 @@ export type UserRole = 'OWNER' | 'BOSS' | 'COORDINATOR' | 'SUPPORT' | 'TECHNICIA
 
 export const APP_CONFIG = {
   name: 'LockOn ServiceOS',
+  productVersion: '1.0.0.0',
   author: 'Bartłomiej Motłoch',
   defaultPoint: {
     id: 'nowogard',
