@@ -31,6 +31,11 @@ jobs:
         run: |
           grep -q 'support_enabled' functions/lockon-api.mjs
           grep -q '/support/presence' functions/lockon-api.mjs
+          grep -q '/support/leave' functions/lockon-api.mjs
+          grep -q 'normalizeSupportTarget' functions/lockon-api.mjs
+          grep -q 'SELF_SUPPORT_NOT_ALLOWED' functions/lockon-api.mjs
+          grep -q "metadata->>'target'='CONSULTANT'" functions/lockon-api.mjs
+          grep -q "target:'BOT'" functions/lockon-api.mjs
           grep -q 'consultant_requested_at' functions/lockon-api.mjs
           grep -q 'customer_portal_code' functions/lockon-api.mjs
           grep -q "error: 'WEB_CODE_ONLY'" functions/lockon-api.mjs
