@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BadgeDollarSign, BellRing, CalendarClock, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus,
-  Clock3, FileArchive, History, IdCard, Mail, MailCheck, MapPin, MessageSquareText, NotebookPen, PackageCheck, RefreshCw, RotateCcw, Save, Search, Send,
+  Clock3, FileArchive, History, IdCard, Mail, MailCheck, MapPin, MessageSquareText, NotebookPen, PackageCheck, Printer, RefreshCw, RotateCcw, Save, Search, Send,
   Settings2, Smartphone, StickyNote, Truck, UserCog, UserRound, XCircle
 } from 'lucide-react';
 import { InvoiceWarehouse } from '../components/InvoiceWarehouse';
@@ -37,7 +37,6 @@ const emptyForm = {
   firstName: '', lastName: '', email: '', phone: '',
   brand: '', model: '', imei: '', serialNumber: '', deviceNotes: '',
   issueDescription: '', orderType: 'REPAIR' as 'REPAIR' | 'COMPLAINT',
-  handlingMode: 'STANDARD' as 'STANDARD' | 'TRANSFER_ONLY',
   assignedTechnicianId: '', estimatedCost: '', estimatedCompletionAt: ''
 };
 
@@ -96,6 +95,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [busy, setBusy] = useState(false);
   const [ordersBusy, setOrdersBusy] = useState(false);
   const [result, setResult] = useState<ServiceCreateOrderResult | null>(null);
+  const [cardChoice, setCardChoice] = useState<{orderId:string;orderNumber:number}|null>(null);
+  const [cardBusy, setCardBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [gmail, setGmail] = useState<GmailConnectionStatus | null>(null);
@@ -375,8 +376,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       setError('Uzupełnij imię, nazwisko, markę, model i opis usterki.');
       return;
     }
-    if (!cleanEmail && !cleanPhone) {
-      setError('Podaj adres e-mail lub numer telefonu klienta.');
+    if (!cleanEmail || !cleanPhone) {
+      setError('Podaj adres e-mail i numer telefonu klienta.');
       return;
     }
     if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
@@ -399,11 +400,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         ...form,
         imei: cleanImei,
         pointId,
-        estimatedCost: canEditCosts && form.handlingMode === 'STANDARD' && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
-        assignedTechnicianId: canManageOrderMeta && form.handlingMode === 'STANDARD' ? form.assignedTechnicianId || undefined : undefined,
-        estimatedCompletionAt: form.handlingMode === 'STANDARD' && form.estimatedCompletionAt ? new Date(form.estimatedCompletionAt).toISOString() : undefined
+        estimatedCost: canEditCosts && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
+        assignedTechnicianId: canManageOrderMeta ? form.assignedTechnicianId || undefined : undefined,
+        estimatedCompletionAt: form.estimatedCompletionAt ? new Date(form.estimatedCompletionAt).toISOString() : undefined
       });
       setResult(created);
+      if(created.serviceCard?.required && created.order.orderNumber != null){
+        setCardChoice({orderId:created.order.id,orderNumber:created.order.orderNumber});
+      }
       if (created.reusedDevice) {
         setNotice('Zlecenie utworzone. Rozpoznano istniejące urządzenie klienta i użyto jego karty.');
       }
@@ -413,8 +417,6 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         setNotice('Zlecenie utworzone. Potwierdzenie e-mail trafiło do kolejki i zostanie ponowione automatycznie w razie błędu.');
       } else if (created.notification?.reason === 'NO_CUSTOMER_EMAIL') {
         setNotice('Zlecenie utworzone. Klient nie ma adresu e-mail, więc potwierdzenie nie zostało wysłane.');
-      } else if (created.notification?.reason === 'AUTOMATIC_EMAIL_DISABLED' || created.notification?.reason === 'STATUS_NOT_ENABLED') {
-        setNotice('Zlecenie utworzone. Automatyczne potwierdzenie przyjęcia jest wyłączone w ustawieniach punktu.');
       } else if (created.notification?.reason === 'NO_SENDER') {
         setNotice('Zlecenie utworzone, ale nie znaleziono aktywnego firmowego nadawcy Gmail.');
       }
@@ -425,6 +427,20 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się utworzyć zlecenia.');
     } finally { setBusy(false); }
+  };
+
+  const openCreatedServiceCard = async (printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY') => {
+    if(!cardChoice||cardBusy)return;
+    setCardBusy(true);setError('');
+    try{
+      await window.lockOn.service.openServiceCard(cardChoice.orderId,printMode);
+      setNotice(printMode==='PHYSICAL_AND_ONLINE'
+        ? 'Otworzono kartę A4: część do urządzenia + część dla klienta. Dokument klienta został także wysłany e-mailem.'
+        : 'Otworzono kartę do urządzenia. Dokument klienta został wysłany e-mailem i pozostaje w jego panelu.');
+      setCardChoice(null);
+    }catch(e){
+      setError(e instanceof Error?e.message:'Nie udało się otworzyć karty serwisowej.');
+    }finally{setCardBusy(false);}
   };
 
   const changeStatus = async (order: ServiceOrderSummary, status: string) => {
@@ -489,10 +505,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         estimatedCompletionAt: order.handlingMode === 'TRANSFER_ONLY'
           ? null
           : (draft.estimatedCompletionAt ? new Date(draft.estimatedCompletionAt).toISOString() : null),
-        ...(order.handlingMode === 'STANDARD' && canManageOrderMeta ? {
+        ...(order.handlingMode !== 'TRANSFER_ONLY' && canManageOrderMeta ? {
           assignedTechnicianId: draft.assignedTechnicianId || null
         } : {}),
-        ...(order.handlingMode === 'STANDARD' && canEditCosts ? {
+        ...(order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts ? {
           estimatedCost: draft.estimatedCost === '' ? null : Number(draft.estimatedCost),
           finalCost: draft.finalCost === '' ? null : Number(draft.finalCost)
         } : {})
@@ -764,6 +780,23 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         </div>
       </section>
 
+      {cardChoice && <div className="service-card-choice-backdrop" role="presentation">
+        <section className="service-card-choice-dialog" role="dialog" aria-modal="true" aria-labelledby="service-card-choice-title">
+          <div className="service-card-choice-icon"><Printer size={24}/></div>
+          <span>KARTA SERWISOWA · ZLECENIE #{cardChoice.orderNumber}</span>
+          <h2 id="service-card-choice-title">Jaką kartę przygotować przy ladzie?</h2>
+          <p>Karta klienta PDF została automatycznie przypięta do potwierdzenia e-mail. Wybierz wydruk dla obsługi fizycznej urządzenia.</p>
+          <div className="service-card-choice-options">
+            <button disabled={cardBusy} onClick={()=>void openCreatedServiceCard('PHYSICAL_AND_ONLINE')}>
+              <strong>A4 · fizyczna + online</strong><span>Pozioma kartka: karta urządzenia + karta klienta, z linią cięcia pośrodku.</span>
+            </button>
+            <button disabled={cardBusy} onClick={()=>void openCreatedServiceCard('ONLINE_ONLY')}>
+              <strong>Tylko online</strong><span>Drukowana jest wyłącznie karta do urządzenia. Klient korzysta z PDF/QR z e-maila i panelu.</span>
+            </button>
+          </div>
+          {cardBusy && <small>Generuję zabezpieczony PDF…</small>}
+        </section>
+      </div>}
       {isActualTechnician && <MonthlyInvoicePrompt onOpenWarehouse={() => setTab('INVOICES')}/>}
       {showGmailOnboarding && (
         <section className="panel-card service-mail-card">
@@ -824,17 +857,19 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               <label><span>Model</span><input value={form.model} onChange={(e)=>update('model',e.target.value)} /></label>
               <label><span>IMEI</span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="Opcjonalnie"/></label>
               <label><span>Numer seryjny</span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Opcjonalnie"/></label>
-              <label className="full"><span>Punkt</span><select value={pointId} onChange={(e)=>{setPointId(e.target.value);update('assignedTechnicianId','');}}>{pointOptions.map((p)=><option key={p.id} value={p.id}>{p.name}{p.city ? ' — ' + p.city : ''}</option>)}</select></label>
-              <label><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Nowe zlecenie</option><option value="COMPLAINT">Zlecenie reklamacyjne</option></select></label>
-              <label className="full"><span>Sposób obsługi</span><select value={form.handlingMode} onChange={(e)=>update('handlingMode', e.target.value as 'STANDARD' | 'TRANSFER_ONLY')}><option value="STANDARD">Normalny serwis — statusy, diagnoza i naprawa</option><option value="TRANSFER_ONLY">Tylko przekazanie — logistyka bez zmiany statusów naprawy</option></select></label>
-              {form.handlingMode === 'TRANSFER_ONLY' && <div className="service-mode-note full"><Truck size={16}/><div><strong>Tylko przekazanie</strong><span>To zlecenie służy wyłącznie do przekazywania urządzenia między punktami. Status naprawy pozostaje zablokowany; dostępne jest jedynie anulowanie zlecenia.</span></div></div>}
-              {form.handlingMode === 'STANDARD' && canEditStatus && <label><span>Przewidywany termin</span><input type="datetime-local" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>}
-              {form.handlingMode === 'STANDARD' && canManageOrderMeta && <label><span>Technik</span><select value={form.assignedTechnicianId} onChange={(e)=>update('assignedTechnicianId',e.target.value)}><option value="">Nieprzypisany</option>{technicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
-              {form.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>}
+              <div className="service-auto-intake full">
+                <div><MapPin size={15}/><span>Punkt przyjęcia</span><strong>{pointOptions.find((p)=>p.id===pointId)?.name ?? 'Brak aktywnego punktu'}</strong></div>
+                <div><ClipboardList size={15}/><span>Sposób obsługi</span><strong>{form.orderType==='COMPLAINT'?'Reklamacja — ustawione automatycznie':'Standardowa naprawa — ustawione automatycznie'}</strong></div>
+              </div>
+              <label><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Naprawa</option><option value="COMPLAINT">Reklamacja</option></select></label>
+              {canEditStatus && <label><span>Przewidywany termin</span><input type="datetime-local" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>}
+              {canManageOrderMeta && <label><span>Technik</span><select value={form.assignedTechnicianId} onChange={(e)=>update('assignedTechnicianId',e.target.value)}><option value="">Nieprzypisany</option>{technicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+              {canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>}
               <label className="full"><span>Uwagi do urządzenia</span><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Stan obudowy, hasło serwisowe przekazane osobno, akcesoria…"/></label>
               <label className="full"><span>Opis usterki</span><textarea rows={6} value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} /></label>
             </div>
             <button className="button primary wide service-submit" disabled={busy || !pointId} onClick={()=>void submit()}>{busy ? 'Zapisywanie…' : 'Utwórz zlecenie'}</button>
+            <small className="service-intake-email-note">Po przyjęciu klient zawsze otrzymuje e-mail z kartą serwisową PDF i bezpośrednim QR do swojego panelu.</small>
           </section>
         </div>
       )}
@@ -895,7 +930,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           : <><span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span><span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleString('pl-PL') : 'Brak terminu'}</span></>}
                         <span><MapPin size={11}/>Macierzysty: {order.homePointName || order.pointName}</span>
                         <span><Truck size={11}/>Lokalizacja: {order.currentLocationLabel || order.currentPointName || order.pointName}</span>
-                        {canEditCosts && order.handlingMode === 'STANDARD' && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
+                        {canEditCosts && order.handlingMode !== 'TRANSFER_ONLY' && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
                       </div>
                     </div>
                     <div className="service-order-actions">
@@ -933,10 +968,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="service-details-grid">
                             <label><span>IMEI</span><input disabled={!canEditIntakeHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
                             <label><span>Numer seryjny</span><input disabled={!canEditIntakeHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
-                            {order.handlingMode === 'STANDARD' && canEditStatus && <label><span>Przewidywany termin</span><input disabled={!canEditOrderHere} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>}
-                            {order.handlingMode === 'STANDARD' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditOrderHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
-                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
-                            {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditStatus && <label><span>Przewidywany termin</span><input disabled={!canEditOrderHere} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditOrderHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
                             <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditIntakeHere} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
                           </div>
                           {canEditIntakeHere && <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
