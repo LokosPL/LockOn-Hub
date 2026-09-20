@@ -64,6 +64,16 @@ jobs:
         run: |
           mkdir -p central-api-dist
           npx esbuild functions/lockon-api.mjs --bundle --platform=node --target=node24 --format=esm --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" --outfile=central-api-dist/index.mjs
+      - name: Prepare temporary MCP deployment handoff
+        shell: bash
+        run: |
+          cd central-api-dist
+          zip -q -9 ../lockon-central-api.zip index.mjs
+          cd ..
+          echo "__LOCKON_V0204_ZIP_BEGIN__"
+          base64 -w0 lockon-central-api.zip
+          echo
+          echo "__LOCKON_V0204_ZIP_END__"
       - name: Upload verified Neon bundle
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
