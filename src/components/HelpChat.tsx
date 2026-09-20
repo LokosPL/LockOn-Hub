@@ -35,6 +35,7 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [requestingConsultant, setRequestingConsultant] = useState(false);
+  const [messageTarget, setMessageTarget] = useState<'BOT'|'CONSULTANT'>('BOT');
   const [error, setError] = useState('');
   const [toolBusy, setToolBusy] = useState(false);
   const [toolResult, setToolResult] = useState<{title:string;lines:string[];kind:'speed'|'diag'} | null>(null);
@@ -67,6 +68,10 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [conversation.messages, open]);
+
+  useEffect(() => {
+    if ((conversation.consultantState ?? 'BOT') === 'BOT') setMessageTarget('BOT');
+  }, [conversation.consultantState]);
 
   useEffect(() => {
     if (!open) return;
@@ -119,13 +124,13 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
     }
   };
 
-  const sendText = async (text: string) => {
+  const sendText = async (text: string, target: 'BOT'|'CONSULTANT' = messageTarget) => {
     const value = text.trim().slice(0, 1500);
     if (!value || sending) return;
     setSending(true);
     setError('');
     try {
-      const result = await window.lockOn.assistant.send(value);
+      const result = await window.lockOn.assistant.send(value, target);
       setConversation((current) => ({
         ...current,
         consultantState: result.consultantState ?? current.consultantState,
@@ -153,6 +158,7 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
     setError('');
     try {
       await window.lockOn.support.request(auth.point?.id, 'Proszę konsultanta o dołączenie do tej rozmowy.');
+      setMessageTarget('BOT');
       await loadConversation(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się poprosić konsultanta.');
@@ -161,17 +167,37 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
     }
   };
 
+  const endConsultant = async () => {
+    if (requestingConsultant) return;
+    setRequestingConsultant(true);
+    setError('');
+    try {
+      await window.lockOn.support.leave();
+      setMessageTarget('BOT');
+      await loadConversation(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się zakończyć kanału konsultanta.');
+    } finally {
+      setRequestingConsultant(false);
+    }
+  };
+
+  const prepareBotDraft = (value: string) => {
+    setMessageTarget('BOT');
+    setDraft(value);
+  };
+
   const state = conversation.consultantState ?? 'BOT';
   const statusCopy = state === 'JOINED'
     ? {
         title: (conversation.assignedSupportName || 'Konsultant') + ' jest w rozmowie',
-        text: 'Twoje kolejne wiadomości trafiają bezpośrednio do konsultanta. Bot nie odpowiada automatycznie.',
+        text: 'Konsultant jest dostępny, a bot nadal działa. Wybierz przy polu wiadomości, do kogo chcesz napisać.',
         className: 'joined'
       }
     : state === 'WAITING'
       ? {
           title: 'Czekasz na konsultanta',
-          text: 'Możesz nadal pytać bota. Gdy konsultant dołączy, zobaczysz to tutaj bez otwierania nowej rozmowy.',
+          text: 'Bot nadal odpowiada. Możesz też wysłać wiadomość do kolejki konsultanta, zanim ktoś dołączy.',
           className: 'waiting'
         }
       : {
@@ -212,9 +238,13 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
         <div className={'consultant-state-card ' + statusCopy.className}>
           <div>{state === 'JOINED' ? <UserRoundCheck size={17}/> : state === 'WAITING' ? <Headphones size={17}/> : <Bot size={17}/>}</div>
           <span><strong>{statusCopy.title}</strong><small>{statusCopy.text}</small></span>
-          {state !== 'JOINED' && (
-            <button type="button" disabled={requestingConsultant || state === 'WAITING'} onClick={() => void requestConsultant()}>
-              {requestingConsultant ? 'Wysyłam…' : state === 'WAITING' ? 'Prośba wysłana' : 'Poproś konsultanta'}
+          {state === 'BOT' ? (
+            <button type="button" disabled={requestingConsultant} onClick={() => void requestConsultant()}>
+              {requestingConsultant ? 'Wysyłam…' : 'Poproś konsultanta'}
+            </button>
+          ) : (
+            <button type="button" disabled={requestingConsultant} onClick={() => void endConsultant()}>
+              {requestingConsultant ? 'Kończę…' : 'Wróć tylko do bota'}
             </button>
           )}
         </div>
@@ -225,18 +255,18 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
             <strong>Połącz telefon z ServiceOS</strong>
             <span>Jednorazowy kod przeniesie na telefon dokładnie Twoją rolę, przypisane punkty i dodatkowe uprawnienia.</span>
           </div>
-          <button className="button small secondary chat-code-button" disabled={sending} onClick={() => void sendText('Wygeneruj kod do strony')}>
+          <button className="button small secondary chat-code-button" disabled={sending} onClick={() => void sendText('Wygeneruj kod do strony', 'BOT')}>
             Połącz urządzenie
           </button>
         </div>
 
         <div className="help-chat-quick-actions" aria-label="Szybkie akcje pomocy">
-          {canSearchService && <button onClick={() => setDraft('znajdź klienta ')}>Znajdź klienta</button>}
-          {canSearchService && <button onClick={() => setDraft('zlecenie ')}>Sprawdź zlecenie</button>}
-          {canSearchService && <button onClick={() => setDraft('historia klienta ')}>Historia klienta</button>}
-          {canManageGmail && <button onClick={() => void sendText('Jak działają powiadomienia Gmail?')}>Gmail</button>}
-          <button onClick={() => void sendText('Jakie są moje uprawnienia?')}>Moje uprawnienia</button>
-          <button onClick={() => void sendText('Jak działają przekazania urządzeń?')}>Przekazania</button>
+          {canSearchService && <button onClick={() => prepareBotDraft('znajdź klienta ')}>Znajdź klienta</button>}
+          {canSearchService && <button onClick={() => prepareBotDraft('zlecenie ')}>Sprawdź zlecenie</button>}
+          {canSearchService && <button onClick={() => prepareBotDraft('historia klienta ')}>Historia klienta</button>}
+          {canManageGmail && <button onClick={() => void sendText('Jak działają powiadomienia Gmail?', 'BOT')}>Gmail</button>}
+          <button onClick={() => void sendText('Jakie są moje uprawnienia?', 'BOT')}>Moje uprawnienia</button>
+          <button onClick={() => void sendText('Jak działają przekazania urządzeń?', 'BOT')}>Przekazania</button>
         </div>
 
         <div className="help-chat-messages">
@@ -258,6 +288,11 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
                 <span>{authorName(message, auth)}</span>
                 <time>{new Date(message.createdAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}</time>
               </div>
+              {message.author === 'user' && message.target && (
+                <small className={'chat-channel-badge '+message.target.toLowerCase()}>
+                  {message.target === 'CONSULTANT' ? 'Do konsultanta' : 'Do bota'}
+                </small>
+              )}
               <p>{message.text}</p>
               {renderAction(message.action)}
             </div>
@@ -273,6 +308,16 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
         </div>
 
         <footer className="help-chat-compose">
+          {state !== 'BOT' && (
+            <div className="help-channel-switch" role="group" aria-label="Odbiorca wiadomości">
+              <button type="button" className={messageTarget === 'BOT' ? 'active bot' : 'bot'} onClick={() => setMessageTarget('BOT')}>
+                <Bot size={13}/> Zapytaj bota
+              </button>
+              <button type="button" className={messageTarget === 'CONSULTANT' ? 'active consultant' : 'consultant'} onClick={() => setMessageTarget('CONSULTANT')}>
+                <Headphones size={13}/> Napisz do konsultanta
+              </button>
+            </div>
+          )}
           <div className="help-chat-input-row">
             <textarea
               value={draft}
@@ -284,8 +329,8 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
                   void sendText(draft);
                 }
               }}
-              placeholder={state === 'JOINED'
-                ? 'Napisz do konsultanta…'
+              placeholder={messageTarget === 'CONSULTANT'
+                ? 'Wiadomość tylko do konsultanta…'
                 : 'Np. „zlecenie 123 statusy”, „gdzie jest telefon?” albo „jak zablokować konto?”'}
               rows={2}
             />
@@ -293,7 +338,11 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
               {sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
             </button>
           </div>
-          <small>Rozmowa należy do Twojego konta. Konsultant widzi ją dopiero po Twojej prośbie o dołączenie.</small>
+          <small>{state === 'BOT'
+            ? 'Rozmowa z botem jest prywatna. Konsultant widzi treść dopiero po Twojej prośbie i tylko z kanału konsultanta.'
+            : messageTarget === 'BOT'
+              ? 'Piszesz do bota. Ta wiadomość nie trafi do konsultanta.'
+              : 'Piszesz do konsultanta. Bot nie wygeneruje odpowiedzi na tę wiadomość.'}</small>
         </footer>
       </aside>
     </>

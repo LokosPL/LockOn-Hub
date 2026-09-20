@@ -1623,6 +1623,44 @@ const getOrCreateConversation = async (userId) => {
   return result.rows[0];
 };
 
+const normalizeSupportTarget = (value) =>
+  String(value || '').trim().toUpperCase() === 'CONSULTANT' ? 'CONSULTANT' : 'BOT';
+
+const supportMessageView = (row) => {
+  const author = row.sender_kind.toLowerCase();
+  const explicitTarget = row.metadata?.target;
+  const target = explicitTarget === 'BOT' || explicitTarget === 'CONSULTANT'
+    ? explicitTarget
+    : row.sender_kind === 'ASSISTANT'
+      ? 'BOT'
+      : row.sender_kind === 'SUPPORT'
+        ? 'CONSULTANT'
+        : null;
+  return {
+    id: row.id,
+    author,
+    text: row.body,
+    action: row.metadata?.action || null,
+    target,
+    createdAt: row.created_at
+  };
+};
+
+const repairSelfSupportAssignment = async (session) => {
+  const { rows } = await q(
+    "UPDATE support_conversations SET assigned_support_user_id=NULL,taken_at=NULL,consultant_requested_at=NULL,consultant_joined_at=NULL,updated_at=now() WHERE user_id=$1 AND assigned_support_user_id=$1 AND status='OPEN' RETURNING id,point_id",
+    [session.user.id]
+  );
+  for (const row of rows) {
+    await q(
+      "INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,NULL,'SYSTEM',$3,$4::jsonb)",
+      [makeId('msg'),row.id,'ServiceOS zakończył nieprawidłowe przypisanie własnej rozmowy do tego samego konta. Bot pozostaje dostępny.',JSON.stringify({target:'CONSULTANT',event:'SELF_ASSIGNMENT_REPAIR'})]
+    );
+    await audit(session,'SUPPORT_SELF_ASSIGNMENT_REPAIRED','support_conversation',row.id,row.point_id,{});
+  }
+  return rows.length;
+};
+
 const conversationPayload = async (userId) => {
   const conversation = (await q(
     "SELECT sc.*,ass.name AS assigned_support_name FROM support_conversations sc LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.user_id=$1 AND sc.status='OPEN' ORDER BY sc.updated_at DESC LIMIT 1",
@@ -1640,13 +1678,7 @@ const conversationPayload = async (userId) => {
     assignedSupportUserId: conversation.assigned_support_user_id || null,
     assignedSupportName: conversation.assigned_support_name || null,
     consultantState: conversation.assigned_support_user_id ? 'JOINED' : conversation.consultant_requested_at ? 'WAITING' : 'BOT',
-    messages: rows.map((row) => ({
-      id: row.id,
-      author: row.sender_kind.toLowerCase(),
-      text: row.body,
-      action: row.metadata?.action || null,
-      createdAt: row.created_at
-    }))
+    messages: rows.map(supportMessageView)
   };
 };
 
@@ -3976,7 +4008,9 @@ const route = async (request) => {
   }
 
   if(method==='GET'&&url.pathname==='/support/conversation'){
-    const session=await requireActive(request);return json(request,await conversationPayload(session.user.id));
+    const session=await requireActive(request);
+    await repairSelfSupportAssignment(session);
+    return json(request,await conversationPayload(session.user.id));
   }
 
   if(method==='POST'&&url.pathname==='/support/request'){
@@ -3993,14 +4027,27 @@ const route = async (request) => {
       conversation=(await q("UPDATE support_conversations SET point_id=$2,updated_at=now() WHERE id=$1 RETURNING *",[conversation.id,pointId])).rows[0];
     }
     const note=cleanText(body.message,1500);
-    if(note)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'USER',$4)",[makeId('msg'),conversation.id,u.id,note]);
+    if(note)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'USER',$4,$5::jsonb)",[makeId('msg'),conversation.id,u.id,note,JSON.stringify({target:'CONSULTANT'})]);
     const firstRequest=!conversation.consultant_requested_at;
     if(firstRequest){
-      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,NULL,'SYSTEM',$3)",[makeId('msg'),conversation.id,'Poproszono konsultanta o pomoc. Do czasu dołączenia konsultanta możesz nadal korzystać z bota.']);
+      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,NULL,'SYSTEM',$3,$4::jsonb)",[makeId('msg'),conversation.id,'Poproszono konsultanta o pomoc. Bot pozostaje dostępny niezależnie od kanału konsultanta.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_REQUESTED'})]);
     }
     await q("UPDATE support_conversations SET consultant_requested_at=COALESCE(consultant_requested_at,now()),updated_at=now() WHERE id=$1",[conversation.id]);
     await audit(session,'SUPPORT_REQUESTED','support_conversation',conversation.id,pointId,{firstRequest});
     return json(request,{ok:true,conversationId:conversation.id,pointId,consultantState:'WAITING'},201);
+  }
+
+  if(method==='POST'&&url.pathname==='/support/leave'){
+    const session=await requireActive(request),u=session.user;
+    const conversation=(await q("SELECT id,point_id,assigned_support_user_id,consultant_requested_at FROM support_conversations WHERE user_id=$1 AND status='OPEN' ORDER BY updated_at DESC LIMIT 1",[u.id])).rows[0];
+    if(!conversation)return json(request,{ok:true,consultantState:'BOT'});
+    const hadHumanChannel=Boolean(conversation.assigned_support_user_id||conversation.consultant_requested_at);
+    if(hadHumanChannel){
+      await q("UPDATE support_conversations SET assigned_support_user_id=NULL,taken_at=NULL,consultant_requested_at=NULL,consultant_joined_at=NULL,updated_at=now() WHERE id=$1",[conversation.id]);
+      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,NULL,'SYSTEM',$3,$4::jsonb)",[makeId('msg'),conversation.id,'Rozmowa z konsultantem została zakończona. Bot nadal jest dostępny.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_LEFT'})]);
+      await audit(session,'SUPPORT_LEFT','support_conversation',conversation.id,conversation.point_id,{});
+    }
+    return json(request,{ok:true,consultantState:'BOT'});
   }
 
   if(method==='GET'&&url.pathname==='/support/presence'){
@@ -4027,12 +4074,12 @@ const route = async (request) => {
     requireSupportAccess(u);
     const ids=await visiblePointIds(u);
     const {rows}=GLOBAL_ROLES.has(u.role_code)
-      ? await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200")
-      : await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL AND sc.point_id=ANY($1::text[]) ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[ids]);
+      ? await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL AND sc.user_id<>$1 ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[u.id])
+      : await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,p.name AS point_name,ass.name AS assigned_name FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL AND sc.point_id=ANY($1::text[]) AND sc.user_id<>$2 ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[ids,u.id]);
     const tickets=[];
     for(const row of rows){
-      const messages=(await q("SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 200",[row.id])).rows;
-      tickets.push({id:row.id,userId:row.user_id,userName:row.user_name,userEmail:row.user_email,pointId:row.point_id,pointName:row.point_name||'Brak punktu',status:row.status,assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_name||null,consultantRequestedAt:row.consultant_requested_at||null,consultantJoinedAt:row.consultant_joined_at||row.taken_at||null,createdAt:row.created_at,updatedAt:row.updated_at,messages:messages.map(m=>({id:m.id,author:m.sender_kind.toLowerCase(),text:m.body,action:m.metadata?.action||null,createdAt:m.created_at}))});
+      const messages=(await q("SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 AND (metadata->>'target'='CONSULTANT' OR sender_kind='SUPPORT' OR (sender_kind='USER' AND metadata->>'target' IS NULL AND $2::timestamptz IS NOT NULL AND created_at >= $2::timestamptz)) ORDER BY created_at ASC LIMIT 200",[row.id,row.consultant_joined_at||row.taken_at||null])).rows;
+      tickets.push({id:row.id,userId:row.user_id,userName:row.user_name,userEmail:row.user_email,pointId:row.point_id,pointName:row.point_name||'Brak punktu',status:row.status,assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_name||null,consultantRequestedAt:row.consultant_requested_at||null,consultantJoinedAt:row.consultant_joined_at||row.taken_at||null,createdAt:row.created_at,updatedAt:row.updated_at,messages:messages.map(supportMessageView)});
     }
     return json(request,tickets);
   }
@@ -4043,23 +4090,25 @@ const route = async (request) => {
     requireSupportAccess(u);
     const ticket=(await q("SELECT * FROM support_conversations WHERE id=$1 LIMIT 1",[supportTicketAction[1]])).rows[0];
     if(!ticket)return json(request,{error:'NOT_FOUND'},404);
+    if(ticket.user_id===u.id)return json(request,{error:'SELF_SUPPORT_NOT_ALLOWED',message:'Nie możesz obsługiwać jako konsultant własnej rozmowy.'},409);
     if(ticket.point_id)await requirePoint(u,ticket.point_id);
     const action=supportTicketAction[2],body=await readJson(request);
     if(action==='take'){
       if(!ticket.consultant_requested_at)return json(request,{error:'CONSULTANT_NOT_REQUESTED',message:'Użytkownik nie poprosił jeszcze konsultanta o dołączenie.'},409);
       const firstJoin=!ticket.assigned_support_user_id;
       await q("UPDATE support_conversations SET assigned_support_user_id=$2,taken_at=COALESCE(taken_at,now()),consultant_joined_at=COALESCE(consultant_joined_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
-      if(firstJoin)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SYSTEM',$4)",[makeId('msg'),ticket.id,u.id,(u.name||u.email||'Konsultant')+' dołączył do rozmowy.']);
+      if(firstJoin)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SYSTEM',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,(u.name||u.email||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_JOINED'})]);
       await audit(session,'SUPPORT_TAKEN','support_conversation',ticket.id,ticket.point_id,{firstJoin});
     }else if(action==='reply'){
       const message=cleanText(body.message,2000);if(!message)return json(request,{error:'MESSAGE_REQUIRED'},400);
       if(ticket.status!=='OPEN')return json(request,{error:'TICKET_CLOSED',message:'Zgłoszenie jest zamknięte.'},409);
-      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SUPPORT',$4)",[makeId('msg'),ticket.id,u.id,message]);
+      if(!ticket.consultant_requested_at)return json(request,{error:'CONSULTANT_NOT_REQUESTED',message:'Użytkownik nie poprosił konsultanta o dołączenie.'},409);
+      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SUPPORT',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,message,JSON.stringify({target:'CONSULTANT'})]);
       await q("UPDATE support_conversations SET assigned_support_user_id=COALESCE(assigned_support_user_id,$2),taken_at=COALESCE(taken_at,now()),consultant_joined_at=COALESCE(consultant_joined_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
       await audit(session,'SUPPORT_REPLIED','support_conversation',ticket.id,ticket.point_id,{length:message.length});
     }else{
-      await q("UPDATE support_conversations SET status='CLOSED',closed_at=now(),assigned_support_user_id=COALESCE(assigned_support_user_id,$2),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
-      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'SYSTEM','Konsultant zamknął zgłoszenie.')",[makeId('msg'),ticket.id,u.id]);
+      await q("UPDATE support_conversations SET assigned_support_user_id=NULL,taken_at=NULL,consultant_requested_at=NULL,consultant_joined_at=NULL,updated_at=now() WHERE id=$1",[ticket.id]);
+      await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SYSTEM',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,'Konsultant zakończył kanał rozmowy. Bot nadal jest dostępny.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_CLOSED'})]);
       await audit(session,'SUPPORT_CLOSED','support_conversation',ticket.id,ticket.point_id,{});
     }
     return json(request,{ok:true});
@@ -4067,17 +4116,25 @@ const route = async (request) => {
 
   if(method==='POST'&&url.pathname==='/assistant/chat'){
     const session=await requireActive(request),body=await readJson(request),message=cleanText(body.message,1500);if(!message)return json(request,{error:'MESSAGE'},400);
+    await repairSelfSupportAssignment(session);
+    const target=normalizeSupportTarget(body.target);
     const conv=await getOrCreateConversation(session.user.id);
     const live=(await q("SELECT assigned_support_user_id,consultant_requested_at FROM support_conversations WHERE id=$1",[conv.id])).rows[0]||{};
-    const uid=makeId('msg');await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body) VALUES($1,$2,$3,'USER',$4)",[uid,conv.id,session.user.id,message]);
+    const consultantState=live.assigned_support_user_id?'JOINED':live.consultant_requested_at?'WAITING':'BOT';
+    if(target==='CONSULTANT'&&!live.consultant_requested_at){
+      return json(request,{error:'CONSULTANT_NOT_REQUESTED',message:'Najpierw poproś konsultanta o dołączenie.'},409);
+    }
+    const uid=makeId('msg');
+    await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'USER',$4,$5::jsonb)",[uid,conv.id,session.user.id,message,JSON.stringify({target})]);
     await q('UPDATE support_conversations SET updated_at=now() WHERE id=$1',[conv.id]);
-    if(live.assigned_support_user_id){
-      return json(request,{userMessage:{id:uid,author:'user',text:message,createdAt:nowIso()},assistantMessage:null,action:null,consultantState:'JOINED'});
+    const userMessage={id:uid,author:'user',text:message,target,createdAt:nowIso()};
+    if(target==='CONSULTANT'){
+      return json(request,{userMessage,assistantMessage:null,action:null,consultantState});
     }
     const reply=await assistantReply(session,message);
     const aid=makeId('msg');
-    await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,NULL,'ASSISTANT',$3,$4::jsonb)",[aid,conv.id,reply.text,JSON.stringify({action:reply.action||null})]);
-    return json(request,{userMessage:{id:uid,author:'user',text:message,createdAt:nowIso()},assistantMessage:{id:aid,author:'assistant',text:reply.text,action:reply.action||null,createdAt:nowIso()},action:reply.action||null,consultantState:live.consultant_requested_at?'WAITING':'BOT'});
+    await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,NULL,'ASSISTANT',$3,$4::jsonb)",[aid,conv.id,reply.text,JSON.stringify({target:'BOT',action:reply.action||null})]);
+    return json(request,{userMessage,assistantMessage:{id:aid,author:'assistant',text:reply.text,target:'BOT',action:reply.action||null,createdAt:nowIso()},action:reply.action||null,consultantState});
   }
 
   return json(request,{error:'NOT_FOUND',message:'Nie znaleziono endpointu.'},404);

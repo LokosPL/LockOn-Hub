@@ -104,7 +104,7 @@ export interface HelpAction {
   orderId?:string; orderNumber?:number; userId?:string;
   provider?:'YOUTUBE'|'WEB'; query?:string;
 }
-export interface HelpMessage { id:string; author:'user'|'support'|'system'|'assistant'; text:string; action?:HelpAction|null; createdAt:string; }
+export interface HelpMessage { id:string; author:'user'|'support'|'system'|'assistant'; text:string; action?:HelpAction|null; target?:'BOT'|'CONSULTANT'|null; createdAt:string; }
 export interface HelpConversation {
   id:string; status:string; consultantState?:'BOT'|'WAITING'|'JOINED';
   consultantRequestedAt?:string|null; consultantJoinedAt?:string|null;
@@ -215,7 +215,7 @@ declare global {
       };
       assistant: {
         getConversation: () => Promise<HelpConversation>;
-        send: (message:string) => Promise<AssistantReply>;
+        send: (message:string,target?:'BOT'|'CONSULTANT') => Promise<AssistantReply>;
       };
       diagnostics: {
         internetSpeed: () => Promise<InternetSpeedResult>;
@@ -228,6 +228,7 @@ declare global {
         take: (ticketId:string) => Promise<{ok:true}>;
         reply: (ticketId:string,message:string) => Promise<{ok:true}>;
         close: (ticketId:string) => Promise<{ok:true}>;
+        leave: () => Promise<{ok:true;consultantState?:'BOT'}>;
       };
       website: { createAuthCode: () => Promise<WebsiteAuthCode>; };
       browser: {

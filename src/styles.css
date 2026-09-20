@@ -1176,6 +1176,12 @@ input,textarea,select{line-height:1.45}
 .consultant-state-card>button{min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:#151b22;color:#aab3bc;font-size:10px;font-weight:800;cursor:pointer}
 .consultant-state-card.waiting{border-color:rgba(255,187,96,.2);background:rgba(255,187,96,.035)}.consultant-state-card.waiting>div{color:#ffc472}
 .consultant-state-card.joined{border-color:rgba(101,216,154,.2);background:rgba(101,216,154,.035)}.consultant-state-card.joined>div{color:#6edb9e}
+.help-channel-switch{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
+.help-channel-switch button{min-height:34px;display:flex;align-items:center;justify-content:center;gap:6px;padding:0 9px;border:1px solid var(--line);border-radius:8px;background:#151a20;color:#7f8a95;font-size:10px;font-weight:800;cursor:pointer}
+.help-channel-switch button.active.bot{border-color:rgba(124,184,255,.26);background:rgba(124,184,255,.07);color:#9fceff}
+.help-channel-switch button.active.consultant{border-color:rgba(101,216,154,.24);background:rgba(101,216,154,.06);color:#8ee4b4}
+.chat-channel-badge{display:inline-flex;align-items:center;margin-top:5px;padding:2px 6px;border:1px solid var(--line);border-radius:99px;font-size:8px;font-weight:800;color:#7e8994}
+.chat-channel-badge.bot{border-color:rgba(124,184,255,.16);color:#8fc4fb}.chat-channel-badge.consultant{border-color:rgba(101,216,154,.16);color:#78d8a2}
 .chat-message-action{margin-top:7px;display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 9px;border:1px solid rgba(255,124,72,.2);border-radius:8px;background:rgba(255,124,72,.055);color:#ff9869;font-size:10px;font-weight:800;cursor:pointer}
 .chat-message p{white-space:pre-line}
 
