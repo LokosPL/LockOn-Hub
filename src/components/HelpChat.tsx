@@ -12,7 +12,7 @@ interface HelpChatProps {
 }
 
 const authorName = (message: HelpMessage, auth: AuthState) => {
-  if (message.author === 'assistant') return 'LockOn Pomoc';
+  if (message.author === 'assistant') return 'Bot ServiceOS';
   if (message.author === 'support') return 'Wsparcie LockOn';
   if (message.author === 'system') return 'ServiceOS';
   return auth.user?.name ?? 'Użytkownik';
@@ -190,19 +190,19 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
   const state = conversation.consultantState ?? 'BOT';
   const statusCopy = state === 'JOINED'
     ? {
-        title: (conversation.assignedSupportName || 'Konsultant') + ' jest w rozmowie',
-        text: 'Konsultant jest dostępny, a bot nadal działa. Wybierz przy polu wiadomości, do kogo chcesz napisać.',
+        title: (conversation.assignedSupportName || 'Konsultant') + ' dołączył do rozmowy',
+        text: 'Bot ServiceOS nadal jest aktywny. Możesz pisać do bota albo bezpośrednio do konsultanta — wybierz odbiorcę przy polu wiadomości.',
         className: 'joined'
       }
     : state === 'WAITING'
       ? {
-          title: 'Czekasz na konsultanta',
-          text: 'Bot nadal odpowiada. Możesz też wysłać wiadomość do kolejki konsultanta, zanim ktoś dołączy.',
+          title: 'Prośba jest w kolejce konsultanta',
+          text: 'Nie musisz czekać bezczynnie. Bot ServiceOS nadal odpowiada i pomoże Ci krok po kroku; wiadomość do konsultanta możesz zostawić w kolejce.',
           className: 'waiting'
         }
       : {
-          title: 'Najpierw pomaga bot ServiceOS',
-          text: 'Bot zna działanie aplikacji i może otwierać właściwe zlecenia oraz moduły. Człowieka możesz poprosić w dowolnej chwili.',
+          title: 'Bot ServiceOS jest online',
+          text: 'Opisz problem własnymi słowami. Bot spróbuje rozwiązać go od razu, zaproponuje następny krok, a konsultanta możesz poprosić w dowolnej chwili.',
           className: 'bot'
         };
 
@@ -230,7 +230,7 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
           <div className="help-chat-icon"><Bot size={18} /></div>
           <div>
             <strong>LockOn Pomoc</strong>
-            <span>Prywatna rozmowa · {auth.user?.email}</span>
+            <span><i className="chat-online-dot" /> Bot online · {auth.user?.email}</span>
           </div>
           <button onClick={onClose} title="Zamknij"><X size={18} /></button>
         </header>
@@ -244,7 +244,7 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
             </button>
           ) : (
             <button type="button" disabled={requestingConsultant} onClick={() => void endConsultant()}>
-              {requestingConsultant ? 'Kończę…' : 'Wróć tylko do bota'}
+              {requestingConsultant ? 'Kończę…' : state === 'WAITING' ? 'Anuluj prośbę' : 'Zakończ kanał konsultanta'}
             </button>
           )}
         </div>
@@ -278,8 +278,8 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
           )}
           {!loading && conversation.messages.length === 0 && (
             <div className="chat-message chat-assistant">
-              <div className="chat-message-meta"><span>LockOn Pomoc</span></div>
-              <p>Cześć. Napisz, czego szukasz. Mogę sprawdzić zlecenie, klienta, wyjaśnić proces albo przenieść Cię do właściwego miejsca w ServiceOS.</p>
+              <div className="chat-message-meta"><span>Bot ServiceOS</span></div>
+              <p>Cześć. Jestem botem ServiceOS i pomogę Ci od razu. Opisz problem albo podaj numer zlecenia — sprawdzę, co da się zrobić, i zaproponuję następny krok. Jeśli będzie potrzebny człowiek, możesz w każdej chwili poprosić konsultanta.</p>
             </div>
           )}
           {conversation.messages.map((message) => (
@@ -297,6 +297,12 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
               {renderAction(message.action)}
             </div>
           ))}
+          {sending && messageTarget === 'BOT' && (
+            <div className="chat-message chat-assistant chat-typing" aria-live="polite">
+              <div className="chat-message-meta"><span>Bot ServiceOS</span></div>
+              <p><LoaderCircle className="spin" size={14} /> Sprawdzam i przygotowuję odpowiedź…</p>
+            </div>
+          )}
           {toolResult && (
             <div className={'chat-tool-result '+toolResult.kind}>
               <div>{toolResult.kind === 'speed' ? <Wifi size={16}/> : <Activity size={16}/>}</div>
@@ -339,10 +345,10 @@ export function HelpChat({ open, onClose, auth, effectiveRole, onAction }: HelpC
             </button>
           </div>
           <small>{state === 'BOT'
-            ? 'Rozmowa z botem jest prywatna. Konsultant widzi treść dopiero po Twojej prośbie i tylko z kanału konsultanta.'
+            ? 'Bot ServiceOS odpowiada od razu. Rozmowa jest prywatna; konsultant zobaczy ją dopiero po Twojej prośbie i tylko w kanale konsultanta.'
             : messageTarget === 'BOT'
-              ? 'Piszesz do bota. Ta wiadomość nie trafi do konsultanta.'
-              : 'Piszesz do konsultanta. Bot nie wygeneruje odpowiedzi na tę wiadomość.'}</small>
+              ? 'Piszesz do bota — odpowie od razu, niezależnie od kolejki konsultanta.'
+              : 'Piszesz do konsultanta. Bot pozostaje dostępny, ale nie odpowiada na wiadomość skierowaną wyłącznie do człowieka.'}</small>
         </footer>
       </aside>
     </>

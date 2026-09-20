@@ -17,7 +17,7 @@ const roleLabel = (role: UserRole | null) => ({
   OWNER:'Właściciel',
   BOSS:'Szef',
   COORDINATOR:'Koordynator',
-  SUPPORT:'Wsparcie (starszy profil)',
+  SUPPORT:'Wsparcie LockOn',
   TECHNICIAN:'Serwisant',
   USER:'Pracownik punktu'
 }[role || 'USER'] || 'Pracownik');

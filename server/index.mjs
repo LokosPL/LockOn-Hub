@@ -1657,7 +1657,7 @@ const handle = async (req, res) => {
       return json(res,200,{userMessage:localSupportMessageView(userMessage),assistantMessage:null,action:null,consultantState});
     }
     const lower = message.toLocaleLowerCase('pl-PL');
-    let answer = 'Mogę pomóc w obsłudze ServiceOS, uruchomić test internetu, sprawdzić połączenie oraz otworzyć wyszukiwanie filmów i materiałów technicznych.';
+    let answer = 'Jasne — spróbuję Ci pomóc. Opisz, co chcesz zrobić w ServiceOS albo co nie działa. Mogę też uruchomić test internetu, sprawdzić połączenie oraz otworzyć wyszukiwanie filmów i materiałów technicznych. Jeśli będzie potrzebny człowiek, poproś konsultanta — bot nadal pozostanie dostępny.';
     let action = null;
     if(/^\s*\/net\b/i.test(message)||lower.includes('test internetu')||lower.includes('test prędkości')||lower.includes('test predkosci')||lower.includes('prędkość internetu')||lower.includes('predkosc internetu')||lower.includes('speedtest')){
       answer='Uruchamiam lokalny test łącza na tym urządzeniu. Zmierzę opóźnienie, pobieranie i wysyłanie.';

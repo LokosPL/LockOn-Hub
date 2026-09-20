@@ -2447,7 +2447,7 @@ const assistantReply = async (session, message) => {
   }
   if (best) return { text: best.body };
 
-  return { text: 'Mogę pomóc w codziennej pracy serwisu i w ServiceOS: wyszukać klienta lub zlecenie w Twoim zakresie, sprawdzić historię i notatki, otworzyć właściwy ekran, wyjaśnić przekazania, rozliczenia, Gmail i uprawnienia, przetestować internet i połączenie z API oraz znaleźć filmy albo materiały techniczne do naprawy. Przykłady: „zlecenie 123 statusy”, „historia klienta Kowalski”, „test internetu”, „diagnostyka połączenia”, „film jak wymienić ekran iPhone 15”, „service manual ThinkPad T14”.' };
+  return { text: 'Jasne — spróbuję Ci pomóc. Mogę wyszukać klienta lub zlecenie w Twoim zakresie, sprawdzić historię i notatki, otworzyć właściwy ekran, wyjaśnić przekazania, rozliczenia, Gmail i uprawnienia, przetestować internet i połączenie z API oraz znaleźć filmy albo materiały techniczne do naprawy. Zacznij od konkretu, np. „zlecenie 123 statusy”, „historia klienta Kowalski” albo „diagnostyka połączenia”. Jeśli po mojej odpowiedzi nadal będzie potrzebna pomoc człowieka, poproś konsultanta — w czasie oczekiwania nadal będę z Tobą pracować.' };
 };
 
 const route = async (request) => {
