@@ -93,6 +93,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const searchRequestRef = useRef(0);
   const [orders, setOrders] = useState<ServiceOrderSummary[]>([]);
   const [busy, setBusy] = useState(false);
+  const submitBusyRef = useRef(false);
   const [ordersBusy, setOrdersBusy] = useState(false);
   const [result, setResult] = useState<ServiceCreateOrderResult | null>(null);
   const [cardChoice, setCardChoice] = useState<{orderId:string;orderNumber:number}|null>(null);
@@ -371,10 +372,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const submit = async () => {
+    if (submitBusyRef.current) return;
     const cleanEmail = form.email.trim();
     const cleanPhone = form.phone.replace(/\D/g, '');
-    if (!form.firstName.trim() || !form.lastName.trim() || !form.brand.trim() || !form.model.trim() || !form.issueDescription.trim()) {
-      setError('Uzupełnij imię, nazwisko, markę, model i opis usterki.');
+    if (!form.firstName.trim() || !form.lastName.trim() || !form.brand.trim() || !form.model.trim() || !form.imei.trim() || !form.serialNumber.trim() || !form.deviceNotes.trim() || !form.issueDescription.trim()) {
+      setError('Uzupełnij wszystkie wymagane dane klienta i urządzenia, w tym IMEI, numer seryjny, uwagi i opis usterki.');
       return;
     }
     if (!cleanEmail || !cleanPhone) {
@@ -395,6 +397,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       return;
     }
 
+    submitBusyRef.current = true;
     setBusy(true); setError(''); setNotice(''); setResult(null);
     try {
       const created = await window.lockOn.service.createOrder({
@@ -427,7 +430,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       await loadOrders();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się utworzyć zlecenia.');
-    } finally { setBusy(false); }
+    } finally { submitBusyRef.current = false; setBusy(false); }
   };
 
   const openCreatedServiceCard = async (printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY') => {
@@ -868,8 +871,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             <div className="service-form-grid">
               <label><span>Marka</span><input value={form.brand} onChange={(e)=>update('brand',e.target.value)} /></label>
               <label><span>Model</span><input value={form.model} onChange={(e)=>update('model',e.target.value)} /></label>
-              <label><span>IMEI</span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="Opcjonalnie"/></label>
-              <label><span>Numer seryjny</span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Opcjonalnie"/></label>
+              <label><span>IMEI</span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr"/></label>
+              <label><span>Numer seryjny</span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Wymagany"/></label>
               <div className="service-auto-intake full">
                 <div><MapPin size={15}/><span>Punkt przyjęcia</span><strong>{pointOptions.find((p)=>p.id===pointId)?.name ?? 'Brak aktywnego punktu'}</strong></div>
                 <div><ClipboardList size={15}/><span>Sposób obsługi</span><strong>{form.orderType==='COMPLAINT'?'Reklamacja — ustawione automatycznie':'Standardowa naprawa — ustawione automatycznie'}</strong></div>
