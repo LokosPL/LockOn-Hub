@@ -1170,6 +1170,83 @@ const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
   };
 };
 
+const requireCustomerAccountAccess = async (user, customerId) => {
+  requireSupportAccess(user);
+  const customer=(await q(
+    "SELECT id,first_name,last_name,email,phone,portal_code_created_at FROM customers WHERE id=$1 LIMIT 1",
+    [customerId]
+  )).rows[0];
+  if (!customer) throw Object.assign(new Error('Nie znaleziono klienta.'),{status:404,code:'CUSTOMER_NOT_FOUND'});
+  if (GLOBAL_ROLES.has(user.role_code)) return customer;
+  const ids=await visiblePointIds(user);
+  if (!ids.length) throw Object.assign(new Error('Brak dostępu do tego klienta.'),{status:403,code:'CUSTOMER_FORBIDDEN'});
+  const visible=(await q(
+    "SELECT 1 WHERE EXISTS(SELECT 1 FROM service_orders s WHERE s.customer_id=$1 AND COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[])) OR EXISTS(SELECT 1 FROM customer_quote_requests r WHERE r.customer_id=$1 AND (r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) LIMIT 1",
+    [customerId,ids]
+  )).rows[0];
+  if (!visible) throw Object.assign(new Error('Brak dostępu do tego klienta.'),{status:403,code:'CUSTOMER_FORBIDDEN'});
+  return customer;
+};
+
+const customerAccountManagementOverview = async (user, search = '') => {
+  requireSupportAccess(user);
+  const ids=GLOBAL_ROLES.has(user.role_code) ? [] : await visiblePointIds(user);
+  const params=[GLOBAL_ROLES.has(user.role_code),ids];
+  let filter=" WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[])) OR EXISTS(SELECT 1 FROM customer_quote_requests r0 WHERE r0.customer_id=c.id AND (r0.requested_point_id=ANY($2::text[]) OR r0.routed_point_id=ANY($2::text[]))))";
+  const term=cleanText(search,120);
+  if (term) {
+    params.push('%'+term+'%');
+    filter += " AND (lower(c.first_name||' '||c.last_name) LIKE lower($3) OR lower(coalesce(c.email,'')) LIKE lower($3) OR lower(coalesce(c.phone,'')) LIKE lower($3))";
+  }
+  const rows=(await q(
+    "SELECT c.id,c.first_name,c.last_name,c.email,c.phone,c.portal_code_created_at,"+
+    "a.google_sub,a.google_email,a.google_name,a.google_picture_url,a.linked_at,a.last_login_at,a.blocked_at,a.blocked_reason,"+
+    "a.notify_service_updates,a.notify_ready_for_pickup,a.notify_quote_updates,a.notify_messages,"+
+    "(SELECT count(*)::int FROM customer_portal_sessions ps WHERE ps.customer_id=c.id AND ps.expires_at>now()) AS active_sessions,"+
+    "(SELECT max(ps.last_seen_at) FROM customer_portal_sessions ps WHERE ps.customer_id=c.id AND ps.expires_at>now()) AS last_seen_at,"+
+    "(SELECT count(*)::int FROM service_orders s WHERE s.customer_id=c.id) AS order_count,"+
+    "(SELECT count(*)::int FROM customer_quote_requests r WHERE r.customer_id=c.id AND r.status IN ('OPEN','QUOTED')) AS open_quote_count "+
+    "FROM customers c LEFT JOIN customer_portal_accounts a ON a.customer_id=c.id"+filter+
+    " ORDER BY COALESCE(a.last_login_at,c.updated_at) DESC,c.last_name,c.first_name LIMIT 250",
+    params
+  )).rows;
+  const customers=rows.map(row=>({
+    id:row.id,
+    name:[row.first_name,row.last_name].filter(Boolean).join(' '),
+    email:row.email||null,
+    phone:row.phone||null,
+    codeCreatedAt:row.portal_code_created_at||null,
+    googleLinked:Boolean(row.google_sub),
+    googleEmail:row.google_email||null,
+    googleName:row.google_name||null,
+    googlePicture:row.google_picture_url||null,
+    linkedAt:row.linked_at||null,
+    lastLoginAt:row.last_login_at||null,
+    blocked:Boolean(row.blocked_at),
+    blockedAt:row.blocked_at||null,
+    blockedReason:row.blocked_reason||null,
+    activeSessions:Number(row.active_sessions||0),
+    lastSeenAt:row.last_seen_at||null,
+    orders:Number(row.order_count||0),
+    openQuotes:Number(row.open_quote_count||0),
+    notificationPreferences:{
+      serviceUpdates:row.notify_service_updates!==false,
+      readyForPickup:row.notify_ready_for_pickup!==false,
+      quoteUpdates:row.notify_quote_updates!==false,
+      messages:row.notify_messages!==false
+    }
+  }));
+  return {
+    stats:{
+      customers:customers.length,
+      googleAccounts:customers.filter(item=>item.googleLinked).length,
+      activeSessions:customers.reduce((sum,item)=>sum+item.activeSessions,0),
+      blocked:customers.filter(item=>item.blocked).length
+    },
+    customers
+  };
+};
+
 const staffQuoteVisible = async (user, requestId) => {
   const row = (await q(
     "SELECT r.* FROM customer_quote_requests r WHERE r.id=$1 AND ($2::boolean OR r.assigned_technician_id=$3 OR EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$3 AND a.point_id IN (r.requested_point_id,r.routed_point_id))) LIMIT 1",
