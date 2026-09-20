@@ -73,6 +73,24 @@ jobs:
             }
           }
 
+      - name: Verify UI action hardening contracts
+        shell: pwsh
+        run: |
+          $customer = Get-Content src/pages/CustomerAccountsPage.tsx -Raw
+          @("listRequestRef","detailRequestRef","busyRef") | ForEach-Object {
+            if (-not $customer.Contains($_)) { throw "Missing customer race guard: $_" }
+          }
+          $service = Get-Content src/pages/ServicePage.tsx -Raw
+          if (-not $service.Contains("searchRequestRef")) { throw "Missing service search race guard." }
+          $browser = Get-Content src/pages/BrowserPage.tsx -Raw
+          @("actionBusy","browser-action-error") | ForEach-Object {
+            if (-not $browser.Contains($_)) { throw "Missing browser action guard: $_" }
+          }
+          $settings = Get-Content src/pages/SettingsPage.tsx -Raw
+          @("scaleBusy","settings-action-error") | ForEach-Object {
+            if (-not $settings.Contains($_)) { throw "Missing settings action guard: $_" }
+          }
+
       - name: Typecheck renderer
         run: npm run typecheck
 

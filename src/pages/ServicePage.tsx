@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BadgeDollarSign, BellRing, CalendarClock, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus,
   Clock3, History, IdCard, Mail, MailCheck, MapPin, MessageSquareText, PackageCheck, RefreshCw, RotateCcw, Save, Search, Send,
@@ -82,6 +82,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [query, setQuery] = useState('');
   const [orderFilter, setOrderFilter] = useState('ALL');
   const [matches, setMatches] = useState<ServiceCustomer[]>([]);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const searchRequestRef = useRef(0);
   const [orders, setOrders] = useState<ServiceOrderSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [ordersBusy, setOrdersBusy] = useState(false);
@@ -334,10 +336,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   const search = async () => {
     const clean = query.trim();
-    if (clean.length < 2) { setMatches([]); return; }
+    const requestId = ++searchRequestRef.current;
+    if (clean.length < 2) { setMatches([]); setSearchBusy(false); return; }
+    setSearchBusy(true);
     setError('');
-    try { setMatches(await window.lockOn.service.searchCustomers(clean)); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Nie udało się wyszukać klienta.'); }
+    try {
+      const result = await window.lockOn.service.searchCustomers(clean);
+      if (requestId === searchRequestRef.current) setMatches(result);
+    } catch (e) {
+      if (requestId === searchRequestRef.current) setError(e instanceof Error ? e.message : 'Nie udało się wyszukać klienta.');
+    } finally {
+      if (requestId === searchRequestRef.current) setSearchBusy(false);
+    }
   };
 
   const useCustomer = (customer: ServiceCustomer) => {
@@ -770,7 +780,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             <div className="panel-heading"><div><span className="eyebrow"><Search size={13}/> KLIENT</span><h2>Wyszukaj istniejącego</h2></div></div>
             <div className="service-search-row">
               <input value={query} onChange={(e)=>setQuery(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') void search(); }} placeholder="Nazwisko, email lub telefon"/>
-              <button className="button secondary" onClick={()=>void search()}>Szukaj</button>
+              <button className="button secondary" disabled={searchBusy||query.trim().length<2} onClick={()=>void search()}><Search className={searchBusy?'spin':''} size={14}/>{searchBusy?' Szukam…':' Szukaj'}</button>
             </div>
             <div className="service-customer-results">
               {matches.map((customer)=><button key={customer.id} onClick={()=>useCustomer(customer)}>

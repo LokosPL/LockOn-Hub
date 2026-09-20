@@ -25,6 +25,9 @@ const SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 90;
 const WEB_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 90;
 const WEB_SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 5;
 const WEBSITE_CODE_TTL_MS = 1000 * 60 * 5;
+const PUBLIC_AUTH_RATE_WINDOW_MS = 60_000;
+const PUBLIC_CODE_ATTEMPT_LIMIT = 12;
+const PUBLIC_GOOGLE_ATTEMPT_LIMIT = 30;
 const BODY_LIMIT = 64 * 1024;
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
 const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
@@ -73,6 +76,36 @@ const splitRevenueAmount = (amount, technicianPercent) => {
 };
 const tokenHash = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const b64url = (value) => Buffer.from(value).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+
+const publicAuthAttempts = new Map();
+const requestClientAddress = (request) => {
+  const direct = request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip');
+  const forwarded = request.headers.get('x-forwarded-for');
+  return cleanText(direct || forwarded?.split(',')[0] || '', 96);
+};
+const consumePublicAuthAttempt = (request, bucket, limit) => {
+  const address = requestClientAddress(request);
+  if (!address) return null;
+  const key = bucket + ':' + address;
+  const now = Date.now();
+  let state = publicAuthAttempts.get(key);
+  if (!state || state.resetAt <= now) state = { count: 0, resetAt: now + PUBLIC_AUTH_RATE_WINDOW_MS };
+  if (state.count >= limit) {
+    throw Object.assign(new Error('Zbyt wiele prób logowania. Spróbuj ponownie za minutę.'), { status: 429, code: 'RATE_LIMITED' });
+  }
+  state.count += 1;
+  publicAuthAttempts.set(key, state);
+  if (publicAuthAttempts.size > 4096) {
+    for (const [entryKey, entry] of publicAuthAttempts) {
+      if (entry.resetAt <= now) publicAuthAttempts.delete(entryKey);
+      if (publicAuthAttempts.size <= 3072) break;
+    }
+  }
+  return key;
+};
+const clearPublicAuthAttempts = (key) => {
+  if (key) publicAuthAttempts.delete(key);
+};
 
 const corsHeaders = (request) => {
   const origin = request.headers.get('origin') || '';
@@ -2056,6 +2089,7 @@ const route = async (request) => {
   }
 
   if (method === 'POST' && url.pathname === '/public/customer-portal/login') {
+    const portalRateKey = consumePublicAuthAttempt(request, 'customer-code', PUBLIC_CODE_ATTEMPT_LIMIT);
     const body = await readJson(request);
     const code = normalizeCustomerPortalCode(body.customerId || body.code);
     if (!code) return json(request,{error:'CUSTOMER_ID',message:'Kod klienta jest nieprawidłowy.'},400);
@@ -2066,6 +2100,7 @@ const route = async (request) => {
     if (!customer) return json(request,{error:'CUSTOMER_ID',message:'Nie znaleziono klienta dla tego kodu.'},401);
     if (customer.blocked_at) return json(request,{error:'CUSTOMER_ACCOUNT_BLOCKED',message:customer.blocked_reason?'Dostęp do portalu został zablokowany: '+cleanText(customer.blocked_reason,180):'Dostęp do portalu został zablokowany.'},403);
     const session = await createCustomerPortalSession(customer.id,'CODE');
+    clearPublicAuthAttempts(portalRateKey);
     await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_PORTAL_LOGIN','customer',$2,$3::jsonb)",[
       makeId('aud'),customer.id,JSON.stringify({clientType:'CUSTOMER_PORTAL',authMethod:'CODE'})
     ]);
@@ -2100,6 +2135,7 @@ const route = async (request) => {
   }
 
   if (method === 'POST' && url.pathname === '/public/customer-portal/google/login') {
+    consumePublicAuthAttempt(request, 'customer-google', PUBLIC_GOOGLE_ATTEMPT_LIMIT);
     if (!GOOGLE_CUSTOMER_WEB_CLIENT_ID) return json(request,{error:'GOOGLE_NOT_CONFIGURED',message:'Logowanie Google dla klientów nie jest jeszcze dostępne.'},503);
     const body=await readJson(request);
     let profile;
@@ -2272,6 +2308,7 @@ const route = async (request) => {
   }
 
   if (method === 'POST' && url.pathname === '/website/redeem') {
+    const redeemRateKey = consumePublicAuthAttempt(request, 'employee-code', PUBLIC_CODE_ATTEMPT_LIMIT);
     const body = await readJson(request);
     const code = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (code.length !== 8) return json(request, { error: 'CODE', message: 'Nieprawidłowy kod.' }, 400);
@@ -2298,6 +2335,7 @@ const route = async (request) => {
         [makeId('ses'), userResult.rows[0].id, tokenHash(token), 'WEB', new Date(now + SESSION_TTL_MS), new Date(now + SESSION_ABSOLUTE_TTL_MS)]
       );
       await client.query('COMMIT');
+      clearPublicAuthAttempts(redeemRateKey);
       return json(request, { token, ...(await authPayload(userResult.rows[0])) });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
