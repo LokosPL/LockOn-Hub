@@ -1,0 +1,60 @@
+name: v0.20.5 temp Neon auth smoke
+
+on:
+  push:
+    branches: ["tmp/v0205-neon-smoke"]
+    paths:
+      - ".github/workflows/v0205-temp-auth-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_URL: https://br-spring-pond-b1hqe48m-lockonapi.compute.c-5.eu-central-1.aws.neon.tech/
+    steps:
+      - name: Verify health and auth throttling
+        shell: bash
+        run: |
+          node <<'NODE'
+          const base=process.env.API_URL;
+          const ip='203.0.113.205';
+          const post=async(path,body)=>{
+            const response=await fetch(new URL(path.replace(/^\//,''),base),{
+              method:'POST',
+              headers:{'content-type':'application/json','x-real-ip':ip},
+              body:JSON.stringify(body)
+            });
+            let payload={};
+            try{payload=await response.json();}catch{}
+            return {status:response.status,payload};
+          };
+          const health=await fetch(new URL('health',base),{cache:'no-store'});
+          const healthBody=await health.json();
+          if(health.status!==200||healthBody?.ok!==true) throw new Error('health failed');
+
+          for(let i=1;i<=12;i++){
+            const r=await post('/website/redeem',{code:'ZZZZZZZZ'});
+            if(r.status!==401) throw new Error('employee attempt '+i+' expected 401 got '+r.status+' '+JSON.stringify(r.payload));
+          }
+          const employeeLimited=await post('/website/redeem',{code:'ZZZZZZZZ'});
+          if(employeeLimited.status!==429||employeeLimited.payload?.error!=='RATE_LIMITED'){
+            throw new Error('employee throttle failed '+JSON.stringify(employeeLimited));
+          }
+
+          const customerFirst=await post('/public/customer-portal/login',{code:'LK-AAAA-AAAA-AAAA-AAAA'});
+          if(customerFirst.status!==401) throw new Error('customer bucket not independent: '+JSON.stringify(customerFirst));
+          for(let i=2;i<=12;i++){
+            const r=await post('/public/customer-portal/login',{code:'LK-AAAA-AAAA-AAAA-AAAA'});
+            if(r.status!==401) throw new Error('customer attempt '+i+' expected 401 got '+r.status+' '+JSON.stringify(r.payload));
+          }
+          const customerLimited=await post('/public/customer-portal/login',{code:'LK-AAAA-AAAA-AAAA-AAAA'});
+          if(customerLimited.status!==429||customerLimited.payload?.error!=='RATE_LIMITED'){
+            throw new Error('customer throttle failed '+JSON.stringify(customerLimited));
+          }
+
+          console.log('V0205_TEMP_AUTH_SMOKE_OK');
+          NODE
