@@ -1340,3 +1340,6 @@ input,textarea,select{line-height:1.45}
 }
 @media(max-width:390px){.customer-control-stats,.customer-detail-kpis{grid-template-columns:1fr}.customer-control-center{padding:11px}}
 @media(prefers-reduced-motion:reduce){.customer-control-row,.customer-notice{transition:none;animation:none}.customer-control-order-detail{animation:none}}
+
+.support-assignment-lock{display:flex;align-items:flex-start;gap:8px;width:100%;padding:10px 12px;border:1px solid rgba(255,184,92,.18);border-radius:9px;background:rgba(255,184,92,.05);color:#c7a06d;font-size:11px;line-height:1.45}
+.global-update-action-error{display:block;margin-top:7px;color:#ff9d94;font-size:10px;line-height:1.4}
