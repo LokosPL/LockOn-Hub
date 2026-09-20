@@ -17,7 +17,7 @@
 
 ### Gdy użytkownik napisze: `START`
 
-Zacznij wykonywać backlog poniżej **od Priorytetu 0**, samodzielnie. Nie opisuj tylko planu. Twórz gałęzie, zmiany, testy, PR-y, temp Neon, smoke i wdrożenie produkcyjne, jeśli wszystko jest zielone.
+Zacznij wykonywać backlog od **pierwszego niezamkniętego priorytetu**, samodzielnie. Priorytet **0A jest zakończony**; obecnie następnym niezamkniętym jest **0B**. Nie opisuj tylko planu. Twórz gałęzie, zmiany, testy, PR-y, temp Neon, smoke i wdrożenie produkcyjne, jeśli wszystko jest zielone.
 
 Komunikacja:
 - po polsku;
@@ -29,18 +29,18 @@ Komunikacja:
 
 ## Stan produkcyjny przy tworzeniu tego pakietu — 2026-09-20
 
-- Hub `main`: `70274520e548e76249887840541c71b66bdf6f08`
-- Windows release: **v0.20.3**
-- instalator SHA-256: `b17e6e4e728af9f2454077449be5a08768cb09ca58523734746fa7fbdcb606b0`
-- release workflow #43 SUCCESS; Verify #557 SUCCESS; CodeQL #298 SUCCESS
-- Site `main`: `08deb9d94fa6a0a8a75fc2b480a8bd429c797ca6`
-- Pages deploy #102 SUCCESS; Site Verify #250 SUCCESS; Mobile UI visual smoke #24 SUCCESS
-- Neon production `lockonapi`: **deployment v35**, completed
+- Hub `main`: `dae6c15d80551e1c89c952fbc5a4d24276c076b5`
+- Windows release: **v0.20.5**
+- instalator SHA-256: `f4f776475e3ad3f51e4314bbabd9ec8c34076ee89bb988738bb99299226d51cf`
+- release workflow #45 SUCCESS; Verify #620 SUCCESS; CodeQL #331 SUCCESS
+- Site nadal po **Site PR #35 / Pages #102**; przed nową pracą sprawdź aktualny `main` i Pages ponownie
+- Neon production `lockonapi`: **deployment v38**, completed
 - produkcyjna branch Neon: `br-steep-bonus-b1f1qh8u`
 - baza: `lockon`
 - portal pracownika WWW pozostaje **code-only**
 - portal klienta: kod = podgląd, Google = pełne konto
-- zachowana gałąź testowa Neon dla ostatniego rollout: `verify-customer-control-v0203` / `br-tiny-bar-b1w5axxk`
+- Priorytet **0A zakończony**; następny niezamknięty: **0B**
+- temp smoke v0.20.5 wykorzystał zachowaną branch `verify-hotfix-v0204` / `br-spring-pond-b1hqe48m`; projekt Neon ma obecnie limit branchy, więc nie usuwaj żadnej gałęzi bez potwierdzenia właściciela
 
 Zawsze sprawdź ten stan ponownie przed pracą, bo może się zmienić.
 
@@ -48,9 +48,13 @@ Zawsze sprawdź ten stan ponownie przed pracą, bo może się zmienić.
 
 # NOWY BACKLOG — wykonywać w tej kolejności
 
-## PRIORYTET 0A — Pomoc: bot ma działać także podczas rozmowy z konsultantem
+## PRIORYTET 0A — ZAKOŃCZONY — Pomoc: bot działa także podczas rozmowy z konsultantem
 
-### Problem widoczny produkcyjnie
+### Status
+
+Zakończony w PR #61 i utrzymany w v0.20.5. Nie implementuj ponownie bez nowej regresji. BOT i CONSULTANT działają równolegle, self-support jest blokowany backendowo, a prywatne wiadomości BOT nie trafiają do SupportDesk.
+
+### Historyczny problem produkcyjny
 
 Na koncie OWNER można doprowadzić do stanu, w którym właściciel jest przypisany jako konsultant do własnej rozmowy. UI pokazuje np. „Lokos jest w rozmowie”, a bot przestaje odpowiadać. To samo jest logicznie złe dla innych użytkowników: dołączenie konsultanta nie powinno odbierać dostępu do bota.
 
