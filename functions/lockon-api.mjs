@@ -3336,6 +3336,190 @@ const route = async (request) => {
     return json(request,{id,body:note,createdAt:nowIso(),authorUserId:u.id,authorName:u.name||u.email},201);
   }
 
+
+  const costingMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/costing$/);
+  if(costingMatch&&(method==='GET'||method==='POST')){
+    const session=await requireActive(request),u=session.user;
+    if(method==='GET')return json(request,await loadOrderCosting(u,costingMatch[1]));
+
+    const order=await requireServiceFinanceOrder(u,costingMatch[1]);
+    const body=await readJson(request);
+    const laborRaw=body.laborCostGross;
+    const otherRaw=body.otherCostGross;
+    const laborCostGross=laborRaw==null||laborRaw===''?0:Number(laborRaw);
+    const otherCostGross=otherRaw==null||otherRaw===''?0:Number(otherRaw);
+    if(!Number.isFinite(laborCostGross)||laborCostGross<0||laborCostGross>10_000_000)return json(request,{error:'LABOR_COST',message:'Nieprawidłowa kwota robocizny.'},400);
+    if(!Number.isFinite(otherCostGross)||otherCostGross<0||otherCostGross>10_000_000)return json(request,{error:'OTHER_COST',message:'Nieprawidłowa kwota innych kosztów.'},400);
+    const inputParts=Array.isArray(body.parts)?body.parts:[];
+    if(inputParts.length>100)return json(request,{error:'PARTS_LIMIT',message:'Jedno zlecenie może mieć maksymalnie 100 pozycji części.'},400);
+    const parts=[];
+    for(const raw of inputParts){
+      const description=cleanText(raw?.description,240);
+      const quantity=Number(raw?.quantity);
+      const unitCostGross=Number(raw?.unitCostGross);
+      const invoiceReceived=raw?.invoiceReceived===true;
+      const invoiceNumber=invoiceReceived?cleanText(raw?.invoiceNumber,120):'';
+      const supplier=invoiceReceived?cleanText(raw?.supplier,180):'';
+      const purchasedAt=invoiceReceived?cleanText(raw?.purchasedAt,10):'';
+      if(!description)return json(request,{error:'PART_DESCRIPTION',message:'Każda część musi mieć opis.'},400);
+      if(!Number.isFinite(quantity)||quantity<=0||quantity>9999)return json(request,{error:'PART_QUANTITY',message:'Nieprawidłowa ilość części.'},400);
+      if(!Number.isFinite(unitCostGross)||unitCostGross<0||unitCostGross>10_000_000)return json(request,{error:'PART_COST',message:'Nieprawidłowy koszt części.'},400);
+      if(purchasedAt&&!/^\d{4}-\d{2}-\d{2}$/.test(purchasedAt))return json(request,{error:'PURCHASE_DATE',message:'Nieprawidłowa data zakupu części.'},400);
+      parts.push({description,quantity:Math.round(quantity*100)/100,unitCostGross:roundMoney(unitCostGross),invoiceReceived,invoiceNumber,supplier,purchasedAt});
+    }
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      await client.query('UPDATE service_orders SET labor_cost_gross=$1,other_cost_gross=$2,updated_at=now() WHERE id=$3',[roundMoney(laborCostGross),roundMoney(otherCostGross),order.id]);
+      await client.query('DELETE FROM service_order_parts WHERE service_order_id=$1',[order.id]);
+      for(const part of parts){
+        await client.query(
+          'INSERT INTO service_order_parts(id,service_order_id,description,quantity,unit_cost_gross,invoice_received,invoice_number,supplier,purchased_at,created_by_user_id) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,\'\'),NULLIF($8,\'\'),$9,$10)',
+          [makeId('prt'),order.id,part.description,part.quantity,part.unitCostGross,part.invoiceReceived,part.invoiceNumber,part.supplier,part.purchasedAt||null,u.id]
+        );
+      }
+      await client.query('COMMIT');
+    }catch(error){
+      await client.query('ROLLBACK').catch(()=>undefined);
+      throw error;
+    }finally{client.release();}
+    const partsTotal=roundMoney(parts.reduce((sum,part)=>sum+part.quantity*part.unitCostGross,0));
+    await audit(session,'SERVICE_COSTING_UPDATED','service_order',order.id,order.point_id,{
+      partsCount:parts.length,partsCostGross:partsTotal,laborCostGross:roundMoney(laborCostGross),otherCostGross:roundMoney(otherCostGross)
+    });
+    return json(request,await loadOrderCosting(u,order.id));
+  }
+
+  const invoiceUploadMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/invoices\/upload-intent$/);
+  if(method==='POST'&&invoiceUploadMatch){
+    const session=await requireActive(request),u=session.user;
+    const order=await requireServiceFinanceOrder(u,invoiceUploadMatch[1]);
+    const storage=requireInvoiceStorage();
+    const body=await readJson(request);
+    const sizeBytes=Number(body.sizeBytes);
+    const sha256=String(body.sha256||'').trim().toLowerCase();
+    const fileName=safePdfFileName(body.fileName);
+    const invoiceNumber=cleanText(body.invoiceNumber,120);
+    const supplier=cleanText(body.supplier,180);
+    const invoiceDate=cleanText(body.invoiceDate,10);
+    const grossAmount=body.grossAmount==null||body.grossAmount===''?null:nullableMoney(body.grossAmount);
+    if(!Number.isInteger(sizeBytes)||sizeBytes<=0||sizeBytes>SERVICE_INVOICE_MAX_BYTES)return json(request,{error:'PDF_SIZE',message:'Faktura PDF może mieć maksymalnie 20 MB.'},400);
+    if(!/^[a-f0-9]{64}$/.test(sha256))return json(request,{error:'PDF_HASH',message:'Nieprawidłowy skrót pliku PDF.'},400);
+    if(invoiceDate&&!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate))return json(request,{error:'INVOICE_DATE',message:'Nieprawidłowa data faktury.'},400);
+    if(body.grossAmount!==null&&body.grossAmount!==undefined&&body.grossAmount!==''&&grossAmount===null)return json(request,{error:'INVOICE_AMOUNT',message:'Nieprawidłowa kwota faktury.'},400);
+    const id=makeId('inv');
+    const period=invoiceDate?invoiceDate.slice(0,7):nowIso().slice(0,7);
+    const objectKey='service-orders/'+period+'/'+order.id+'/'+id+'.pdf';
+    await q(
+      "INSERT INTO service_order_invoices(id,service_order_id,uploaded_by_user_id,object_key,file_name,content_type,size_bytes,sha256,invoice_number,supplier,invoice_date,gross_amount,status) VALUES($1,$2,$3,$4,$5,'application/pdf',$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,'UPLOADING')",
+      [id,order.id,u.id,objectKey,fileName,sizeBytes,sha256,invoiceNumber,supplier,invoiceDate||null,grossAmount]
+    );
+    const uploadUrl=await getSignedUrl(storage,new PutObjectCommand({
+      Bucket:SERVICE_INVOICE_BUCKET,
+      Key:objectKey,
+      ContentType:'application/pdf',
+      Metadata:{sha256}
+    }),{expiresIn:SERVICE_INVOICE_URL_TTL_SECONDS});
+    await audit(session,'SERVICE_INVOICE_UPLOAD_STARTED','service_order_invoice',id,order.point_id,{orderId:order.id,sizeBytes,invoiceNumber:invoiceNumber||null});
+    return json(request,{invoiceId:id,uploadUrl,expiresInSeconds:SERVICE_INVOICE_URL_TTL_SECONDS,requiredHeaders:{'content-type':'application/pdf','x-amz-meta-sha256':sha256}});
+  }
+
+  const invoiceCompleteMatch=url.pathname.match(/^\/service\/invoices\/([^/]+)\/complete$/);
+  if(method==='POST'&&invoiceCompleteMatch){
+    const session=await requireActive(request),u=session.user;
+    const invoice=(await q("SELECT i.*,s.point_id FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id WHERE i.id=$1 AND i.status='UPLOADING' LIMIT 1",[invoiceCompleteMatch[1]])).rows[0];
+    if(!invoice)return json(request,{error:'NOT_FOUND'},404);
+    await requireServiceFinanceOrder(u,invoice.service_order_id);
+    const storage=requireInvoiceStorage();
+    let head;
+    try{head=await storage.send(new HeadObjectCommand({Bucket:SERVICE_INVOICE_BUCKET,Key:invoice.object_key}));}
+    catch{return json(request,{error:'PDF_NOT_UPLOADED',message:'Nie znaleziono przesłanego pliku PDF. Spróbuj dodać fakturę ponownie.'},409);}
+    const remoteSize=Number(head.ContentLength||0);
+    const remoteHash=String(head.Metadata?.sha256||'').toLowerCase();
+    const remoteType=String(head.ContentType||'').split(';')[0].trim().toLowerCase();
+    if(remoteSize!==Number(invoice.size_bytes)||remoteHash!==String(invoice.sha256).toLowerCase()||remoteType!=='application/pdf'){
+      return json(request,{error:'PDF_VERIFY_FAILED',message:'Przesłany plik nie przeszedł weryfikacji integralności.'},409);
+    }
+    await q("UPDATE service_order_invoices SET status='READY',ready_at=now() WHERE id=$1 AND status='UPLOADING'",[invoice.id]);
+    await audit(session,'SERVICE_INVOICE_UPLOADED','service_order_invoice',invoice.id,invoice.point_id,{orderId:invoice.service_order_id,sizeBytes:remoteSize});
+    const row=(await q("SELECT i.*,s.order_number,u.name AS uploaded_by_name FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.id=$1",[invoice.id])).rows[0];
+    return json(request,serviceInvoiceView(row));
+  }
+
+  if(method==='GET'&&url.pathname==='/service/invoices'){
+    const session=await requireActive(request),u=session.user;
+    const period=cleanText(url.searchParams.get('month'),7)||nowIso().slice(0,7);
+    return json(request,{period,invoices:await listAccessibleInvoices(u,period)});
+  }
+
+  if(method==='GET'&&url.pathname==='/service/invoices/monthly-prompt'){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='TECHNICIAN')return json(request,{show:false,period:null,count:0,dismissed:false});
+    const period=monthlyInvoicePromptPeriod();
+    if(!period)return json(request,{show:false,period:null,count:0,dismissed:false});
+    const invoices=await listAccessibleInvoices(u,period);
+    const bounds=invoicePeriodBounds(period);
+    const dismissed=(await q('SELECT 1 FROM invoice_monthly_prompt_dismissals WHERE user_id=$1 AND period_month=$2::date LIMIT 1',[u.id,bounds.start])).rowCount>0;
+    return json(request,{show:invoices.length>0&&!dismissed,period,count:invoices.length,dismissed});
+  }
+
+  if(method==='POST'&&url.pathname==='/service/invoices/monthly-prompt/dismiss'){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Ten komunikat dotyczy serwisanta.'),{status:403,code:'TECHNICIAN_ONLY'});
+    const bounds=invoicePeriodBounds(cleanText(body.period,7));
+    if(!bounds)return json(request,{error:'INVOICE_PERIOD',message:'Nieprawidłowy miesiąc.'},400);
+    await q('INSERT INTO invoice_monthly_prompt_dismissals(user_id,period_month,dismissed_at) VALUES($1,$2::date,now()) ON CONFLICT(user_id,period_month) DO UPDATE SET dismissed_at=now()',[u.id,bounds.start]);
+    await audit(session,'INVOICE_MONTHLY_PROMPT_DISMISSED','invoice_period',bounds.period,null,{});
+    return json(request,{ok:true,period:bounds.period});
+  }
+
+  if(method==='POST'&&url.pathname==='/service/invoices/download-batch'){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    const period=cleanText(body.period,7);
+    const invoices=await listAccessibleInvoices(u,period);
+    const storage=requireInvoiceStorage();
+    const files=[];
+    for(const invoice of invoices){
+      const row=(await q("SELECT object_key FROM service_order_invoices WHERE id=$1 AND status='READY' LIMIT 1",[invoice.id])).rows[0];
+      if(!row)continue;
+      const url=await getSignedUrl(storage,new GetObjectCommand({
+        Bucket:SERVICE_INVOICE_BUCKET,Key:row.object_key,
+        ResponseContentType:'application/pdf',
+        ResponseContentDisposition:'attachment; filename="'+safePdfFileName(invoice.fileName).replace(/"/g,'')+'"'
+      }),{expiresIn:SERVICE_INVOICE_URL_TTL_SECONDS});
+      files.push({...invoice,downloadUrl:url});
+    }
+    await audit(session,'SERVICE_INVOICE_BATCH_DOWNLOADED','invoice_period',period,null,{count:files.length});
+    return json(request,{period,files,expiresInSeconds:SERVICE_INVOICE_URL_TTL_SECONDS});
+  }
+
+  const invoiceDownloadMatch=url.pathname.match(/^\/service\/invoices\/([^/]+)\/download-intent$/);
+  if(method==='POST'&&invoiceDownloadMatch){
+    const session=await requireActive(request),u=session.user;
+    const invoice=(await q("SELECT i.*,s.point_id FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id WHERE i.id=$1 AND i.status='READY' LIMIT 1",[invoiceDownloadMatch[1]])).rows[0];
+    if(!invoice)return json(request,{error:'NOT_FOUND'},404);
+    await requireServiceFinanceOrder(u,invoice.service_order_id);
+    const url=await getSignedUrl(requireInvoiceStorage(),new GetObjectCommand({
+      Bucket:SERVICE_INVOICE_BUCKET,Key:invoice.object_key,
+      ResponseContentType:'application/pdf',
+      ResponseContentDisposition:'attachment; filename="'+safePdfFileName(invoice.file_name).replace(/"/g,'')+'"'
+    }),{expiresIn:SERVICE_INVOICE_URL_TTL_SECONDS});
+    await audit(session,'SERVICE_INVOICE_DOWNLOADED','service_order_invoice',invoice.id,invoice.point_id,{orderId:invoice.service_order_id});
+    return json(request,{invoice:serviceInvoiceView(invoice),downloadUrl:url,expiresInSeconds:SERVICE_INVOICE_URL_TTL_SECONDS});
+  }
+
+  const invoiceDeleteMatch=url.pathname.match(/^\/service\/invoices\/([^/]+)$/);
+  if(method==='DELETE'&&invoiceDeleteMatch){
+    const session=await requireActive(request),u=session.user;
+    const invoice=(await q("SELECT i.*,s.point_id FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id WHERE i.id=$1 AND i.status<>'DELETED' LIMIT 1",[invoiceDeleteMatch[1]])).rows[0];
+    if(!invoice)return json(request,{error:'NOT_FOUND'},404);
+    await requireServiceFinanceOrder(u,invoice.service_order_id);
+    await q("UPDATE service_order_invoices SET status='DELETED',deleted_at=now() WHERE id=$1",[invoice.id]);
+    try{await requireInvoiceStorage().send(new DeleteObjectCommand({Bucket:SERVICE_INVOICE_BUCKET,Key:invoice.object_key}));}catch(error){console.error('[invoice delete storage]',error);}
+    await audit(session,'SERVICE_INVOICE_DELETED','service_order_invoice',invoice.id,invoice.point_id,{orderId:invoice.service_order_id});
+    return json(request,{ok:true});
+  }
+
   const detailsMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
   if(method==='POST'&&detailsMatch){
     const session=await requireActive(request),u=session.user;
