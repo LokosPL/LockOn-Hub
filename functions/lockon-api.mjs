@@ -59,6 +59,7 @@ const normalizeEmail = (value = '') => String(value).trim().toLowerCase();
 const normalizePhone = (value = '') => String(value).replace(/\D/g, '').slice(-15);
 const cleanText = (value, max = 240) => String(value ?? '').trim().slice(0, max);
 const normalizeTechnicianPercent = (value) => {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 && number <= 100
     ? Math.round(number * 100) / 100
@@ -2315,10 +2316,10 @@ const route = async (request) => {
     const requestedRole = String(body.requestedRole || 'USER').toUpperCase();
     const splitRaw = body.technicianSplitPercent;
     const technicianSplitPercent = requestedRole === 'TECHNICIAN'
-      ? Number(splitRaw)
+      ? normalizeTechnicianPercent(splitRaw)
       : null;
     if (!pointName || !city || !REQUESTABLE_ROLES.has(requestedRole)) return json(request, { error: 'VALIDATION', message: 'Nieprawidłowe zgłoszenie punktu.' }, 400);
-    if (requestedRole === 'TECHNICIAN' && (!Number.isFinite(technicianSplitPercent) || technicianSplitPercent < 0 || technicianSplitPercent > 100)) {
+    if (requestedRole === 'TECHNICIAN' && technicianSplitPercent === null) {
       return json(request, { error: 'TECHNICIAN_SPLIT', message: 'Ustaw swój procent rozliczenia serwisanta od 0 do 100%.' }, 400);
     }
     await q("UPDATE access_requests SET status='REJECTED',resolved_at=now(),note='Zastąpione nowszym zgłoszeniem' WHERE user_id=$1 AND status='PENDING'", [session.user.id]);
@@ -3392,10 +3393,13 @@ const route = async (request) => {
     const statusClient=await pool.connect();
     try{
       await statusClient.query('BEGIN');
-      await statusClient.query(
-        "UPDATE service_orders SET status=$1,updated_at=now(),completed_at=CASE WHEN $1='COMPLETED' THEN now() ELSE completed_at END,final_cost=CASE WHEN $1='COMPLETED' AND final_cost IS NULL THEN estimated_cost ELSE final_cost END WHERE id=$2",
-        [next,found.id]
+      const statusUpdate=await statusClient.query(
+        "UPDATE service_orders SET status=$1,updated_at=now(),completed_at=CASE WHEN $1='COMPLETED' THEN now() ELSE completed_at END,final_cost=CASE WHEN $1='COMPLETED' AND final_cost IS NULL THEN estimated_cost ELSE final_cost END WHERE id=$2 AND status=$3 RETURNING id",
+        [next,found.id,found.status]
       );
+      if(statusUpdate.rowCount!==1){
+        throw Object.assign(new Error('Status zlecenia zmienił się w międzyczasie. Odśwież dane i spróbuj ponownie.'),{status:409,code:'ORDER_STATUS_CHANGED'});
+      }
       await statusClient.query(
         'INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,note,changed_by_user_id) VALUES($1,$2,$3,$4,$5,$6)',
         [makeId('hst'),found.id,found.status,next,note||null,u.id]
@@ -3703,9 +3707,10 @@ const route = async (request) => {
     }
 
     const updated=(await q(
-      "UPDATE service_order_transfers SET status=$1,note=CASE WHEN NULLIF($2,'') IS NULL THEN note ELSE $2 END,accepted_by_user_id=CASE WHEN $1='ACCEPTED' THEN $3 ELSE accepted_by_user_id END,shipped_at=CASE WHEN $1='IN_TRANSIT' THEN COALESCE(shipped_at,now()) ELSE shipped_at END,delivered_at=CASE WHEN $1='DELIVERED' THEN now() ELSE delivered_at END,accepted_at=CASE WHEN $1='ACCEPTED' THEN now() ELSE accepted_at END,updated_at=now() WHERE id=$4 RETURNING *",
-      [next,note,acceptedBy,transfer.id]
+      "UPDATE service_order_transfers SET status=$1,note=CASE WHEN NULLIF($2,'') IS NULL THEN note ELSE $2 END,accepted_by_user_id=CASE WHEN $1='ACCEPTED' THEN $3 ELSE accepted_by_user_id END,shipped_at=CASE WHEN $1='IN_TRANSIT' THEN COALESCE(shipped_at,now()) ELSE shipped_at END,delivered_at=CASE WHEN $1='DELIVERED' THEN now() ELSE delivered_at END,accepted_at=CASE WHEN $1='ACCEPTED' THEN now() ELSE accepted_at END,updated_at=now() WHERE id=$4 AND status=$5 RETURNING *",
+      [next,note,acceptedBy,transfer.id,transfer.status]
     )).rows[0];
+    if(!updated)return json(request,{error:'TRANSFER_STATUS_CHANGED',message:'Etap przekazania zmienił się w międzyczasie. Odśwież dane i spróbuj ponownie.'},409);
 
     const physicalPointId=next==='CANCELLED'
       ? transfer.from_point_id
@@ -3730,8 +3735,9 @@ const route = async (request) => {
   }
 
   if(method==='GET'&&url.pathname==='/integrations/gmail'){
-    const session=await requireActive(request),pointId=cleanText(url.searchParams.get('pointId'),80);
-    await requirePoint(session.user,pointId);
+    const session=await requireActive(request),u=session.user,pointId=cleanText(url.searchParams.get('pointId'),80);
+    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do konfiguracji Gmail.'),{status:403,code:'GMAIL_FORBIDDEN'});
+    await requirePoint(u,pointId);
     const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,refresh_token_ciphertext,oauth_client_secret_ciphertext,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
     let row=rows[0]||null;
     let inherited=false;
@@ -3893,6 +3899,7 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/notifications/settings'){
     const session=await requireActive(request),u=session.user;
+    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do ustawień powiadomień.'),{status:403,code:'NOTIFICATIONS_FORBIDDEN'});
     const pointId=cleanText(url.searchParams.get('pointId'),80);
     await requirePoint(u,pointId);
     await q("INSERT INTO point_notification_settings(point_id) VALUES($1) ON CONFLICT(point_id) DO NOTHING",[pointId]);
@@ -3928,6 +3935,7 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/notifications/history'){
     const session=await requireActive(request),u=session.user;
+    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do historii powiadomień.'),{status:403,code:'NOTIFICATIONS_FORBIDDEN'});
     const pointId=cleanText(url.searchParams.get('pointId'),80);
     await requirePoint(u,pointId);
     const {rows}=await q(
@@ -4095,19 +4103,27 @@ const route = async (request) => {
     const action=supportTicketAction[2],body=await readJson(request);
     if(action==='take'){
       if(!ticket.consultant_requested_at)return json(request,{error:'CONSULTANT_NOT_REQUESTED',message:'Użytkownik nie poprosił jeszcze konsultanta o dołączenie.'},409);
+      if(ticket.assigned_support_user_id&&ticket.assigned_support_user_id!==u.id)return json(request,{error:'SUPPORT_ALREADY_ASSIGNED',message:'Ta rozmowa jest już obsługiwana przez innego konsultanta.'},409);
       const firstJoin=!ticket.assigned_support_user_id;
-      await q("UPDATE support_conversations SET assigned_support_user_id=$2,taken_at=COALESCE(taken_at,now()),consultant_joined_at=COALESCE(consultant_joined_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
+      const claimed=(await q("UPDATE support_conversations SET assigned_support_user_id=$2,taken_at=COALESCE(taken_at,now()),consultant_joined_at=COALESCE(consultant_joined_at,now()),updated_at=now() WHERE id=$1 AND (assigned_support_user_id IS NULL OR assigned_support_user_id=$2) RETURNING id",[ticket.id,u.id])).rows[0];
+      if(!claimed)return json(request,{error:'SUPPORT_ALREADY_ASSIGNED',message:'Ta rozmowa została właśnie przejęta przez innego konsultanta.'},409);
       if(firstJoin)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SYSTEM',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,(u.name||u.email||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_JOINED'})]);
       await audit(session,'SUPPORT_TAKEN','support_conversation',ticket.id,ticket.point_id,{firstJoin});
     }else if(action==='reply'){
       const message=cleanText(body.message,2000);if(!message)return json(request,{error:'MESSAGE_REQUIRED'},400);
       if(ticket.status!=='OPEN')return json(request,{error:'TICKET_CLOSED',message:'Zgłoszenie jest zamknięte.'},409);
       if(!ticket.consultant_requested_at)return json(request,{error:'CONSULTANT_NOT_REQUESTED',message:'Użytkownik nie poprosił konsultanta o dołączenie.'},409);
+      if(ticket.assigned_support_user_id&&ticket.assigned_support_user_id!==u.id)return json(request,{error:'SUPPORT_ALREADY_ASSIGNED',message:'Ta rozmowa jest już obsługiwana przez innego konsultanta.'},409);
+      const firstJoin=!ticket.assigned_support_user_id;
+      const claimed=(await q("UPDATE support_conversations SET assigned_support_user_id=COALESCE(assigned_support_user_id,$2),taken_at=COALESCE(taken_at,now()),consultant_joined_at=COALESCE(consultant_joined_at,now()),updated_at=now() WHERE id=$1 AND (assigned_support_user_id IS NULL OR assigned_support_user_id=$2) RETURNING id",[ticket.id,u.id])).rows[0];
+      if(!claimed)return json(request,{error:'SUPPORT_ALREADY_ASSIGNED',message:'Ta rozmowa została właśnie przejęta przez innego konsultanta.'},409);
+      if(firstJoin)await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SYSTEM',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,(u.name||u.email||'Konsultant')+' dołączył do rozmowy. Bot nadal działa równolegle.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_JOINED'})]);
       await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SUPPORT',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,message,JSON.stringify({target:'CONSULTANT'})]);
-      await q("UPDATE support_conversations SET assigned_support_user_id=COALESCE(assigned_support_user_id,$2),taken_at=COALESCE(taken_at,now()),consultant_joined_at=COALESCE(consultant_joined_at,now()),updated_at=now() WHERE id=$1",[ticket.id,u.id]);
-      await audit(session,'SUPPORT_REPLIED','support_conversation',ticket.id,ticket.point_id,{length:message.length});
+      await audit(session,'SUPPORT_REPLIED','support_conversation',ticket.id,ticket.point_id,{length:message.length,firstJoin});
     }else{
-      await q("UPDATE support_conversations SET assigned_support_user_id=NULL,taken_at=NULL,consultant_requested_at=NULL,consultant_joined_at=NULL,updated_at=now() WHERE id=$1",[ticket.id]);
+      if(ticket.assigned_support_user_id&&ticket.assigned_support_user_id!==u.id)return json(request,{error:'SUPPORT_ALREADY_ASSIGNED',message:'Ta rozmowa jest obsługiwana przez innego konsultanta.'},409);
+      const closed=(await q("UPDATE support_conversations SET assigned_support_user_id=NULL,taken_at=NULL,consultant_requested_at=NULL,consultant_joined_at=NULL,updated_at=now() WHERE id=$1 AND (assigned_support_user_id IS NULL OR assigned_support_user_id=$2) RETURNING id",[ticket.id,u.id])).rows[0];
+      if(!closed)return json(request,{error:'SUPPORT_ALREADY_ASSIGNED',message:'Ta rozmowa została właśnie przejęta przez innego konsultanta.'},409);
       await q("INSERT INTO support_messages(id,conversation_id,sender_user_id,sender_kind,body,metadata) VALUES($1,$2,$3,'SYSTEM',$4,$5::jsonb)",[makeId('msg'),ticket.id,u.id,'Konsultant zakończył kanał rozmowy. Bot nadal jest dostępny.',JSON.stringify({target:'CONSULTANT',event:'CONSULTANT_CLOSED'})]);
       await audit(session,'SUPPORT_CLOSED','support_conversation',ticket.id,ticket.point_id,{});
     }

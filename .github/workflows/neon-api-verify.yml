@@ -37,6 +37,12 @@ jobs:
           grep -q "metadata->>'target'='CONSULTANT'" functions/lockon-api.mjs
           grep -q "metadata->>'target' IS NULL" functions/lockon-api.mjs
           grep -q "target:'BOT'" functions/lockon-api.mjs
+          grep -q 'SUPPORT_ALREADY_ASSIGNED' functions/lockon-api.mjs
+          grep -q 'ORDER_STATUS_CHANGED' functions/lockon-api.mjs
+          grep -q 'TRANSFER_STATUS_CHANGED' functions/lockon-api.mjs
+          grep -q 'GMAIL_FORBIDDEN' functions/lockon-api.mjs
+          grep -q 'NOTIFICATIONS_FORBIDDEN' functions/lockon-api.mjs
+          grep -q "value === null || value === undefined || value === ''" functions/lockon-api.mjs
           grep -q 'consultant_requested_at' functions/lockon-api.mjs
           grep -q 'customer_portal_code' functions/lockon-api.mjs
           grep -q "error: 'WEB_CODE_ONLY'" functions/lockon-api.mjs

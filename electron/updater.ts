@@ -128,19 +128,29 @@ export const downloadUpdate = async () => {
       status: 'development',
       message: 'Pobieranie aktualizacji jest wyłączone w trybie developerskim.'
     });
-    return;
+    return currentState;
+  }
+
+  if (currentState.status === 'downloading' || currentState.status === 'downloaded') return currentState;
+  if (currentState.status !== 'available') {
+    throw new Error('Najpierw sprawdź dostępność aktualizacji.');
   }
 
   await autoUpdater.downloadUpdate();
+  return currentState;
 };
 
 export const installUpdate = () => {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged) return currentState;
+  if (currentState.status !== 'downloaded') {
+    throw new Error('Aktualizacja nie jest jeszcze gotowa do instalacji.');
+  }
 
   // isSilent=true dodaje /S do instalatora NSIS, więc użytkownik nie widzi
   // kreatora "dla kogo zainstalować" ani wyboru katalogu podczas aktualizacji.
   // isForceRunAfter=true uruchamia ServiceOS ponownie po zakończeniu.
   autoUpdater.quitAndInstall(true, true);
+  return currentState;
 };
 
 let updateTimer: NodeJS.Timeout | null = null;

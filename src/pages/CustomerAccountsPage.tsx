@@ -171,6 +171,7 @@ export function CustomerAccountsPage() {
   };
 
   const getCode=async(customer:CustomerAccountSummary,rotate=false)=>{
+    if(busy)return;
     if(rotate&&!window.confirm(`Wygenerować nowy kod dla ${customer.name}? Stary kod i sesje kodowe przestaną działać.`))return;
     setBusy(customer.id+':code');setNotice(null);
     try{
@@ -183,6 +184,7 @@ export function CustomerAccountsPage() {
   };
 
   const sendCode=async(customer:CustomerAccountSummary)=>{
+    if(busy)return;
     if(!customer.email){setNotice({tone:'error',text:'Ten klient nie ma zapisanego adresu e-mail.'});return;}
     setBusy(customer.id+':mail');setNotice(null);
     try{
@@ -193,6 +195,7 @@ export function CustomerAccountsPage() {
   };
 
   const toggleBlock=async(customer:CustomerAccountSummary)=>{
+    if(busy)return;
     const next=!customer.blocked;
     if(!window.confirm(next
       ? `Zablokować portal klienta ${customer.name}? Wszystkie aktywne sesje zostaną zamknięte.`
@@ -208,6 +211,7 @@ export function CustomerAccountsPage() {
   };
 
   const logoutAll=async(customer:CustomerAccountSummary)=>{
+    if(busy)return;
     if(!window.confirm(`Wylogować ${customer.name} ze wszystkich aktywnych sesji portalu?`))return;
     setBusy(customer.id+':logout');setNotice(null);
     try{
@@ -219,6 +223,7 @@ export function CustomerAccountsPage() {
   };
 
   const unlinkGoogle=async(customer:CustomerAccountSummary)=>{
+    if(busy)return;
     if(!customer.googleLinked)return;
     if(!window.confirm(`Odłączyć konto Google klienta ${customer.name}? Klient nadal będzie mógł wejść kodem i ponownie połączyć Google.`))return;
     setBusy(customer.id+':unlink');setNotice(null);
@@ -232,7 +237,7 @@ export function CustomerAccountsPage() {
   };
 
   const saveProfile=async()=>{
-    if(!selectedId||!selected)return;
+    if(busy||!selectedId||!selected)return;
     if(!profile.firstName.trim()){setNotice({tone:'error',text:'Podaj imię klienta.'});return;}
     const emailChanged=(detail?.customer.email||'').trim().toLowerCase()!==profile.email.trim().toLowerCase();
     if(emailChanged&&selected.googleLinked&&!window.confirm('Zmiana e-mailu odłączy obecne konto Google klienta dla bezpieczeństwa. Kontynuować?'))return;
@@ -259,6 +264,7 @@ export function CustomerAccountsPage() {
   };
 
   const toggleHistory=async(order:ServiceOrderSummary)=>{
+    if(busy)return;
     if(expandedOrderId===order.id){setExpandedOrderId(null);return;}
     setExpandedOrderId(order.id);
     if(histories[order.id])return;
@@ -271,6 +277,7 @@ export function CustomerAccountsPage() {
   };
 
   const replyQuote=async(item:CustomerQuoteRequest)=>{
+    if(busy)return;
     const message=(quoteReply[item.id]||'').trim();
     if(!message)return;
     setBusy(item.id+':reply');setNotice(null);
@@ -284,6 +291,7 @@ export function CustomerAccountsPage() {
   };
 
   const priceQuote=async(item:CustomerQuoteRequest)=>{
+    if(busy)return;
     const amount=Number(String(quoteAmount[item.id]||'').replace(',','.'));
     if(!Number.isFinite(amount)||amount<0){setNotice({tone:'error',text:'Podaj prawidłową kwotę wyceny.'});return;}
     setBusy(item.id+':price');setNotice(null);

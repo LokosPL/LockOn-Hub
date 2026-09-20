@@ -410,7 +410,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const changeStatus = async (order: ServiceOrderSummary, status: string) => {
-    if (status === order.status) return;
+    if (orderBusyId || status === order.status) return;
+    if (status === 'CANCELLED' && !window.confirm(`Anulować zlecenie #${order.orderNumber}? Tej zmiany nie należy używać zamiast zwykłego etapu naprawy.`)) return;
+    if (status === 'COMPLETED' && !window.confirm(`Zakończyć zlecenie #${order.orderNumber}? ServiceOS zapisze rozliczenie na podstawie kosztu końcowego.`)) return;
+    setOrderBusyId(order.id);
     setError('');
     setNotice('');
     try {
@@ -445,10 +448,13 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się zmienić statusu.');
       await loadOrders();
+    } finally {
+      setOrderBusyId(null);
     }
   };
 
   const saveOrderDetails = async (order: ServiceOrderSummary) => {
+    if (orderBusyId) return;
     const draft = detailsDrafts[order.id];
     if (!draft) return;
     const cleanImei = draft.imei.replace(/\s/g, '');
@@ -499,6 +505,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const addOrderNote = async (orderId: string) => {
+    if (orderBusyId) return;
     const body = (noteDrafts[orderId] ?? '').trim();
     if (!body) return;
     setOrderBusyId(orderId); setError(''); setNotice('');
@@ -515,8 +522,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const sendTransfer = async (order: ServiceOrderSummary) => {
+    if (orderBusyId) return;
     const draft = transferDrafts[order.id] ?? {toPointId:'',note:''};
     if (!draft.toPointId) { setError('Wybierz docelowy punkt serwisowy.'); return; }
+    const destination=servicePoints.find((point)=>point.id===draft.toPointId);
+    if (!window.confirm(`Przekazać urządzenie ze zlecenia #${order.orderNumber} do ${destination?.name || 'wybranego punktu'}?`)) return;
     setOrderBusyId(order.id); setError(''); setNotice('');
     try {
       const currentPointId = order.currentPointId || order.homePointId || order.pointId;
@@ -536,7 +546,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const sendReturnHome = async (order: ServiceOrderSummary) => {
+    if (orderBusyId) return;
     const draft = transferDrafts[order.id] ?? {toPointId:'',note:''};
+    if (!window.confirm(`Odesłać urządzenie ze zlecenia #${order.orderNumber} do punktu macierzystego?`)) return;
     setOrderBusyId(order.id); setError(''); setNotice('');
     try {
       const result = await window.lockOn.service.transferOrder(order.id, {
@@ -555,6 +567,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const changeTransferStatus = async (transfer: ServiceTransfer, status: ServiceTransfer['status']) => {
+    if (orderBusyId) return;
+    if (status === 'CANCELLED' && !window.confirm(`Anulować przekazanie zlecenia #${transfer.orderNumber}? Urządzenie wróci logicznie do punktu źródłowego.`)) return;
+    if (status === 'REJECTED' && !window.confirm(`Odrzucić przekazanie zlecenia #${transfer.orderNumber}? Potwierdź tylko, jeśli punkt docelowy faktycznie odmawia przyjęcia.`)) return;
     setOrderBusyId(transfer.id); setError(''); setNotice('');
     try {
       const result = await window.lockOn.service.updateTransferStatus(transfer.id,status);
@@ -575,6 +590,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   }[status]);
 
   const replyCustomerQuote = async (requestId: string) => {
+    if (quoteBusyId) return;
     const message=(quoteReplyDrafts[requestId] || '').trim();
     if (!message) {
       setError('Wpisz wiadomość dla klienta.');
@@ -592,6 +608,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const priceCustomerQuote = async (requestId: string) => {
+    if (quoteBusyId) return;
     const amount=Number(quoteAmountDrafts[requestId] ?? customerQuotes.find((item)=>item.id===requestId)?.quoteAmount ?? '');
     const note=(quoteNoteDrafts[requestId] || '').trim();
     if (!Number.isFinite(amount) || amount < 0) {
@@ -609,7 +626,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const closeCustomerQuote = async (requestId: string) => {
-    if (!window.confirm('Zamknąć tę rozmowę o wycenie?')) return;
+    if (quoteBusyId) return;
+    if (!window.confirm('Zamknąć tę rozmowę o wycenie? Klient nie będzie mógł kontynuować tego wątku.')) return;
     setQuoteBusyId(requestId); setError(''); setNotice('');
     try {
       await window.lockOn.service.closeCustomerQuote(requestId);
@@ -636,7 +654,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const disconnectGmail = async () => {
-    if (!pointId) return;
+    if (!pointId || gmailBusy) return;
+    if (!window.confirm('Odłączyć Gmail od tego punktu? Automatyczne wiadomości przestaną być wysyłane do ponownego połączenia konta.')) return;
     setGmailBusy(true); setError(''); setNotice('');
     try {
       await window.lockOn.gmail.disconnect(pointId);
@@ -849,11 +868,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                     <div className="service-order-actions">
                       <div className="service-order-status">
                         {canCancelHere && !canEditStatus && order.status !== 'CANCELLED' ? (
-                          <div className="transfer-only-status"><span className="status-badge">{order.handlingMode === 'TRANSFER_ONLY' ? 'Tylko przekazanie' : order.statusLabel}</span><button className="button small danger-soft" onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button></div>
+                          <div className="transfer-only-status"><span className="status-badge">{order.handlingMode === 'TRANSFER_ONLY' ? 'Tylko przekazanie' : order.statusLabel}</span><button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button></div>
                         ) : canEditOrderHere && order.handlingMode === 'TRANSFER_ONLY' ? (
-                          <div className="transfer-only-status"><span className="status-badge">Tylko przekazanie</span>{order.status !== 'CANCELLED' && <button className="button small danger-soft" onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button>}</div>
+                          <div className="transfer-only-status"><span className="status-badge">Tylko przekazanie</span>{order.status !== 'CANCELLED' && <button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button>}</div>
                         ) : canEditOrderHere ? (
-                          <select value={order.status} onChange={(e) => void changeStatus(order, e.target.value)}>
+                          <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e) => void changeStatus(order, e.target.value)}>
                             {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && (order.canMarkReady===false || order.status!=='REPAIR_DONE')) || (value==='COMPLETED' && order.status!=='READY')}>{label}</option>)}
                           </select>
                         ) : (
@@ -887,7 +906,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             {order.handlingMode === 'STANDARD' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
                             <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditIntakeHere} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
                           </div>
-                          {canEditIntakeHere && <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
+                          {canEditIntakeHere && <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
                         </section>
                       )}
 
@@ -911,14 +930,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                                 {servicePoints.filter((point)=>point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                               </select>
                               <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do protokołu przekazania (opcjonalnie)"/>
-                              <button className="button primary small" disabled={orderBusyId===order.id || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Przekaż urządzenie dalej</button>
+                              <button className="button primary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Przekaż urządzenie dalej</button>
                             </div>
                           ) : <div className="service-history-empty">Przekazanie może rozpocząć użytkownik obsługujący aktualny punkt urządzenia.</div>
                         ) : order.returnRequired ? (
                           canTransferHere && canEditStatus && order.status==='REPAIR_DONE' ? (
                             <div className="transfer-compose">
                               <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów"/>
-                              <button className="button primary small" disabled={orderBusyId===order.id} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> Odeślij do punktu macierzystego</button>
+                              <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> Odeślij do punktu macierzystego</button>
                             </div>
                           ) : (
                             <div className="service-history-empty">
@@ -934,7 +953,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                               {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                             </select>
                             <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
-                            <button className="button secondary small" disabled={orderBusyId===order.id || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
+                            <button className="button secondary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
                           </div>
                         ) : <div className="service-history-empty">Brak aktywnego transportu.</div>}
                         {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
@@ -959,7 +978,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         <div className="service-workspace-title"><StickyNote size={15}/><div><strong>Notatki wewnętrzne</strong><span>Nie są wysyłane klientowi.</span></div></div>
                         {canEditStatus && <div className="service-note-compose">
                           <textarea rows={3} maxLength={2000} value={noteDrafts[order.id] ?? ''} onChange={(e)=>setNoteDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="Diagnoza technika, zamówione części, ustalenia z klientem…"/>
-                          <button className="button secondary small" disabled={orderBusyId===order.id || !(noteDrafts[order.id] ?? '').trim()} onClick={()=>void addOrderNote(order.id)}>Dodaj notatkę</button>
+                          <button className="button secondary small" disabled={Boolean(orderBusyId) || !(noteDrafts[order.id] ?? '').trim()} onClick={()=>void addOrderNote(order.id)}>Dodaj notatkę</button>
                         </div>}
                         <div className="service-note-list">
                           {notes.map((note)=><div key={note.id}><div><strong>{note.authorName}</strong><span>{new Date(note.createdAt).toLocaleString('pl-PL')}</span></div><p>{note.body}</p></div>)}
@@ -1015,10 +1034,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                   <small>{new Date(transfer.updatedAt).toLocaleString('pl-PL')}</small>
                 </div>
                 <div className="transfer-board-actions">
-                  {transfer.status==='IN_TRANSIT' && canActDestination && <button className="button small primary" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'DELIVERED')}>Dostarczono</button>}
-                  {transfer.status==='IN_TRANSIT' && canActSource && <button className="button small secondary" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'CANCELLED')}>Anuluj</button>}
-                  {transfer.status==='DELIVERED' && canActDestination && <button className="button small primary" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'ACCEPTED')}><PackageCheck size={13}/> Przyjmij</button>}
-                  {transfer.status==='DELIVERED' && canActDestination && <button className="button small danger-soft" disabled={orderBusyId===transfer.id} onClick={()=>void changeTransferStatus(transfer,'REJECTED')}>Odrzuć</button>}
+                  {transfer.status==='IN_TRANSIT' && canActDestination && <button className="button small primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(transfer,'DELIVERED')}>Dostarczono</button>}
+                  {transfer.status==='IN_TRANSIT' && canActSource && <button className="button small secondary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(transfer,'CANCELLED')}>Anuluj</button>}
+                  {transfer.status==='DELIVERED' && canActDestination && <button className="button small primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(transfer,'ACCEPTED')}><PackageCheck size={13}/> Przyjmij</button>}
+                  {transfer.status==='DELIVERED' && canActDestination && <button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(transfer,'REJECTED')}>Odrzuć</button>}
                 </div>
               </article>;
             })}
@@ -1056,12 +1075,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                   <div className="desktop-quote-price-form">
                     <label><span>Kwota wyceny</span><input type="number" min="0" step="0.01" value={quoteAmountDrafts[item.id] ?? (item.quoteAmount == null ? '' : String(item.quoteAmount))} onChange={(e)=>setQuoteAmountDrafts((current)=>({...current,[item.id]:e.target.value}))} placeholder="0,00"/></label>
                     <label><span>Opis wyceny</span><input maxLength={1000} value={quoteNoteDrafts[item.id] ?? ''} onChange={(e)=>setQuoteNoteDrafts((current)=>({...current,[item.id]:e.target.value}))} placeholder="Co obejmuje cena?"/></label>
-                    <button className="button primary" disabled={quoteBusyId===item.id} onClick={()=>void priceCustomerQuote(item.id)}><BadgeDollarSign size={14}/> Wyślij wycenę</button>
+                    <button className="button primary" disabled={Boolean(quoteBusyId)} onClick={()=>void priceCustomerQuote(item.id)}><BadgeDollarSign size={14}/> Wyślij wycenę</button>
                   </div>
                   <div className="desktop-quote-reply-form">
                     <input maxLength={1000} value={quoteReplyDrafts[item.id] ?? ''} onChange={(e)=>setQuoteReplyDrafts((current)=>({...current,[item.id]:e.target.value}))} onKeyDown={(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void replyCustomerQuote(item.id);}}} placeholder="Napisz wiadomość do klienta"/>
-                    <button className="button secondary" disabled={quoteBusyId===item.id} onClick={()=>void replyCustomerQuote(item.id)}><Send size={14}/> Odpowiedz</button>
-                    <button className="button secondary danger" disabled={quoteBusyId===item.id} onClick={()=>void closeCustomerQuote(item.id)}>Zamknij</button>
+                    <button className="button secondary" disabled={Boolean(quoteBusyId)} onClick={()=>void replyCustomerQuote(item.id)}><Send size={14}/> Odpowiedz</button>
+                    <button className="button secondary danger" disabled={Boolean(quoteBusyId)} onClick={()=>void closeCustomerQuote(item.id)}>Zamknij</button>
                   </div>
                 </div>}
               </article>;

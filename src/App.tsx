@@ -155,7 +155,7 @@ export default function App() {
           {active === 'service' && <ServicePage auth={auth} effectiveRole={effectiveRole!} focusOrderId={focusOrderId} />}
           {active === 'earnings' && <EarningsPage auth={auth} effectiveRole={effectiveRole!} />}
           {active === 'browser' && <BrowserPage />}
-          {active === 'support' && <SupportDesk role={effectiveRole!} supportEnabled={auth.supportEnabled} onOpenChat={() => setHelpOpen(true)} />}
+          {active === 'support' && <SupportDesk role={effectiveRole!} supportEnabled={auth.supportEnabled} currentUserId={auth.user?.id} onOpenChat={() => setHelpOpen(true)} />}
           {active === 'settings' && (
             <SettingsPage
               auth={auth}
