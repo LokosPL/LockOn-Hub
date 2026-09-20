@@ -882,6 +882,106 @@ const registerIpc = () => {
       body: JSON.stringify({ body: String(body ?? '').trim().slice(0, 2000) })
     }, token);
   });
+  secureHandle('service:getCosting', async (orderId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/costing`, {}, token);
+  });
+  secureHandle('service:saveCosting', async (orderId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/costing`, {
+      method:'POST',body:JSON.stringify(payload)
+    }, token);
+  });
+  secureHandle('service:uploadInvoice', async (orderId: string, payload: any) => {
+    const token=requireSessionToken();
+    if(!mainWindow||mainWindow.isDestroyed())throw new Error('Główne okno aplikacji nie jest dostępne.');
+    const chosen=await dialog.showOpenDialog(mainWindow,{
+      title:'Wybierz fakturę zakupu części',
+      properties:['openFile'],
+      filters:[{name:'Dokument PDF',extensions:['pdf']}]
+    });
+    if(chosen.canceled||!chosen.filePaths[0])return {cancelled:true};
+    const filePath=chosen.filePaths[0];
+    const stat=await assertPdfFile(filePath);
+    const sha256=await sha256File(filePath);
+    const intent=await backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/invoices/upload-intent`,{
+      method:'POST',
+      body:JSON.stringify({
+        fileName:path.basename(filePath),
+        sizeBytes:stat.size,
+        sha256,
+        invoiceNumber:String(payload?.invoiceNumber??'').trim().slice(0,120),
+        supplier:String(payload?.supplier??'').trim().slice(0,180),
+        invoiceDate:String(payload?.invoiceDate??'').trim().slice(0,10),
+        grossAmount:payload?.grossAmount===null||payload?.grossAmount===undefined||payload?.grossAmount===''?null:Number(payload.grossAmount)
+      })
+    },token) as {invoiceId:string;uploadUrl:string;requiredHeaders?:Record<string,string>};
+    const bytes=await fs.promises.readFile(filePath);
+    const upload=await fetch(intent.uploadUrl,{
+      method:'PUT',
+      headers:intent.requiredHeaders||{'content-type':'application/pdf','x-amz-meta-sha256':sha256},
+      body:bytes,
+      redirect:'error',
+      signal:AbortSignal.timeout(60_000)
+    });
+    if(!upload.ok)throw new Error('Nie udało się wysłać faktury do prywatnego magazynu (HTTP '+upload.status+').');
+    const invoice=await backendRequest(`/service/invoices/${encodeURIComponent(safeId(intent.invoiceId,'inv'))}/complete`,{method:'POST',body:'{}'},token);
+    return {cancelled:false,invoice};
+  });
+  secureHandle('service:downloadInvoice', async (invoiceId: string) => {
+    const token=requireSessionToken();
+    const intent=await backendRequest(`/service/invoices/${encodeURIComponent(safeId(invoiceId,'inv'))}/download-intent`,{method:'POST',body:'{}'},token) as {invoice:{fileName:string};downloadUrl:string};
+    if(!mainWindow||mainWindow.isDestroyed())throw new Error('Główne okno aplikacji nie jest dostępne.');
+    const save=await dialog.showSaveDialog(mainWindow,{
+      title:'Zapisz fakturę PDF',
+      defaultPath:path.join(app.getPath('downloads'),safeDownloadFileName(intent.invoice?.fileName)),
+      filters:[{name:'Dokument PDF',extensions:['pdf']}]
+    });
+    if(save.canceled||!save.filePath)return {cancelled:true};
+    if(fs.existsSync(save.filePath))await fs.promises.unlink(save.filePath);
+    await fetchPdfToFile(intent.downloadUrl,save.filePath);
+    return {cancelled:false,filePath:save.filePath};
+  });
+  secureHandle('service:listInvoices', async (month: string) => {
+    const token=requireSessionToken();
+    const period=String(month??'').trim().slice(0,7);
+    return backendRequest('/service/invoices?month='+encodeURIComponent(period),{},token);
+  });
+  secureHandle('service:downloadInvoiceBatch', async (month: string) => {
+    const token=requireSessionToken();
+    const period=String(month??'').trim().slice(0,7);
+    const batch=await backendRequest('/service/invoices/download-batch',{method:'POST',body:JSON.stringify({period})},token) as {files:Array<{fileName:string;orderNumber?:number|null;downloadUrl:string}>};
+    if(!mainWindow||mainWindow.isDestroyed())throw new Error('Główne okno aplikacji nie jest dostępne.');
+    const chosen=await dialog.showOpenDialog(mainWindow,{title:'Wybierz folder dla faktur '+period,properties:['openDirectory','createDirectory']});
+    if(chosen.canceled||!chosen.filePaths[0])return {cancelled:true,downloaded:0};
+    const folder=chosen.filePaths[0];
+    let downloaded=0,failed=0;
+    for(const item of batch.files.slice(0,300)){
+      const prefix=item.orderNumber!=null?'Zlecenie-'+item.orderNumber+' - ':'';
+      const destination=uniqueDownloadPath(folder,prefix+safeDownloadFileName(item.fileName));
+      try{await fetchPdfToFile(item.downloadUrl,destination);downloaded+=1;}catch{failed+=1;}
+    }
+    return {cancelled:false,downloaded,failed,folder};
+  });
+  secureHandle('service:deleteInvoice', async (invoiceId: string) => {
+    const token=requireSessionToken();
+    return backendRequest(`/service/invoices/${encodeURIComponent(safeId(invoiceId,'inv'))}`,{method:'DELETE'},token);
+  });
+  secureHandle('service:getInvoiceMonthlyPrompt', async () => backendRequest('/service/invoices/monthly-prompt',{},requireSessionToken()));
+  secureHandle('service:dismissInvoiceMonthlyPrompt', async (period: string) => backendRequest('/service/invoices/monthly-prompt/dismiss',{
+    method:'POST',body:JSON.stringify({period:String(period??'').trim().slice(0,7)})
+  },requireSessionToken()));
+  secureHandle('service:getTechnicianWorkspace', async () => backendRequest('/service/technician-workspace',{},requireSessionToken()));
+  secureHandle('service:listTechnicianNotes', async () => backendRequest('/service/technician-notes',{},requireSessionToken()));
+  secureHandle('service:addTechnicianNote', async (payload: any) => backendRequest('/service/technician-notes',{
+    method:'POST',
+    body:JSON.stringify({
+      title:String(payload?.title??'').trim().slice(0,120),
+      body:String(payload?.body??'').trim().slice(0,4000),
+      pinned:payload?.pinned===true
+    })
+  },requireSessionToken()));
+  secureHandle('service:deleteTechnicianNote', async (noteId: string) => backendRequest(`/service/technician-notes/${encodeURIComponent(safeId(noteId,'tnn'))}`,{method:'DELETE'},requireSessionToken()));
   secureHandle('service:updateDetails', async (orderId: string, payload: unknown) => {
     const token = requireSessionToken();
     return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/details`, {
