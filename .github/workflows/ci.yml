@@ -122,6 +122,65 @@ jobs:
       - name: Package smoke build
         run: npx electron-builder --win --dir
 
+      - name: Smoke test technician workspace and costing
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "release/win-unpacked/LockOn ServiceOS.exe"
+          $server = Resolve-Path "release/win-unpacked/resources/app.asar.unpacked/dist-server/index.cjs"
+          $data = Join-Path $env:RUNNER_TEMP "lockon-v021-technician-smoke.json"
+          $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $db = @{
+            version = 2
+            users = @(
+              @{ id="usr_a1111111111111111111"; email="tech1@example.invalid"; name="Technik Jeden"; role="TECHNICIAN"; technicianSplitPercent=50; supportEnabled=$false; status="ACTIVE"; pointIds=@("pnt_v021"); firstLoginAt=(Get-Date).ToUniversalTime().ToString("o"); lastLoginAt=(Get-Date).ToUniversalTime().ToString("o") },
+              @{ id="usr_b2222222222222222222"; email="tech2@example.invalid"; name="Technik Dwa"; role="TECHNICIAN"; technicianSplitPercent=50; supportEnabled=$false; status="ACTIVE"; pointIds=@("pnt_v021"); firstLoginAt=(Get-Date).ToUniversalTime().ToString("o"); lastLoginAt=(Get-Date).ToUniversalTime().ToString("o") }
+            )
+            points = @(@{ id="pnt_v021"; name="Serwis V021"; city="Nowogard"; active=$true; createdAt=(Get-Date).ToUniversalTime().ToString("o") })
+            customers = @(@{ id="cst_c3333333333333333333"; firstName="Test"; lastName="Klient"; email="client@example.invalid"; phone=""; createdAt=(Get-Date).ToUniversalTime().ToString("o"); updatedAt=(Get-Date).ToUniversalTime().ToString("o") })
+            devices = @(@{ id="dev_c3333333333333333333"; customerId="cst_c3333333333333333333"; brand="Samsung"; model="S25"; imei=$null; serialNumber=$null; notes=""; createdAt=(Get-Date).ToUniversalTime().ToString("o"); updatedAt=(Get-Date).ToUniversalTime().ToString("o") })
+            serviceOrders = @(@{ id="srv_d4444444444444444444"; orderNumber=1; pointId="pnt_v021"; homePointId="pnt_v021"; currentPointId="pnt_v021"; customerId="cst_c3333333333333333333"; deviceId="dev_c3333333333333333333"; orderType="REPAIR"; handlingMode="STANDARD"; issueDescription="Smoke v0.21"; status="WAITING_PARTS"; assignedTechnicianId="usr_a1111111111111111111"; createdByUserId="usr_a1111111111111111111"; estimatedCost=900; finalCost=1100; currency="PLN"; estimatedCompletionAt=(Get-Date).AddDays(1).ToUniversalTime().ToString("o"); receivedAt=(Get-Date).ToUniversalTime().ToString("o"); createdAt=(Get-Date).ToUniversalTime().ToString("o"); updatedAt=(Get-Date).ToUniversalTime().ToString("o") })
+            sessions = @(
+              @{ tokenHash="451f81b905e43401b600af1d1a26f5cdcbc870d71dc4c7441cfa5fc94e251e18"; userId="usr_a1111111111111111111"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) },
+              @{ tokenHash="2027835918c417f9104e9a74dc502411f77cf3755787bf9e96adec6bf4160424"; userId="usr_b2222222222222222222"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) }
+            )
+          }
+          $db | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $data
+
+          $env:ELECTRON_RUN_AS_NODE = "1"
+          $env:LOCKON_API_HOST = "127.0.0.1"
+          $env:LOCKON_API_PORT = "18788"
+          $env:LOCKON_DATA_FILE = $data
+          $env:LOCKON_OWNER_EMAIL = "owner-v021@example.invalid"
+          $process = Start-Process -FilePath $exe -ArgumentList @($server) -WorkingDirectory $env:RUNNER_TEMP -PassThru -WindowStyle Hidden
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 20; $i++) {
+              Start-Sleep -Milliseconds 300
+              try {
+                if ((Invoke-RestMethod -Uri "http://127.0.0.1:18788/health" -TimeoutSec 2).ok) { $ready=$true; break }
+              } catch {}
+            }
+            if (-not $ready) { throw "v0.21 local API did not start." }
+
+            $h1 = @{ Authorization="Bearer v021-local-tech-one"; "Content-Type"="application/json" }
+            $h2 = @{ Authorization="Bearer v021-local-tech-two"; "Content-Type"="application/json" }
+            $workspace = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/technician-workspace" -Headers $h1
+            if ($workspace.counts.active -ne 1 -or $workspace.counts.waitingParts -ne 1) { throw "Technician workspace counts are wrong." }
+
+            $costBody = @{ laborCostGross=250; otherCostGross=30; parts=@(@{ description="Ekran"; quantity=2; unitCostGross=120.5; invoiceReceived=$true; invoiceNumber="FV-TEST"; supplier="Supplier"; purchasedAt="2026-09-20" }) } | ConvertTo-Json -Depth 8
+            $costing = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18788/service/orders/srv_d4444444444444444444/costing" -Headers $h1 -Body $costBody
+            if ($costing.partsCostGross -ne 241 -or $costing.internalCostGross -ne 521 -or $costing.marginGross -ne 579) { throw "Technician costing math is wrong." }
+
+            $noteBody = @{ title="Prywatne"; body="Zamówić część jutro"; pinned=$true } | ConvertTo-Json
+            $note = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18788/service/technician-notes" -Headers $h1 -Body $noteBody
+            if ($note.body -ne "Zamówić część jutro") { throw "Private technician note was not saved." }
+
+            $foreign = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Uri "http://127.0.0.1:18788/service/orders/srv_d4444444444444444444/costing" -Headers $h2 -Body $costBody
+            if ($foreign.StatusCode -ne 403) { throw "Second technician must not edit another technician's costing." }
+          } finally {
+            if (-not $process.HasExited) { $process.Kill() }
+          }
+
       - name: Smoke test packaged local API
         shell: pwsh
         run: |
