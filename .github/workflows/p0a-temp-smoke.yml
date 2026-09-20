@@ -9,6 +9,8 @@ on:
 permissions:
   contents: read
 
+# temp-deployment: 2
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
