@@ -34,8 +34,21 @@ export interface LoginEvent { id: string; userId: string; email: string; name: s
 export interface RevenueEntry { id: string; userId: string; pointId: string; serviceOrderId?:string|null; orderNumber?:number|null; amount: number; workDate: string; note: string; status: 'PENDING'|'APPROVED'|'REJECTED'|'SETTLED'; splitTechnicianPercent: number; splitBossPercent: number; technicianShare: number; bossShare: number; submittedAt: string; reviewedAt?: string|null; technician?: {id:string;name:string;email:string}|null; point?: AdminPoint|null; }
 export interface AdminAuditEvent { id:string; action:string; entityType:string; entityId?:string|null; entityName?:string|null; pointId?:string|null; pointName?:string|null; actorUserId?:string|null; actorName:string; actorEmail?:string|null; actorRole?:UserRole|null; before?:unknown; after?:unknown; orderNumber?:number|null; customerSummary?:string|null; deviceSummary?:string|null; notificationStatus?:string|null; transferStatus?:string|null; settlementStatus?:string|null; clientType?:string|null; metadata:Record<string,unknown>; createdAt:string; }
 export interface AdminAuditFilters { userId?:string; pointId?:string; action?:string; orderNumber?:string; dateFrom?:string; dateTo?:string; }
-export interface AdminSystemSummary { activeSessions:number; desktopSessions:number; webSessions:number; servicePoints:number; openTransfers:number; blockedUsers:number; }
+export interface AdminSystemSummary { activeSessions:number; desktopSessions:number; webSessions:number; servicePoints:number; openTransfers:number; blockedUsers:number; customerGoogleAccounts?:number; customerPortalSessions?:number; blockedCustomerAccounts?:number; }
 export interface AdminOverview { points: AdminPoint[]; users: AdminUser[]; pendingUsers: AdminUser[]; blockedUsers?:AdminUser[]; loginEvents: LoginEvent[]; pendingRevenue: RevenueEntry[]; system?:AdminSystemSummary; transferSummary?:Record<string,number>; recentAudit?:AdminAuditEvent[]; }
+export interface CustomerNotificationPreferences { serviceUpdates:boolean; readyForPickup:boolean; quoteUpdates:boolean; messages:boolean; }
+export interface CustomerAccountSummary {
+  id:string; name:string; email?:string|null; phone?:string|null; codeCreatedAt?:string|null;
+  googleLinked:boolean; googleEmail?:string|null; googleName?:string|null; googlePicture?:string|null;
+  linkedAt?:string|null; lastLoginAt?:string|null; blocked:boolean; blockedAt?:string|null; blockedReason?:string|null;
+  activeSessions:number; lastSeenAt?:string|null; orders:number; openQuotes:number;
+  notificationPreferences:CustomerNotificationPreferences;
+}
+export interface CustomerAccountOverview {
+  stats:{customers:number;googleAccounts:number;activeSessions:number;blocked:number};
+  customers:CustomerAccountSummary[];
+}
+
 export interface FinancePointBreakdown { pointId:string; pointName:string; pointCity?:string; approvedRevenue:number; technicianShare:number; bossShare:number; pendingRevenue:number; entries:RevenueEntry[]; }
 export interface FinancePayload { entries: RevenueEntry[]; points: FinancePointBreakdown[]; summary: { approvedRevenue:number; technicianShare:number; bossShare:number; pendingRevenue:number; }; }
 export interface TechnicianSettlementSettings { configured:boolean; technicianPercent:number|null; bossPercent:number|null; }
@@ -150,6 +163,13 @@ declare global {
         logoutAllSessions: (exceptCurrent?:boolean) => Promise<{ok:true;revoked:number;exceptCurrent:boolean}>;
         factoryResetPreview: () => Promise<{ok:true;counts:Record<string,number>}>;
         factoryReset: (payload:{phrase:string;confirmed:boolean;reason?:string}) => Promise<{ok:true;resetId:string;reloginRequired:true;deleted:Record<string,number>}>;
+      };
+      customers: {
+        list: (query?:string) => Promise<CustomerAccountOverview>;
+        getCode: (customerId:string,rotate?:boolean) => Promise<{ok:true;code:string;created:boolean;rotated:boolean;revoked:number}>;
+        sendCode: (customerId:string) => Promise<{ok:true;recipient:string;messageId:string}>;
+        block: (customerId:string,blocked:boolean,reason?:string) => Promise<{ok:true;blocked:boolean;revoked:number}>;
+        logoutAll: (customerId:string) => Promise<{ok:true;revoked:number}>;
       };
       finance: {
         list: () => Promise<FinancePayload>;

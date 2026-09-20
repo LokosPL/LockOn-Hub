@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "functions/lockon-api.mjs"
+      - "database/migrations/**"
+      - "database/schema.sql"
       - ".github/workflows/neon-api-verify.yml"
   workflow_dispatch:
 
@@ -33,13 +35,19 @@ jobs:
           grep -q 'customer_portal_code' functions/lockon-api.mjs
           grep -q "error: 'WEB_CODE_ONLY'" functions/lockon-api.mjs
           grep -q '/website/redeem' functions/lockon-api.mjs
-          ! grep -q 'GOOGLE_WEB_CLIENT_ID' functions/lockon-api.mjs
+          grep -q 'GOOGLE_CUSTOMER_WEB_CLIENT_ID' functions/lockon-api.mjs
+          grep -q '/public/customer-portal/google/login' functions/lockon-api.mjs
+          grep -q '/public/customer-portal/google/link' functions/lockon-api.mjs
+          grep -q "CUSTOMER_FULL_ACCOUNT_REQUIRED" functions/lockon-api.mjs
           ! grep -q "loginProfile(profile, 'WEB'" functions/lockon-api.mjs
           grep -q "type:'SPEED_TEST'" functions/lockon-api.mjs
           grep -q "type:'CONNECTIVITY_TEST'" functions/lockon-api.mjs
           grep -q "type:'BROWSER_SEARCH'" functions/lockon-api.mjs
           grep -q 'support_enabled' database/migrations/2026-09-19-v020-support-capability.sql
           grep -q 'diagnostics-v020' database/migrations/2026-09-19-v020-assistant-knowledge.sql
+          grep -q 'customer_portal_accounts' database/migrations/2026-09-20-customer-accounts-google.sql
+          grep -q "auth_method IN ('CODE','GOOGLE')" database/migrations/2026-09-20-customer-accounts-google.sql
+          grep -q '/customer-accounts' functions/lockon-api.mjs
       - name: Bundle for Neon Functions
         run: |
           mkdir -p central-api-dist

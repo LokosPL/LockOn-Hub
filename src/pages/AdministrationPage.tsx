@@ -517,6 +517,7 @@ export function AdministrationPage({ focusUserId = null }: AdministrationPagePro
         <article><Globe2 size={20}/><div><span>Sesje WWW</span><strong>{data?.system?.webSessions ?? 0}</strong></div></article>
         <article><Smartphone size={20}/><div><span>Sesje desktop</span><strong>{data?.system?.desktopSessions ?? 0}</strong></div></article>
         <article><Wrench size={20}/><div><span>Punkty serwisowe</span><strong>{data?.system?.servicePoints ?? 0}</strong></div></article>
+        <article><UserCheck size={20}/><div><span>Konta klientów</span><strong>{data?.system?.customerGoogleAccounts ?? 0}</strong></div></article>
         <article className={data?.system?.openTransfers ? 'stat-attention' : ''}><Activity size={20}/><div><span>Przekazania w toku</span><strong>{data?.system?.openTransfers ?? 0}</strong></div></article>
       </section>
 

@@ -679,6 +679,36 @@ const registerIpc = () => {
     }, token);
   });
 
+  secureHandle('customers:list', async (query = '') => {
+    const token = requireSessionToken();
+    const safeQuery=String(query ?? '').trim().slice(0,120);
+    return backendRequest('/customer-accounts' + (safeQuery ? '?q='+encodeURIComponent(safeQuery) : ''), {}, token);
+  });
+  secureHandle('customers:getCode', async (customerId: string, rotate = false) => {
+    const token = requireSessionToken();
+    return backendRequest(`/customer-accounts/${encodeURIComponent(safeId(customerId,'cst'))}/code`, {
+      method:'POST',body:JSON.stringify({rotate:Boolean(rotate)})
+    },token);
+  });
+  secureHandle('customers:sendCode', async (customerId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/customer-accounts/${encodeURIComponent(safeId(customerId,'cst'))}/send-code`, {
+      method:'POST',body:'{}'
+    },token);
+  });
+  secureHandle('customers:block', async (customerId: string, blocked: boolean, reason?: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/customer-accounts/${encodeURIComponent(safeId(customerId,'cst'))}/block`, {
+      method:'POST',body:JSON.stringify({blocked:Boolean(blocked),reason:String(reason ?? '').trim().slice(0,500)})
+    },token);
+  });
+  secureHandle('customers:logoutAll', async (customerId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/customer-accounts/${encodeURIComponent(safeId(customerId,'cst'))}/logout-all`, {
+      method:'POST',body:'{}'
+    },token);
+  });
+
   secureHandle('finance:list', async () => {
     const token = requireSessionToken();
     return backendRequest('/finance/revenues', {}, token);

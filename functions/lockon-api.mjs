@@ -8,6 +8,7 @@ pool.on('error', (error) => console.error('[postgres idle client]', error));
 const OWNER_EMAIL = String(process.env.LOCKON_OWNER_EMAIL || 'nowogar@gmail.com').trim().toLowerCase();
 const GOOGLE_DESKTOP_CLIENT_ID = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_ID || '').trim();
 const GOOGLE_DESKTOP_CLIENT_SECRET = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET || '').trim();
+const GOOGLE_CUSTOMER_WEB_CLIENT_ID = String(process.env.LOCKON_GOOGLE_WEB_CLIENT_ID || '').trim();
 const SITE_ORIGINS = new Set(
   [
     String(process.env.LOCKON_SITE_ORIGIN || '').trim().replace(/\/$/, ''),
@@ -773,7 +774,7 @@ const getVisibleOrderByNumber = async (user, number) => {
     access = " AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id))";
   }
   const { rows } = await q(
-    "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
+    "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts ca ON ca.customer_id=c.id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
     params
   );
   if (!rows[0]) return null;
@@ -983,28 +984,78 @@ const ensureCustomerPortalCode = async (customerId) => {
   throw new Error('Nie udało się utworzyć identyfikatora klienta.');
 };
 
-const createCustomerPortalSession = async (customerId) => {
+const rotateCustomerPortalCode = async (customerId) => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = generateCustomerPortalCode();
+    try {
+      await q(
+        "UPDATE customers SET portal_code_hash=$2,portal_code_ciphertext=$3,portal_code_created_at=now(),updated_at=now() WHERE id=$1",
+        [customerId,tokenHash(code),encryptSecret(code)]
+      );
+      return { code, created:true, rotated:true };
+    } catch (error) {
+      if (String(error?.code || '') !== '23505') throw error;
+    }
+  }
+  throw new Error('Nie udało się wygenerować nowego kodu klienta.');
+};
+
+const customerPortalAccount = async (customerId) => {
+  return (await q(
+    "SELECT customer_id,google_sub,google_email,google_name,google_picture_url,linked_at,last_login_at,blocked_at,blocked_reason,notify_service_updates,notify_ready_for_pickup,notify_quote_updates,notify_messages,created_at,updated_at FROM customer_portal_accounts WHERE customer_id=$1 LIMIT 1",
+    [customerId]
+  )).rows[0] || null;
+};
+
+const customerNotificationPreferences = async (customerId) => {
+  const account = await customerPortalAccount(customerId);
+  return {
+    serviceUpdates: account?.notify_service_updates !== false,
+    readyForPickup: account?.notify_ready_for_pickup !== false,
+    quoteUpdates: account?.notify_quote_updates !== false,
+    messages: account?.notify_messages !== false
+  };
+};
+
+const createCustomerPortalSession = async (customerId, authMethod = 'CODE') => {
+  const method = authMethod === 'GOOGLE' ? 'GOOGLE' : 'CODE';
   const token = crypto.randomBytes(32).toString('base64url');
   const expiresAt = new Date(Date.now() + CUSTOMER_PORTAL_SESSION_TTL_MS);
   await q("DELETE FROM customer_portal_sessions WHERE expires_at<=now()");
   await q(
-    "INSERT INTO customer_portal_sessions(id,customer_id,token_hash,expires_at) VALUES($1,$2,$3,$4)",
-    [makeId('cps'),customerId,tokenHash(token),expiresAt]
+    "INSERT INTO customer_portal_sessions(id,customer_id,token_hash,auth_method,expires_at) VALUES($1,$2,$3,$4,$5)",
+    [makeId('cps'),customerId,tokenHash(token),method,expiresAt]
   );
-  return { token, expiresAt: expiresAt.toISOString() };
+  return { token, authMethod:method, expiresAt: expiresAt.toISOString() };
 };
 
 const requireCustomerPortal = async (request) => {
   const auth = String(request.headers.get('authorization') || '');
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw Object.assign(new Error('Sesja klienta wygasła. Wpisz identyfikator ponownie.'),{status:401});
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw Object.assign(new Error('Sesja klienta wygasła. Zaloguj się ponownie.'),{status:401});
   const row = (await q(
-    "SELECT s.id AS session_id,s.customer_id,s.expires_at,c.first_name,c.last_name,c.email,c.phone FROM customer_portal_sessions s JOIN customers c ON c.id=s.customer_id WHERE s.token_hash=$1 AND s.expires_at>now() LIMIT 1",
+    "SELECT s.id AS session_id,s.customer_id,s.auth_method,s.expires_at,c.first_name,c.last_name,c.email,c.phone,a.google_sub,a.google_email,a.google_name,a.google_picture_url,a.blocked_at,a.blocked_reason FROM customer_portal_sessions s JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts a ON a.customer_id=c.id WHERE s.token_hash=$1 AND s.expires_at>now() LIMIT 1",
     [tokenHash(token)]
   )).rows[0];
-  if (!row) throw Object.assign(new Error('Sesja klienta wygasła. Wpisz identyfikator ponownie.'),{status:401});
+  if (!row) throw Object.assign(new Error('Sesja klienta wygasła. Zaloguj się ponownie.'),{status:401});
+  if (row.blocked_at) throw Object.assign(new Error(row.blocked_reason ? 'Dostęp do portalu został zablokowany: '+cleanText(row.blocked_reason,180) : 'Dostęp do portalu został zablokowany.'),{status:403,code:'CUSTOMER_ACCOUNT_BLOCKED'});
   await q("UPDATE customer_portal_sessions SET last_seen_at=now() WHERE id=$1",[row.session_id]);
   return row;
+};
+
+const requireCustomerPortalFull = async (request) => {
+  const session = await requireCustomerPortal(request);
+  if (session.auth_method !== 'GOOGLE' || !session.google_sub) {
+    throw Object.assign(new Error('Ta funkcja wymaga pełnego konta klienta. Połącz konto Google.'),{status:403,code:'CUSTOMER_FULL_ACCOUNT_REQUIRED'});
+  }
+  return session;
+};
+
+const revokeCustomerPortalSessions = async (customerId, authMethod = null) => {
+  const result = authMethod
+    ? await q("DELETE FROM customer_portal_sessions WHERE customer_id=$1 AND auth_method=$2 RETURNING id",[customerId,authMethod])
+    : await q("DELETE FROM customer_portal_sessions WHERE customer_id=$1 RETURNING id",[customerId]);
+  return result.rowCount || result.rows.length;
 };
 
 const routeCustomerQuote = async (requestedPointId) => {
@@ -1041,9 +1092,15 @@ const routeCustomerQuote = async (requestedPointId) => {
   return { routedPointId: destination.to_point_id, technicianId: tech?.id || null, routingReason: 'MOST_USED_TRANSFER_DESTINATION' };
 };
 
-const loadCustomerPortalPayload = async (customerId) => {
+const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
   const customer = (await q("SELECT id,first_name,last_name,email,phone,created_at FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
-  const portalIdentity = customer ? await ensureCustomerPortalCode(customerId) : null;
+  if (!customer) throw Object.assign(new Error('Nie znaleziono klienta.'),{status:404});
+  const [portalIdentity, account] = await Promise.all([
+    ensureCustomerPortalCode(customerId),
+    customerPortalAccount(customerId)
+  ]);
+  const authMethod = portalSession?.auth_method === 'GOOGLE' ? 'GOOGLE' : 'CODE';
+  const fullAccess = authMethod === 'GOOGLE' && Boolean(account?.google_sub);
   const [ordersResult,quotesResult,pointsResult] = await Promise.all([
     q(
       "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_completion_at,s.estimated_cost,s.final_cost,s.currency,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,d.imei,d.serial_number,p.id AS point_id,p.name AS point_name,hp.id AS home_point_id,hp.name AS home_point_name,cp.id AS current_point_id,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.customer_id=$1 ORDER BY s.received_at DESC,s.order_number DESC",
@@ -1074,6 +1131,24 @@ const loadCustomerPortalPayload = async (customerId) => {
   return {
     customerPortalCode:portalIdentity?.code || null,
     customerPortalUrl:PUBLIC_PORTAL_URL + '/klient.html',
+    access:{
+      mode:fullAccess?'FULL':'VIEW_ONLY',
+      authMethod,
+      canWrite:fullAccess,
+      googleLinked:Boolean(account?.google_sub)
+    },
+    account:{
+      googleLinked:Boolean(account?.google_sub),
+      googleEmail:account?.google_email||null,
+      googleName:account?.google_name||null,
+      googlePicture:account?.google_picture_url||null,
+      notificationPreferences:{
+        serviceUpdates:account?.notify_service_updates !== false,
+        readyForPickup:account?.notify_ready_for_pickup !== false,
+        quoteUpdates:account?.notify_quote_updates !== false,
+        messages:account?.notify_messages !== false
+      }
+    },
     customer:{id:customer.id,firstName:customer.first_name,lastName:customer.last_name,email:customer.email||null,phone:customer.phone||null,customerSince:customer.created_at},
     orders:ordersResult.rows.map((row)=>({
       id:row.id,orderNumber:Number(row.order_number),orderType:row.order_type,handlingMode:row.handling_mode||'STANDARD',
@@ -1094,6 +1169,83 @@ const loadCustomerPortalPayload = async (customerId) => {
       quoteNote:row.quote_note||null,routingReason:row.routing_reason,createdAt:row.created_at,updatedAt:row.updated_at,
       quotedAt:row.quoted_at||null,closedAt:row.closed_at||null,messages:messagesByRequest.get(row.id)||[]
     }))
+  };
+};
+
+const requireCustomerAccountAccess = async (user, customerId) => {
+  requireSupportAccess(user);
+  const customer=(await q(
+    "SELECT id,first_name,last_name,email,phone,portal_code_created_at FROM customers WHERE id=$1 LIMIT 1",
+    [customerId]
+  )).rows[0];
+  if (!customer) throw Object.assign(new Error('Nie znaleziono klienta.'),{status:404,code:'CUSTOMER_NOT_FOUND'});
+  if (GLOBAL_ROLES.has(user.role_code)) return customer;
+  const ids=await visiblePointIds(user);
+  if (!ids.length) throw Object.assign(new Error('Brak dostępu do tego klienta.'),{status:403,code:'CUSTOMER_FORBIDDEN'});
+  const visible=(await q(
+    "SELECT 1 WHERE EXISTS(SELECT 1 FROM service_orders s WHERE s.customer_id=$1 AND COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[])) OR EXISTS(SELECT 1 FROM customer_quote_requests r WHERE r.customer_id=$1 AND (r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) LIMIT 1",
+    [customerId,ids]
+  )).rows[0];
+  if (!visible) throw Object.assign(new Error('Brak dostępu do tego klienta.'),{status:403,code:'CUSTOMER_FORBIDDEN'});
+  return customer;
+};
+
+const customerAccountManagementOverview = async (user, search = '') => {
+  requireSupportAccess(user);
+  const ids=GLOBAL_ROLES.has(user.role_code) ? [] : await visiblePointIds(user);
+  const params=[GLOBAL_ROLES.has(user.role_code),ids];
+  let filter=" WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[])) OR EXISTS(SELECT 1 FROM customer_quote_requests r0 WHERE r0.customer_id=c.id AND (r0.requested_point_id=ANY($2::text[]) OR r0.routed_point_id=ANY($2::text[]))))";
+  const term=cleanText(search,120);
+  if (term) {
+    params.push('%'+term+'%');
+    filter += " AND (lower(c.first_name||' '||c.last_name) LIKE lower($3) OR lower(coalesce(c.email,'')) LIKE lower($3) OR lower(coalesce(c.phone,'')) LIKE lower($3))";
+  }
+  const rows=(await q(
+    "SELECT c.id,c.first_name,c.last_name,c.email,c.phone,c.portal_code_created_at,"+
+    "a.google_sub,a.google_email,a.google_name,a.google_picture_url,a.linked_at,a.last_login_at,a.blocked_at,a.blocked_reason,"+
+    "a.notify_service_updates,a.notify_ready_for_pickup,a.notify_quote_updates,a.notify_messages,"+
+    "(SELECT count(*)::int FROM customer_portal_sessions ps WHERE ps.customer_id=c.id AND ps.expires_at>now()) AS active_sessions,"+
+    "(SELECT max(ps.last_seen_at) FROM customer_portal_sessions ps WHERE ps.customer_id=c.id AND ps.expires_at>now()) AS last_seen_at,"+
+    "(SELECT count(*)::int FROM service_orders s WHERE s.customer_id=c.id) AS order_count,"+
+    "(SELECT count(*)::int FROM customer_quote_requests r WHERE r.customer_id=c.id AND r.status IN ('OPEN','QUOTED')) AS open_quote_count "+
+    "FROM customers c LEFT JOIN customer_portal_accounts a ON a.customer_id=c.id"+filter+
+    " ORDER BY COALESCE(a.last_login_at,c.updated_at) DESC,c.last_name,c.first_name LIMIT 250",
+    params
+  )).rows;
+  const customers=rows.map(row=>({
+    id:row.id,
+    name:[row.first_name,row.last_name].filter(Boolean).join(' '),
+    email:row.email||null,
+    phone:row.phone||null,
+    codeCreatedAt:row.portal_code_created_at||null,
+    googleLinked:Boolean(row.google_sub),
+    googleEmail:row.google_email||null,
+    googleName:row.google_name||null,
+    googlePicture:row.google_picture_url||null,
+    linkedAt:row.linked_at||null,
+    lastLoginAt:row.last_login_at||null,
+    blocked:Boolean(row.blocked_at),
+    blockedAt:row.blocked_at||null,
+    blockedReason:row.blocked_reason||null,
+    activeSessions:Number(row.active_sessions||0),
+    lastSeenAt:row.last_seen_at||null,
+    orders:Number(row.order_count||0),
+    openQuotes:Number(row.open_quote_count||0),
+    notificationPreferences:{
+      serviceUpdates:row.notify_service_updates!==false,
+      readyForPickup:row.notify_ready_for_pickup!==false,
+      quoteUpdates:row.notify_quote_updates!==false,
+      messages:row.notify_messages!==false
+    }
+  }));
+  return {
+    stats:{
+      customers:customers.length,
+      googleAccounts:customers.filter(item=>item.googleLinked).length,
+      activeSessions:customers.reduce((sum,item)=>sum+item.activeSessions,0),
+      blocked:customers.filter(item=>item.blocked).length
+    },
+    customers
   };
 };
 
@@ -1194,6 +1346,7 @@ const renderStatusEmail = (item) => {
     item.tracking_url ? 'Śledź zlecenie: ' + item.tracking_url : '',
     item.customer_portal_code ? 'Twój stały identyfikator klienta: ' + item.customer_portal_code : '',
     item.customer_portal_url ? 'Historia wszystkich serwisów i zapytania o wycenę: ' + item.customer_portal_url : '',
+    item.customer_google_sub && item.customer_portal_url ? 'Masz połączone konto Google? Zaloguj się bez kodu: ' + item.customer_portal_url + '?google=1' : '',
     '',
     footer,
     '',
@@ -1218,7 +1371,7 @@ const renderStatusEmail = (item) => {
         '<div style="padding:18px 22px 22px">' +
           '<div style="font-size:12px;color:#858f9a;line-height:1.55">Punkt: <strong style="color:#dce1e6">' + escapeHtml(contactPoint || item.point_name) + '</strong></div>' +
           (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:block;box-sizing:border-box;width:100%;margin-top:16px;padding:15px 16px;border-radius:12px;background:#ff7048;color:#fff;text-align:center;text-decoration:none;font-size:15px;line-height:1.3;font-weight:850">Zobacz zlecenie →</a>' : '') +
-          (item.customer_portal_code ? '<div style="margin-top:18px;padding-top:17px;border-top:1px solid #252b33"><div style="font-size:10px;color:#747f8a;text-transform:uppercase;letter-spacing:.07em;font-weight:800">Twój kod klienta</div><div style="font-size:17px;font-weight:800;color:#e9edf1;letter-spacing:.045em;margin-top:5px">' + escapeHtml(item.customer_portal_code) + '</div>' + (item.customer_portal_url ? '<a href="' + escapeHtml(item.customer_portal_url) + '" style="display:inline-block;margin-top:9px;color:#ff9a76;font-size:12px;font-weight:800;text-decoration:none">Wszystkie zlecenia i wyceny →</a>' : '') + '</div>' : '') +
+          (item.customer_portal_code ? '<div style="margin-top:18px;padding-top:17px;border-top:1px solid #252b33"><div style="font-size:10px;color:#747f8a;text-transform:uppercase;letter-spacing:.07em;font-weight:800">Twój kod klienta</div><div style="font-size:17px;font-weight:800;color:#e9edf1;letter-spacing:.045em;margin-top:5px">' + escapeHtml(item.customer_portal_code) + '</div>' + (item.customer_portal_url ? '<a href="' + escapeHtml(item.customer_portal_url) + '" style="display:inline-block;margin-top:9px;color:#ff9a76;font-size:12px;font-weight:800;text-decoration:none">Wszystkie zlecenia i wyceny →</a>' : '') + (item.customer_google_sub && item.customer_portal_url ? '<div style="margin-top:10px"><a href="' + escapeHtml(item.customer_portal_url + '?google=1') + '" style="color:#9ca7b1;font-size:11px;font-weight:700;text-decoration:none">Nie chcę wpisywać kodu — zaloguj przez Google →</a></div>' : '') + '</div>' : '') +
           '<p style="margin:18px 0 0;font-size:11px;color:#707b86;line-height:1.5">' + escapeHtml(footer) + '</p>' +
         '</div>' +
       '</div>' +
@@ -1265,9 +1418,45 @@ const sendGmail = async (sender, recipient, subject, textBody, htmlBody, display
   return { id: String(payload.id), threadId: payload.threadId ? String(payload.threadId) : null };
 };
 
+const sendCustomerPortalEventEmail = async ({
+  customerId,
+  pointId,
+  preference,
+  subject,
+  title,
+  message
+}) => {
+  const customer=(await q("SELECT email,first_name,last_name FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
+  if(!customer?.email)return {sent:false,reason:'NO_CUSTOMER_EMAIL'};
+  const prefs=await customerNotificationPreferences(customerId);
+  if(preference==='quoteUpdates'&&prefs.quoteUpdates===false)return {sent:false,reason:'CUSTOMER_PREF_DISABLED'};
+  if(preference==='messages'&&prefs.messages===false)return {sent:false,reason:'CUSTOMER_PREF_DISABLED'};
+  const sender=await loadActiveMailSender(pointId);
+  if(!sender)return {sent:false,reason:'NO_SENDER'};
+  const settings=await mailSettingsForPoint(pointId);
+  const account=await customerPortalAccount(customerId);
+  const portalUrl=PUBLIC_PORTAL_URL+'/klient.html'+(account?.google_sub?'?google=1':'');
+  const textBody=title+'\n\n'+message+'\n\nPortal klienta: '+portalUrl;
+  const htmlBody='<!doctype html><html lang="pl"><body style="margin:0;background:#0b0d10;color:#f3f5f7;font-family:Arial,sans-serif">'+
+    '<div style="max-width:560px;margin:auto;padding:28px 14px"><div style="font-size:13px;font-weight:800">LockOn <span style="color:#77818c;font-weight:500">ServiceOS</span></div>'+
+    '<div style="margin-top:18px;padding:24px;border:1px solid #252d35;border-radius:18px;background:#11161c">'+
+    '<div style="font-size:11px;color:#ff8b60;font-weight:800;letter-spacing:.08em">PORTAL KLIENTA</div>'+
+    '<h1 style="font-size:23px;line-height:1.2;margin:9px 0 10px">'+escapeHtml(title)+'</h1>'+
+    '<p style="color:#929ca7;font-size:14px;line-height:1.6">'+escapeHtml(message)+'</p>'+
+    '<a href="'+escapeHtml(portalUrl)+'" style="display:block;margin-top:18px;padding:14px;border-radius:12px;background:#ff7048;color:#fff;text-decoration:none;text-align:center;font-weight:800">Otwórz portal klienta →</a>'+
+    '</div></div></body></html>';
+  try{
+    const sent=await sendGmail(sender,customer.email,subject,textBody,htmlBody,settings.sender_display_name||'LockOn ServiceOS');
+    return {sent:true,messageId:sent.id};
+  }catch(error){
+    console.error('[customer portal email]',error);
+    return {sent:false,reason:'SEND_FAILED'};
+  }
+};
+
 const processNotification = async (notificationId) => {
   const { rows } = await q(
-    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,s.customer_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
+    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,s.customer_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,ca.google_sub AS customer_google_sub,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
     [notificationId]
   );
   const item = rows[0];
@@ -1347,6 +1536,8 @@ const queueTransferNotification = async (actor, orderId, transfer, transferStatu
     if (!orderData?.email) return { queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL' };
 
     const settings = await mailSettingsForPoint(orderData.point_id);
+    const customerPrefs = await customerNotificationPreferences(orderData.customer_id);
+    if (customerPrefs.serviceUpdates === false) return { queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED' };
     if (settings.automatic_email_enabled !== true) return { queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED' };
 
     const notificationId = makeId('ntf');
@@ -1787,24 +1978,110 @@ const route = async (request) => {
     });
   }
 
+  if (method === 'GET' && url.pathname === '/public/customer-portal/config') {
+    return json(request,{
+      googleEnabled:Boolean(GOOGLE_CUSTOMER_WEB_CLIENT_ID),
+      googleClientId:GOOGLE_CUSTOMER_WEB_CLIENT_ID || null
+    });
+  }
+
   if (method === 'POST' && url.pathname === '/public/customer-portal/login') {
     const body = await readJson(request);
     const code = normalizeCustomerPortalCode(body.customerId || body.code);
-    if (!code) return json(request,{error:'CUSTOMER_ID',message:'Identyfikator klienta jest nieprawidłowy.'},400);
-    const customer = (await q("SELECT id FROM customers WHERE portal_code_hash=$1 LIMIT 1",[tokenHash(code)])).rows[0];
-    if (!customer) return json(request,{error:'CUSTOMER_ID',message:'Nie znaleziono klienta dla tego identyfikatora.'},401);
-    const session = await createCustomerPortalSession(customer.id);
-    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_PORTAL_LOGIN','customer',$2,$3::jsonb)",[makeId('aud'),customer.id,JSON.stringify({clientType:'CUSTOMER_PORTAL'})]);
-    return json(request,{sessionToken:session.token,expiresAt:session.expiresAt,...(await loadCustomerPortalPayload(customer.id))});
+    if (!code) return json(request,{error:'CUSTOMER_ID',message:'Kod klienta jest nieprawidłowy.'},400);
+    const customer = (await q(
+      "SELECT c.id,a.blocked_at,a.blocked_reason FROM customers c LEFT JOIN customer_portal_accounts a ON a.customer_id=c.id WHERE c.portal_code_hash=$1 LIMIT 1",
+      [tokenHash(code)]
+    )).rows[0];
+    if (!customer) return json(request,{error:'CUSTOMER_ID',message:'Nie znaleziono klienta dla tego kodu.'},401);
+    if (customer.blocked_at) return json(request,{error:'CUSTOMER_ACCOUNT_BLOCKED',message:customer.blocked_reason?'Dostęp do portalu został zablokowany: '+cleanText(customer.blocked_reason,180):'Dostęp do portalu został zablokowany.'},403);
+    const session = await createCustomerPortalSession(customer.id,'CODE');
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_PORTAL_LOGIN','customer',$2,$3::jsonb)",[
+      makeId('aud'),customer.id,JSON.stringify({clientType:'CUSTOMER_PORTAL',authMethod:'CODE'})
+    ]);
+    return json(request,{sessionToken:session.token,expiresAt:session.expiresAt,...(await loadCustomerPortalPayload(customer.id,{auth_method:'CODE'}))});
+  }
+
+  if (method === 'POST' && url.pathname === '/public/customer-portal/google/link') {
+    const customerSession = await requireCustomerPortal(request);
+    if (!GOOGLE_CUSTOMER_WEB_CLIENT_ID) return json(request,{error:'GOOGLE_NOT_CONFIGURED',message:'Logowanie Google dla klientów nie jest jeszcze dostępne.'},503);
+    const body = await readJson(request);
+    if (!body.idToken) return json(request,{error:'MISSING_TOKEN',message:'Brak tokena Google.'},400);
+    let profile;
+    try { profile = await verifyGoogle(String(body.idToken),GOOGLE_CUSTOMER_WEB_CLIENT_ID); }
+    catch { return json(request,{error:'GOOGLE_AUTH_FAILED',message:'Google nie potwierdził tożsamości.'},401); }
+    const customerEmail=normalizeEmail(customerSession.email||'');
+    if (!customerEmail) return json(request,{error:'CUSTOMER_EMAIL_REQUIRED',message:'Najpierw poproś punkt LockOn o zapisanie Twojego adresu e-mail przy kliencie.'},409);
+    if (profile.email!==customerEmail) return json(request,{error:'GOOGLE_EMAIL_MISMATCH',message:'Konto Google musi używać tego samego adresu e-mail, który jest zapisany przy kliencie: '+customerEmail},409);
+    const already=(await q("SELECT customer_id FROM customer_portal_accounts WHERE google_sub=$1 AND customer_id<>$2 LIMIT 1",[profile.sub,customerSession.customer_id])).rows[0];
+    if (already) return json(request,{error:'GOOGLE_ALREADY_LINKED',message:'To konto Google jest już połączone z innym klientem.'},409);
+    await q(
+      "INSERT INTO customer_portal_accounts(customer_id,google_sub,google_email,google_name,google_picture_url,linked_at,last_login_at,updated_at) VALUES($1,$2,$3,$4,$5,now(),now(),now()) ON CONFLICT(customer_id) DO UPDATE SET google_sub=EXCLUDED.google_sub,google_email=EXCLUDED.google_email,google_name=EXCLUDED.google_name,google_picture_url=EXCLUDED.google_picture_url,linked_at=COALESCE(customer_portal_accounts.linked_at,now()),last_login_at=now(),blocked_at=NULL,blocked_reason=NULL,blocked_by_user_id=NULL,updated_at=now()",
+      [customerSession.customer_id,profile.sub,profile.email,profile.name,profile.picture]
+    );
+    await q("DELETE FROM customer_portal_sessions WHERE id=$1",[customerSession.session_id]);
+    const session=await createCustomerPortalSession(customerSession.customer_id,'GOOGLE');
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_GOOGLE_LINKED','customer',$2,$3::jsonb)",[
+      makeId('aud'),customerSession.customer_id,JSON.stringify({clientType:'CUSTOMER_PORTAL',googleEmail:profile.email})
+    ]);
+    return json(request,{sessionToken:session.token,expiresAt:session.expiresAt,...(await loadCustomerPortalPayload(customerSession.customer_id,{auth_method:'GOOGLE'}))});
+  }
+
+  if (method === 'POST' && url.pathname === '/public/customer-portal/google/login') {
+    if (!GOOGLE_CUSTOMER_WEB_CLIENT_ID) return json(request,{error:'GOOGLE_NOT_CONFIGURED',message:'Logowanie Google dla klientów nie jest jeszcze dostępne.'},503);
+    const body=await readJson(request);
+    if (!body.idToken) return json(request,{error:'MISSING_TOKEN',message:'Brak tokena Google.'},400);
+    let profile;
+    try { profile=await verifyGoogle(String(body.idToken),GOOGLE_CUSTOMER_WEB_CLIENT_ID); }
+    catch { return json(request,{error:'GOOGLE_AUTH_FAILED',message:'Google nie potwierdził tożsamości.'},401); }
+    let account=(await q(
+      "SELECT a.customer_id,a.blocked_at,a.blocked_reason,c.email FROM customer_portal_accounts a JOIN customers c ON c.id=a.customer_id WHERE a.google_sub=$1 LIMIT 1",
+      [profile.sub]
+    )).rows[0];
+    if (!account) {
+      const matching=(await q("SELECT id FROM customers WHERE lower(email)=lower($1) LIMIT 1",[profile.email])).rows[0];
+      if (matching) return json(request,{error:'CUSTOMER_GOOGLE_NOT_LINKED',message:'To konto Google pasuje do klienta, ale nie jest jeszcze połączone. Wpisz kod klienta jeden raz i wybierz „Połącz konto Google”.'},409);
+      return json(request,{error:'CUSTOMER_GOOGLE_NOT_FOUND',message:'Nie znaleziono połączonego konta klienta. Użyj kodu klienta, aby połączyć Google.'},403);
+    }
+    if (account.blocked_at) return json(request,{error:'CUSTOMER_ACCOUNT_BLOCKED',message:account.blocked_reason?'Dostęp do portalu został zablokowany: '+cleanText(account.blocked_reason,180):'Dostęp do portalu został zablokowany.'},403);
+    await q(
+      "UPDATE customer_portal_accounts SET google_email=$2,google_name=$3,google_picture_url=$4,last_login_at=now(),updated_at=now() WHERE customer_id=$1",
+      [account.customer_id,profile.email,profile.name,profile.picture]
+    );
+    const session=await createCustomerPortalSession(account.customer_id,'GOOGLE');
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_GOOGLE_LOGIN','customer',$2,$3::jsonb)",[
+      makeId('aud'),account.customer_id,JSON.stringify({clientType:'CUSTOMER_PORTAL',googleEmail:profile.email})
+    ]);
+    return json(request,{sessionToken:session.token,expiresAt:session.expiresAt,...(await loadCustomerPortalPayload(account.customer_id,{auth_method:'GOOGLE'}))});
   }
 
   if (method === 'GET' && url.pathname === '/public/customer-portal/me') {
     const customerSession = await requireCustomerPortal(request);
-    return json(request,await loadCustomerPortalPayload(customerSession.customer_id));
+    return json(request,await loadCustomerPortalPayload(customerSession.customer_id,customerSession));
+  }
+
+  if (method === 'POST' && url.pathname === '/public/customer-portal/settings') {
+    const customerSession=await requireCustomerPortalFull(request);
+    const body=await readJson(request);
+    const current=await customerPortalAccount(customerSession.customer_id);
+    const prefs={
+      serviceUpdates:body.serviceUpdates===undefined ? current?.notify_service_updates!==false : body.serviceUpdates===true,
+      readyForPickup:body.readyForPickup===undefined ? current?.notify_ready_for_pickup!==false : body.readyForPickup===true,
+      quoteUpdates:body.quoteUpdates===undefined ? current?.notify_quote_updates!==false : body.quoteUpdates===true,
+      messages:body.messages===undefined ? current?.notify_messages!==false : body.messages===true
+    };
+    await q(
+      "UPDATE customer_portal_accounts SET notify_service_updates=$2,notify_ready_for_pickup=$3,notify_quote_updates=$4,notify_messages=$5,updated_at=now() WHERE customer_id=$1",
+      [customerSession.customer_id,prefs.serviceUpdates,prefs.readyForPickup,prefs.quoteUpdates,prefs.messages]
+    );
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_SETTINGS_UPDATED','customer',$2,$3::jsonb)",[
+      makeId('aud'),customerSession.customer_id,JSON.stringify({clientType:'CUSTOMER_PORTAL',notificationPreferences:prefs})
+    ]);
+    return json(request,await loadCustomerPortalPayload(customerSession.customer_id,customerSession));
   }
 
   if (method === 'POST' && url.pathname === '/public/customer-portal/quotes') {
-    const customerSession = await requireCustomerPortal(request);
+    const customerSession = await requireCustomerPortalFull(request);
     const body = await readJson(request);
     let requestedPointId = cleanText(body.requestedPointId,80);
     const serviceOrderId = cleanText(body.serviceOrderId,80) || null;
@@ -1847,12 +2124,12 @@ const route = async (request) => {
       "INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,point_id,metadata) VALUES($1,NULL,'CUSTOMER_QUOTE_CREATED','customer_quote_request',$2,$3,$4::jsonb)",
       [makeId('aud'),requestId,requestedPoint.id,JSON.stringify({customerId:customerSession.customer_id,routedPointId:routing.routedPointId,assignedTechnicianId:routing.technicianId||null,routingReason:routing.routingReason,clientType:'CUSTOMER_PORTAL'})]
     );
-    return json(request,{ok:true,requestId,routedPointName:routedPoint.name,...(await loadCustomerPortalPayload(customerSession.customer_id))},201);
+    return json(request,{ok:true,requestId,routedPointName:routedPoint.name,...(await loadCustomerPortalPayload(customerSession.customer_id,customerSession))},201);
   }
 
   const customerQuoteMessageMatch=url.pathname.match(/^\/public\/customer-portal\/quotes\/([^/]+)\/messages$/);
   if(method==='POST'&&customerQuoteMessageMatch){
-    const customerSession=await requireCustomerPortal(request);
+    const customerSession=await requireCustomerPortalFull(request);
     const body=await readJson(request);
     const message=cleanText(body.message,1000);
     if(!message)return json(request,{error:'MESSAGE_REQUIRED',message:'Wpisz wiadomość.'},400);
@@ -1862,7 +2139,7 @@ const route = async (request) => {
     await q("INSERT INTO customer_quote_messages(id,request_id,sender_kind,body) VALUES($1,$2,'CUSTOMER',$3)",[makeId('cqm'),quote.id,message]);
     await q("UPDATE customer_quote_requests SET status='OPEN',updated_at=now() WHERE id=$1",[quote.id]);
     await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,point_id,metadata) VALUES($1,NULL,'CUSTOMER_QUOTE_MESSAGE','customer_quote_request',$2,$3,$4::jsonb)",[makeId('aud'),quote.id,quote.requested_point_id,JSON.stringify({clientType:'CUSTOMER_PORTAL'})]);
-    return json(request,{ok:true,...(await loadCustomerPortalPayload(customerSession.customer_id))});
+    return json(request,{ok:true,...(await loadCustomerPortalPayload(customerSession.customer_id,customerSession))});
   }
 
   if (method === 'GET' && url.pathname === '/health') return json(request, { ok: true, service: 'LockOn ServiceOS Central API', time: nowIso() });
@@ -1979,17 +2256,99 @@ const route = async (request) => {
     return json(request, await authPayload(await loadUser(session.user.id)));
   }
 
+  if (method === 'GET' && url.pathname === '/customer-accounts') {
+    const session=await requireActive(request);
+    requireSupportAccess(session.user);
+    return json(request,await customerAccountManagementOverview(session.user,url.searchParams.get('q')||''));
+  }
+
+  const customerAccountCodeMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/code$/);
+  if(method==='POST'&&customerAccountCodeMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerAccountCodeMatch[1]);
+    const body=await readJson(request);
+    const rotate=body.rotate===true;
+    const identity=rotate ? await rotateCustomerPortalCode(customer.id) : await ensureCustomerPortalCode(customer.id);
+    let revoked=0;
+    if(rotate) revoked=await revokeCustomerPortalSessions(customer.id,'CODE');
+    await audit(session,rotate?'CUSTOMER_CODE_ROTATED':'CUSTOMER_CODE_VIEWED','customer',customer.id,null,{revokedSessions:revoked});
+    return json(request,{ok:true,code:identity.code,created:identity.created===true,rotated:rotate,revoked});
+  }
+
+  const customerAccountSendCodeMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/send-code$/);
+  if(method==='POST'&&customerAccountSendCodeMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerAccountSendCodeMatch[1]);
+    if(!customer.email)return json(request,{error:'CUSTOMER_EMAIL_REQUIRED',message:'Klient nie ma zapisanego adresu e-mail.'},409);
+    const identity=await ensureCustomerPortalCode(customer.id);
+    const account=await customerPortalAccount(customer.id);
+    const point=(await q(
+      "SELECT COALESCE((SELECT COALESCE(s.current_point_id,s.home_point_id,s.point_id) FROM service_orders s WHERE s.customer_id=$1 ORDER BY s.updated_at DESC LIMIT 1),(SELECT r.routed_point_id FROM customer_quote_requests r WHERE r.customer_id=$1 ORDER BY r.updated_at DESC LIMIT 1)) AS point_id",
+      [customer.id]
+    )).rows[0];
+    if(!point?.point_id)return json(request,{error:'CUSTOMER_POINT_REQUIRED',message:'Nie znaleziono punktu powiązanego z tym klientem.'},409);
+    await requirePoint(u,point.point_id);
+    const sender=await loadActiveMailSender(point.point_id);
+    if(!sender)return json(request,{error:'NO_SENDER',message:'Brak aktywnego nadawcy Gmail dla punktu klienta.'},409);
+    const settings=await mailSettingsForPoint(point.point_id);
+    const portalUrl=PUBLIC_PORTAL_URL+'/klient.html';
+    const googleUrl=portalUrl+'?google=1';
+    const name=[customer.first_name,customer.last_name].filter(Boolean).join(' ');
+    const subject='LockOn ServiceOS · Twój dostęp do portalu klienta';
+    const textBody=
+      'Dzień dobry'+(name?' '+name:'')+'.\n\n'+
+      'Twój kod klienta: '+identity.code+'\n'+
+      'Portal: '+portalUrl+'\n\n'+
+      (account?.google_sub?'Masz połączone konto Google. Możesz też zalogować się bez kodu: '+googleUrl+'\n\n':'')+
+      'Kod daje dostęp tylko do podglądu. Pełne konto Google pozwala pisać do serwisu i zmieniać ustawienia powiadomień.';
+    const htmlBody='<!doctype html><html lang="pl"><body style="margin:0;background:#0b0d10;color:#f3f5f7;font-family:Arial,sans-serif">'+
+      '<div style="max-width:560px;margin:auto;padding:28px 14px"><div style="font-size:13px;font-weight:800">LockOn <span style="color:#77818c;font-weight:500">ServiceOS</span></div>'+
+      '<div style="margin-top:18px;padding:24px;border:1px solid #252d35;border-radius:18px;background:#11161c"><div style="font-size:11px;color:#ff8b60;font-weight:800;letter-spacing:.08em">PORTAL KLIENTA</div>'+
+      '<h1 style="font-size:24px;margin:9px 0 8px">Twój kod do portalu</h1><p style="color:#909ba5;font-size:14px;line-height:1.55">Kod pozwala szybko sprawdzić zlecenia i wyceny.</p>'+
+      '<div style="margin:18px 0;padding:15px;border-radius:12px;background:#0a0f14;border:1px solid #2a333c;font-size:20px;font-weight:800;letter-spacing:.06em">'+escapeHtml(identity.code)+'</div>'+
+      '<a href="'+escapeHtml(portalUrl)+'" style="display:block;padding:14px;border-radius:12px;background:#ff7048;color:#fff;text-decoration:none;text-align:center;font-weight:800">Otwórz portal</a>'+
+      (account?.google_sub?'<a href="'+escapeHtml(googleUrl)+'" style="display:block;margin-top:13px;color:#ff9a76;text-decoration:none;text-align:center;font-size:12px;font-weight:800">Nie chcę wpisywać kodu — zaloguj przez Google →</a>':'')+
+      '<p style="margin:18px 0 0;color:#707b86;font-size:11px;line-height:1.5">Pełne konto Google daje możliwość pisania do serwisu i ustawienia własnych powiadomień.</p></div></div></body></html>';
+    const sent=await sendGmail(sender,customer.email,subject,textBody,htmlBody,settings.sender_display_name||'LockOn ServiceOS');
+    await audit(session,'CUSTOMER_CODE_SENT','customer',customer.id,point.point_id,{recipient:customer.email,messageId:sent.id,googleLinked:Boolean(account?.google_sub)});
+    return json(request,{ok:true,recipient:customer.email,messageId:sent.id});
+  }
+
+  const customerAccountBlockMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/block$/);
+  if(method==='POST'&&customerAccountBlockMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerAccountBlockMatch[1]);
+    const body=await readJson(request),blocked=body.blocked===true,reason=cleanText(body.reason,500);
+    await q(
+      "INSERT INTO customer_portal_accounts(customer_id,blocked_at,blocked_reason,blocked_by_user_id,updated_at) VALUES($1,CASE WHEN $2 THEN now() ELSE NULL END,CASE WHEN $2 THEN NULLIF($3,'') ELSE NULL END,CASE WHEN $2 THEN $4 ELSE NULL END,now()) ON CONFLICT(customer_id) DO UPDATE SET blocked_at=CASE WHEN $2 THEN now() ELSE NULL END,blocked_reason=CASE WHEN $2 THEN NULLIF($3,'') ELSE NULL END,blocked_by_user_id=CASE WHEN $2 THEN $4 ELSE NULL END,updated_at=now()",
+      [customer.id,blocked,reason,u.id]
+    );
+    const revoked=blocked?await revokeCustomerPortalSessions(customer.id):0;
+    await audit(session,blocked?'CUSTOMER_ACCOUNT_BLOCKED':'CUSTOMER_ACCOUNT_UNBLOCKED','customer',customer.id,null,{reason:reason||null,revokedSessions:revoked});
+    return json(request,{ok:true,blocked,revoked});
+  }
+
+  const customerAccountLogoutMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/logout-all$/);
+  if(method==='POST'&&customerAccountLogoutMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerAccountLogoutMatch[1]);
+    const revoked=await revokeCustomerPortalSessions(customer.id);
+    await audit(session,'CUSTOMER_SESSIONS_REVOKED','customer',customer.id,null,{revokedSessions:revoked});
+    return json(request,{ok:true,revoked});
+  }
+
   if (method === 'GET' && url.pathname === '/admin/overview') {
     const session = await requireActive(request);
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
-    const [points, users, loginEvents, pendingRevenue, sessions, recentAudit, transferSummary] = await Promise.all([
+    const [points, users, loginEvents, pendingRevenue, sessions, recentAudit, transferSummary, customerPortalSummary] = await Promise.all([
       q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=p.id AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL) t ON true ORDER BY p.name"),
       q("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,support_enabled,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
       q("SELECT a.id,a.actor_user_id AS user_id,u.email,u.name,u.role_code AS role,u.status,a.created_at FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id WHERE a.action LIKE 'LOGIN_%' ORDER BY a.created_at DESC LIMIT 100"),
       q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC"),
       q("SELECT client_type,count(*)::int AS count FROM auth_sessions WHERE revoked_at IS NULL AND expires_at>now() AND absolute_expires_at>now() GROUP BY client_type"),
       q("SELECT a.id,a.action,a.entity_type,a.entity_id,a.point_id,a.metadata,a.created_at,u.name AS actor_name,u.email AS actor_email FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id ORDER BY a.created_at DESC LIMIT 80"),
-      q("SELECT status,count(*)::int AS count FROM service_order_transfers GROUP BY status")
+      q("SELECT status,count(*)::int AS count FROM service_order_transfers GROUP BY status"),
+      q("SELECT (SELECT count(*)::int FROM customer_portal_accounts WHERE google_sub IS NOT NULL) AS google_accounts,(SELECT count(*)::int FROM customer_portal_accounts WHERE blocked_at IS NOT NULL) AS blocked_accounts,(SELECT count(*)::int FROM customer_portal_sessions WHERE expires_at>now()) AS active_customer_sessions")
     ]);
     const mappedUsers = [];
     for (const user of users.rows) mappedUsers.push(await publicUser(user));
@@ -2013,7 +2372,10 @@ const route = async (request) => {
         webSessions: Number(sessionCounts.WEB||0),
         servicePoints: points.rows.filter((point)=>point.effective_service_enabled===true).length,
         openTransfers: Number(transferCounts.REQUESTED||0)+Number(transferCounts.IN_TRANSIT||0)+Number(transferCounts.DELIVERED||0),
-        blockedUsers: mappedUsers.filter((u)=>u.blocked).length
+        blockedUsers: mappedUsers.filter((u)=>u.blocked).length,
+        customerGoogleAccounts:Number(customerPortalSummary.rows[0]?.google_accounts||0),
+        customerPortalSessions:Number(customerPortalSummary.rows[0]?.active_customer_sessions||0),
+        blockedCustomerAccounts:Number(customerPortalSummary.rows[0]?.blocked_accounts||0)
       },
       transferSummary: transferCounts,
       recentAudit: recentAudit.rows.map((row)=>({
@@ -2782,8 +3144,11 @@ const route = async (request) => {
       let notification={queued:false,sent:false,reason:'NOT_CONFIGURED'};
       try{
         const settings=await mailSettingsForPoint(pointId);
+        const customerPrefs=await customerNotificationPreferences(customer.id);
         if(!customer.email){
           notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
+        }else if(customerPrefs.serviceUpdates===false){
+          notification={queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED'};
         }else if(settings.automatic_email_enabled!==true){
           notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
         }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes('RECEIVED')){
@@ -2949,8 +3314,13 @@ const route = async (request) => {
     try{
       const customer=(await q('SELECT email FROM customers WHERE id=$1',[found.customer_id])).rows[0];
       const settings=await mailSettingsForPoint(found.point_id);
+      const customerPrefs=await customerNotificationPreferences(found.customer_id);
       if(!customer?.email){
         notification={queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL'};
+      }else if(next==='READY'&&customerPrefs.readyForPickup===false){
+        notification={queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED'};
+      }else if(next!=='READY'&&customerPrefs.serviceUpdates===false){
+        notification={queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED'};
       }else if(settings.automatic_email_enabled!==true){
         notification={queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED'};
       }else if(!Array.isArray(settings.notify_statuses)||!settings.notify_statuses.includes(next)){
@@ -2979,7 +3349,7 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/service/customer-quotes'){
     const session=await requireActive(request),u=session.user;
-    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do wycen klientów.'),{status:403});
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code)&&!hasSupportAccess(u))throw Object.assign(new Error('Brak uprawnień do wycen klientów.'),{status:403});
     const params=[];
     let where=' WHERE 1=1';
     if(!GLOBAL_ROLES.has(u.role_code)){
@@ -3030,7 +3400,7 @@ const route = async (request) => {
   const staffQuoteReplyMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/reply$/);
   if(method==='POST'&&staffQuoteReplyMatch){
     const session=await requireActive(request),u=session.user;
-    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do odpowiedzi klientowi.'),{status:403});
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code)&&!hasSupportAccess(u))throw Object.assign(new Error('Brak uprawnień do odpowiedzi klientowi.'),{status:403});
     const quote=await staffQuoteVisible(u,staffQuoteReplyMatch[1]);
     if(!quote)return json(request,{error:'NOT_FOUND'},404);
     if(['CLOSED','CANCELLED'].includes(quote.status))return json(request,{error:'QUOTE_CLOSED',message:'To zapytanie jest zamknięte.'},409);
@@ -3038,14 +3408,22 @@ const route = async (request) => {
     if(!message)return json(request,{error:'MESSAGE_REQUIRED',message:'Wpisz odpowiedź dla klienta.'},400);
     await q("INSERT INTO customer_quote_messages(id,request_id,sender_kind,sender_user_id,body) VALUES($1,$2,'STAFF',$3,$4)",[makeId('cqm'),quote.id,u.id,message]);
     await q("UPDATE customer_quote_requests SET assigned_technician_id=CASE WHEN assigned_technician_id IS NULL AND $2='TECHNICIAN' THEN $3 ELSE assigned_technician_id END,updated_at=now() WHERE id=$1",[quote.id,u.role_code,u.id]);
-    await audit(session,'CUSTOMER_QUOTE_REPLIED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id});
-    return json(request,{ok:true});
+    const emailResult=await sendCustomerPortalEventEmail({
+      customerId:quote.customer_id,
+      pointId:quote.routed_point_id,
+      preference:'messages',
+      subject:'LockOn ServiceOS · nowa wiadomość z serwisu',
+      title:'Masz nową wiadomość z serwisu',
+      message
+    });
+    await audit(session,'CUSTOMER_QUOTE_REPLIED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id,email:emailResult});
+    return json(request,{ok:true,email:emailResult});
   }
 
   const staffQuotePriceMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/quote$/);
   if(method==='POST'&&staffQuotePriceMatch){
     const session=await requireActive(request),u=session.user;
-    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do wyceny.'),{status:403});
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code)&&!hasSupportAccess(u))throw Object.assign(new Error('Brak uprawnień do wyceny.'),{status:403});
     const quote=await staffQuoteVisible(u,staffQuotePriceMatch[1]);
     if(!quote)return json(request,{error:'NOT_FOUND'},404);
     if(['CLOSED','CANCELLED'].includes(quote.status))return json(request,{error:'QUOTE_CLOSED',message:'To zapytanie jest zamknięte.'},409);
@@ -3060,14 +3438,22 @@ const route = async (request) => {
     );
     const message='Wycena zdalna: '+rounded.toFixed(2)+' PLN'+(note?' · '+note:'');
     await q("INSERT INTO customer_quote_messages(id,request_id,sender_kind,sender_user_id,body) VALUES($1,$2,'STAFF',$3,$4)",[makeId('cqm'),quote.id,u.id,message]);
-    await audit(session,'CUSTOMER_QUOTE_PRICED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id,amount:rounded,currency:'PLN'});
-    return json(request,{ok:true,amount:rounded,currency:'PLN'});
+    const emailResult=await sendCustomerPortalEventEmail({
+      customerId:quote.customer_id,
+      pointId:quote.routed_point_id,
+      preference:'quoteUpdates',
+      subject:'LockOn ServiceOS · wycena jest gotowa',
+      title:'Wycena jest gotowa',
+      message:'Wycena: '+rounded.toFixed(2)+' PLN'+(note?' · '+note:'')
+    });
+    await audit(session,'CUSTOMER_QUOTE_PRICED','customer_quote_request',quote.id,quote.routed_point_id,{customerId:quote.customer_id,amount:rounded,currency:'PLN',email:emailResult});
+    return json(request,{ok:true,amount:rounded,currency:'PLN',email:emailResult});
   }
 
   const staffQuoteCloseMatch=url.pathname.match(/^\/service\/customer-quotes\/([^/]+)\/close$/);
   if(method==='POST'&&staffQuoteCloseMatch){
     const session=await requireActive(request),u=session.user;
-    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do zamknięcia zapytania.'),{status:403});
+    if(!CUSTOMER_QUOTE_STAFF_ROLES.has(u.role_code)&&!hasSupportAccess(u))throw Object.assign(new Error('Brak uprawnień do zamknięcia zapytania.'),{status:403});
     const quote=await staffQuoteVisible(u,staffQuoteCloseMatch[1]);
     if(!quote)return json(request,{error:'NOT_FOUND'},404);
     await q("UPDATE customer_quote_requests SET status='CLOSED',closed_at=now(),updated_at=now() WHERE id=$1",[quote.id]);
