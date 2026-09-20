@@ -48,6 +48,7 @@ const id = (prefix) => `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
 const normalizeEmail = (value = '') => value.trim().toLowerCase();
 const cleanText = (value, max = 240) => String(value ?? '').trim().slice(0, max);
 const normalizeTechnicianPercent = (value) => {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 && number <= 100 ? Math.round(number * 100) / 100 : null;
 };
