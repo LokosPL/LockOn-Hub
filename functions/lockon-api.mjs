@@ -8,6 +8,7 @@ pool.on('error', (error) => console.error('[postgres idle client]', error));
 const OWNER_EMAIL = String(process.env.LOCKON_OWNER_EMAIL || 'nowogar@gmail.com').trim().toLowerCase();
 const GOOGLE_DESKTOP_CLIENT_ID = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_ID || '').trim();
 const GOOGLE_DESKTOP_CLIENT_SECRET = String(process.env.LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET || '').trim();
+const GOOGLE_CUSTOMER_WEB_CLIENT_ID = String(process.env.LOCKON_GOOGLE_WEB_CLIENT_ID || '').trim();
 const SITE_ORIGINS = new Set(
   [
     String(process.env.LOCKON_SITE_ORIGIN || '').trim().replace(/\/$/, ''),
