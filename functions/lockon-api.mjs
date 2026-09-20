@@ -1051,8 +1051,10 @@ const requireCustomerPortalFull = async (request) => {
   return session;
 };
 
-const revokeCustomerPortalSessions = async (customerId) => {
-  const result = await q("DELETE FROM customer_portal_sessions WHERE customer_id=$1 RETURNING id",[customerId]);
+const revokeCustomerPortalSessions = async (customerId, authMethod = null) => {
+  const result = authMethod
+    ? await q("DELETE FROM customer_portal_sessions WHERE customer_id=$1 AND auth_method=$2 RETURNING id",[customerId,authMethod])
+    : await q("DELETE FROM customer_portal_sessions WHERE customer_id=$1 RETURNING id",[customerId]);
   return result.rowCount || result.rows.length;
 };
 
@@ -2268,7 +2270,7 @@ const route = async (request) => {
     const rotate=body.rotate===true;
     const identity=rotate ? await rotateCustomerPortalCode(customer.id) : await ensureCustomerPortalCode(customer.id);
     let revoked=0;
-    if(rotate) revoked=await revokeCustomerPortalSessions(customer.id);
+    if(rotate) revoked=await revokeCustomerPortalSessions(customer.id,'CODE');
     await audit(session,rotate?'CUSTOMER_CODE_ROTATED':'CUSTOMER_CODE_VIEWED','customer',customer.id,null,{revokedSessions:revoked});
     return json(request,{ok:true,code:identity.code,created:identity.created===true,rotated:rotate,revoked});
   }
