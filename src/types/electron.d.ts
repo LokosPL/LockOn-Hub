@@ -82,6 +82,28 @@ export interface ServiceStatusResult {
 export interface ServiceStatusHistoryItem { id:string; fromStatus?:string|null; fromLabel?:string|null; toStatus:string; toLabel:string; note?:string|null; changedAt:string; changedByUserId?:string|null; changedByName:string; }
 export interface ServiceTechnician { id:string; name:string; email:string; }
 export interface ServiceOrderNote { id:string; body:string; createdAt:string; authorUserId:string; authorName:string; }
+export interface ServiceOrderPart {
+  id:string; description:string; quantity:number; unitCostGross:number; totalCostGross:number;
+  invoiceReceived:boolean; invoiceNumber?:string|null; supplier?:string|null; purchasedAt?:string|null;
+  createdAt?:string; updatedAt?:string;
+}
+export interface ServiceInvoice {
+  id:string; orderId:string; orderNumber?:number|null; customerName?:string|null; device?:string|null;
+  fileName:string; sizeBytes:number; invoiceNumber?:string|null; supplier?:string|null; invoiceDate?:string|null;
+  grossAmount?:number|null; uploadedByUserId:string; uploadedByName?:string|null; createdAt:string; readyAt?:string|null;
+}
+export interface ServiceCosting {
+  orderId:string; orderNumber:number; currency:string; parts:ServiceOrderPart[]; invoices:ServiceInvoice[];
+  partsCostGross:number; laborCostGross:number; otherCostGross:number; internalCostGross:number;
+  estimatedCost?:number|null; finalCost?:number|null; customerPrice?:number|null; marginGross?:number|null;
+}
+export interface TechnicianWorkspace {
+  technician:{id:string;name:string;email:string};
+  counts:{active:number;received:number;diagnosis:number;waitingParts:number;inRepair:number;readyForPickup:number;overdue:number};
+  orders:ServiceOrderSummary[]; generatedAt:string;
+}
+export interface TechnicianPrivateNote { id:string; title:string; body:string; pinned:boolean; createdAt:string; updatedAt:string; }
+export interface InvoiceMonthlyPrompt { show:boolean; period:string|null; count:number; dismissed:boolean; }
 export interface ServiceCustomerDevice { id:string; brand:string; model:string; imei?:string|null; serialNumber?:string|null; notes?:string|null; }
 export interface ServiceTransfer {
   id:string; orderId:string; orderNumber?:number; customerName?:string; device?:string;
@@ -194,6 +216,19 @@ declare global {
         getHistory: (orderId:string) => Promise<ServiceStatusHistoryItem[]>;
         getNotes: (orderId:string) => Promise<ServiceOrderNote[]>;
         addNote: (orderId:string,body:string) => Promise<ServiceOrderNote>;
+        getCosting: (orderId:string) => Promise<ServiceCosting>;
+        saveCosting: (orderId:string,payload:{laborCostGross:number;otherCostGross:number;parts:Array<{description:string;quantity:number;unitCostGross:number;invoiceReceived:boolean;invoiceNumber?:string;supplier?:string;purchasedAt?:string}>}) => Promise<ServiceCosting>;
+        uploadInvoice: (orderId:string,payload:{invoiceNumber?:string;supplier?:string;invoiceDate?:string;grossAmount?:number|string|null}) => Promise<{cancelled:boolean;invoice?:ServiceInvoice}>;
+        downloadInvoice: (invoiceId:string) => Promise<{cancelled:boolean;filePath?:string}>;
+        listInvoices: (month:string) => Promise<{period:string;invoices:ServiceInvoice[]}>;
+        downloadInvoiceBatch: (month:string) => Promise<{cancelled:boolean;downloaded:number;folder?:string;failed?:number}>;
+        deleteInvoice: (invoiceId:string) => Promise<{ok:true}>;
+        getInvoiceMonthlyPrompt: () => Promise<InvoiceMonthlyPrompt>;
+        dismissInvoiceMonthlyPrompt: (period:string) => Promise<{ok:true;period:string}>;
+        getTechnicianWorkspace: () => Promise<TechnicianWorkspace>;
+        listTechnicianNotes: () => Promise<TechnicianPrivateNote[]>;
+        addTechnicianNote: (payload:{title?:string;body:string;pinned?:boolean}) => Promise<TechnicianPrivateNote>;
+        deleteTechnicianNote: (noteId:string) => Promise<{ok:true}>;
         updateDetails: (orderId:string,payload:{imei?:string;serialNumber?:string;deviceNotes?:string;assignedTechnicianId?:string|null;estimatedCost?:number|string|null;finalCost?:number|string|null;estimatedCompletionAt?:string|null}) => Promise<ServiceOrderSummary>;
         updateStatus: (orderId:string,status:string,note?:string,actingPointId?:string) => Promise<ServiceStatusResult>;
         listCustomerQuotes: (pointId?:string) => Promise<CustomerQuoteRequest[]>;
