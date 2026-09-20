@@ -1,0 +1,44 @@
+name: Export final Neon production artifact
+
+on:
+  push:
+    paths:
+      - ".github/workflows/export-final-api-artifact.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout technical branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Download exact verified artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .temp
+          curl -L --fail --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/10612244334/zip" \
+            -o .temp/prod-final.zip
+          echo "87698193c277a744dcf27ad559b71f6ae3f8fcc5862fbf19ac7160cd9bcecac4  .temp/prod-final.zip" | sha256sum -c -
+          unzip -t .temp/prod-final.zip
+          unzip -p .temp/prod-final.zip index.mjs | sha256sum | grep -q '^b12465fe98daba82b0a07d7478b252991f35b5d0b637522e4aac239378c90c07'
+          base64 -w0 .temp/prod-final.zip > .temp/prod-final.b64
+
+      - name: Commit encoded verified artifact
+        shell: bash
+        run: |
+          git config user.name "lockon-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add .temp/prod-final.b64
+          git commit -m "chore: stage verified v1.0.0.0 Neon artifact"
+          git push origin HEAD:${GITHUB_REF_NAME}
