@@ -1225,6 +1225,219 @@ const ensureCustomerPortalCode = async (customerId) => {
   throw new Error('Nie udało się utworzyć identyfikatora klienta.');
 };
 
+const normalizeServiceScanCode = (value) => {
+  const raw=String(value||'').trim().toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/^SV/,'');
+  return /^[A-Z0-9]{8}$/.test(raw)?'SV-'+raw.slice(0,4)+'-'+raw.slice(4):'';
+};
+
+const generateServiceScanCode = () => {
+  let raw='';
+  for(let i=0;i<8;i+=1)raw+=SERVICE_SCAN_ALPHABET[crypto.randomInt(0,SERVICE_SCAN_ALPHABET.length)];
+  return 'SV-'+raw.slice(0,4)+'-'+raw.slice(4);
+};
+
+const ensureServiceCardIdentity = async (orderId) => {
+  let row=(await q("SELECT * FROM service_order_cards WHERE service_order_id=$1 LIMIT 1",[orderId])).rows[0];
+  if(row){
+    return {
+      printMode:row.print_mode||null,
+      staffScanToken:decryptSecret(row.staff_scan_token_ciphertext),
+      staffScanCode:decryptSecret(row.staff_scan_code_ciphertext),
+      generatedAt:row.generated_at,
+      printCount:Number(row.print_count||0),
+      customerEmailSentAt:row.customer_email_sent_at||null
+    };
+  }
+  for(let attempt=0;attempt<5;attempt+=1){
+    const staffScanToken=crypto.randomBytes(32).toString('base64url');
+    const staffScanCode=generateServiceScanCode();
+    try{
+      row=(await q(
+        "INSERT INTO service_order_cards(service_order_id,staff_scan_token_hash,staff_scan_token_ciphertext,staff_scan_code_hash,staff_scan_code_ciphertext) VALUES($1,$2,$3,$4,$5) ON CONFLICT(service_order_id) DO NOTHING RETURNING *",
+        [orderId,tokenHash(staffScanToken),encryptSecret(staffScanToken),tokenHash(staffScanCode),encryptSecret(staffScanCode)]
+      )).rows[0];
+      if(row)return {printMode:null,staffScanToken,staffScanCode,generatedAt:row.generated_at,printCount:0,customerEmailSentAt:null};
+      row=(await q("SELECT * FROM service_order_cards WHERE service_order_id=$1 LIMIT 1",[orderId])).rows[0];
+      if(row)return {
+        printMode:row.print_mode||null,
+        staffScanToken:decryptSecret(row.staff_scan_token_ciphertext),
+        staffScanCode:decryptSecret(row.staff_scan_code_ciphertext),
+        generatedAt:row.generated_at,
+        printCount:Number(row.print_count||0),
+        customerEmailSentAt:row.customer_email_sent_at||null
+      };
+    }catch(error){
+      if(String(error?.code||'')!=='23505')throw error;
+    }
+  }
+  throw new Error('Nie udało się przygotować identyfikatora karty serwisowej.');
+};
+
+const customerPortalAutoUrl = (portalCode, orderId='') =>
+  PUBLIC_PORTAL_URL+'/klient.html#code='+encodeURIComponent(portalCode)+(orderId?'&order='+encodeURIComponent(orderId):'')+'&auto=1';
+
+const staffServiceScanUrl = (token) =>
+  PUBLIC_PORTAL_URL+'/panel.html#scan='+encodeURIComponent(token);
+
+const pdfToBuffer = (definition) => new Promise((resolve,reject)=>{
+  try{
+    pdfMake.createPdf(definition).getBuffer((buffer)=>resolve(Buffer.from(buffer)));
+  }catch(error){reject(error);}
+});
+
+const loadServiceCardContext = async (orderId) => {
+  const row=(await q(
+    "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.received_at,s.estimated_completion_at,s.point_id,s.home_point_id,s.current_point_id,c.id AS customer_id,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,p.name AS point_name,p.city AS point_city FROM service_orders s JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id WHERE s.id=$1 LIMIT 1",
+    [orderId]
+  )).rows[0];
+  if(!row)throw Object.assign(new Error('Nie znaleziono zlecenia.'),{status:404,code:'NOT_FOUND'});
+  const [portal,card]=await Promise.all([ensureCustomerPortalCode(row.customer_id),ensureServiceCardIdentity(orderId)]);
+  const customerUrl=customerPortalAutoUrl(portal.code,orderId);
+  const staffUrl=staffServiceScanUrl(card.staffScanToken);
+  return {
+    orderId:row.id,
+    orderNumber:Number(row.order_number),
+    orderType:row.order_type,
+    handlingMode:row.handling_mode||'STANDARD',
+    issueDescription:row.issue_description,
+    status:row.status,
+    receivedAt:row.received_at,
+    estimatedCompletionAt:row.estimated_completion_at||null,
+    pointId:row.point_id,
+    pointName:row.point_name,
+    pointCity:row.point_city||'',
+    customerId:row.customer_id,
+    customerName:[row.first_name,row.last_name].filter(Boolean).join(' '),
+    customerEmail:row.email||'',
+    customerPhone:row.phone||'',
+    device:[row.brand,row.model].filter(Boolean).join(' '),
+    imei:row.imei||'',
+    serialNumber:row.serial_number||'',
+    deviceNotes:row.device_notes||'',
+    customerPortalCode:portal.code,
+    customerPortalUrl:customerUrl,
+    staffScanCode:card.staffScanCode,
+    staffScanUrl:staffUrl,
+    printMode:card.printMode||null,
+    generatedAt:card.generatedAt
+  };
+};
+
+const serviceCardHeader = (context,title,subtitle) => ({
+  stack:[
+    {columns:[
+      {text:[{text:'LockOn',bold:true,color:'#ff7048'},{text:'  ServiceOS',color:'#3f4650'}],fontSize:16},
+      {text:'#'+context.orderNumber,alignment:'right',fontSize:16,bold:true,color:'#111827'}
+    ]},
+    {text:title,fontSize:19,bold:true,margin:[0,12,0,2],color:'#111827'},
+    {text:subtitle,fontSize:9,color:'#667085',margin:[0,0,0,12]}
+  ]
+});
+
+const serviceCardInfoTable = (rows) => ({
+  table:{
+    widths:[92,'*'],
+    body:rows.map(([label,value])=>[
+      {text:String(label),fontSize:8,bold:true,color:'#667085',margin:[0,3,0,3]},
+      {text:String(value||'—'),fontSize:9,color:'#101828',margin:[0,3,0,3]}
+    ])
+  },
+  layout:{
+    hLineWidth:()=>0.4,vLineWidth:()=>0.4,
+    hLineColor:()=> '#e4e7ec',vLineColor:()=> '#e4e7ec',
+    paddingLeft:()=>5,paddingRight:()=>5,paddingTop:()=>1,paddingBottom:()=>1
+  }
+});
+
+const deviceServiceCardContent = (context) => ({
+  stack:[
+    serviceCardHeader(context,'Karta urządzenia','Identyfikator pozostaje z telefonem przez cały proces serwisowy.'),
+    serviceCardInfoTable([
+      ['Punkt macierzysty',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
+      ['Klient',context.customerName],
+      ['Urządzenie',context.device],
+      ['IMEI',context.imei||'—'],
+      ['Numer seryjny',context.serialNumber||'—'],
+      ['Typ',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
+      ['Opis usterki',context.issueDescription],
+      ['Uwagi',context.deviceNotes||'—'],
+      ['Przyjęto',new Date(context.receivedAt).toLocaleString('pl-PL',{timeZone:'Europe/Warsaw'})]
+    ]),
+    {columns:[
+      {stack:[
+        {text:'Kod pracownika',fontSize:8,bold:true,color:'#667085',margin:[0,12,0,3]},
+        {text:context.staffScanCode,fontSize:15,bold:true,color:'#101828',characterSpacing:1},
+        {text:'Zeskanuj w mobilnym panelu ServiceOS. Skan nie wykonuje operacji bez zalogowanego pracownika i właściwego punktu.',fontSize:7,color:'#667085',margin:[0,5,8,0]}
+      ],width:'*'},
+      {qr:context.staffScanUrl,fit:92,alignment:'right',width:100}
+    ],margin:[0,4,0,0]},
+    {text:'NIE USUWAĆ — karta identyfikuje urządzenie w logistyce ServiceOS.',fontSize:8,bold:true,color:'#b42318',margin:[0,10,0,0]}
+  ]
+});
+
+const customerServiceCardContent = (context) => ({
+  stack:[
+    serviceCardHeader(context,'Karta dla klienta','Potwierdzenie przyjęcia i bezpośredni dostęp do bieżącego zlecenia.'),
+    serviceCardInfoTable([
+      ['Klient',context.customerName],
+      ['Urządzenie',context.device],
+      ['Punkt',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
+      ['Typ',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
+      ['Opis usterki',context.issueDescription],
+      ['Przyjęto',new Date(context.receivedAt).toLocaleString('pl-PL',{timeZone:'Europe/Warsaw'})]
+    ]),
+    {columns:[
+      {stack:[
+        {text:'Twój kod klienta',fontSize:8,bold:true,color:'#667085',margin:[0,12,0,3]},
+        {text:context.customerPortalCode,fontSize:13,bold:true,color:'#101828',characterSpacing:.5},
+        {text:'Zeskanuj QR — kod zostanie przekazany do portalu automatycznie, bez ręcznego przepisywania.',fontSize:7,color:'#667085',margin:[0,5,8,0]},
+        {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:8,bold:true,color:'#ff7048',margin:[0,9,0,0]}
+      ],width:'*'},
+      {qr:context.customerPortalUrl,fit:92,alignment:'right',width:100}
+    ],margin:[0,4,0,0]}
+  ]
+});
+
+const renderServiceCardPdf = async (orderId,variant='CUSTOMER') => {
+  const normalized=SERVICE_CARD_VARIANTS.has(String(variant).toUpperCase())?String(variant).toUpperCase():'CUSTOMER';
+  const context=await loadServiceCardContext(orderId);
+  const common={
+    defaultStyle:{font:'Roboto',fontSize:9},
+    info:{title:'LockOn ServiceOS · zlecenie #'+context.orderNumber,author:'LockOn ServiceOS',subject:'Karta serwisowa'},
+    compress:true
+  };
+  let definition;
+  if(normalized==='PHYSICAL'){
+    definition={
+      ...common,
+      pageSize:'A4',pageOrientation:'landscape',pageMargins:[24,24,24,24],
+      content:[
+        {columns:[
+          {width:'48%',...deviceServiceCardContent(context)},
+          {width:'4%',stack:[
+            {text:'PRZETNIJ TUTAJ',fontSize:6,bold:true,color:'#98a2b3',alignment:'center',margin:[0,235,0,0]}
+          ]},
+          {width:'48%',...customerServiceCardContent(context)}
+        ],columnGap:7},
+        {canvas:[{type:'line',x1:0,y1:0,x2:0,y2:535,lineWidth:.8,lineColor:'#98a2b3',dash:{length:5,space:4}}],absolutePosition:{x:421,y:30}}
+      ]
+    };
+  }else{
+    definition={
+      ...common,
+      pageSize:'A5',pageOrientation:'landscape',pageMargins:[24,24,24,24],
+      content:[normalized==='DEVICE'?deviceServiceCardContent(context):customerServiceCardContent(context)]
+    };
+  }
+  const buffer=await pdfToBuffer(definition);
+  return {
+    context,
+    variant:normalized,
+    fileName:(normalized==='CUSTOMER'?'Karta-klienta-':normalized==='DEVICE'?'Karta-urzadzenia-':'Karta-serwisowa-A4-')+'zlecenie-'+context.orderNumber+'.pdf',
+    buffer
+  };
+};
+
 const rotateCustomerPortalCode = async (customerId) => {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const code = generateCustomerPortalCode();
