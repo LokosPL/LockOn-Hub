@@ -1,0 +1,146 @@
+name: Temp Neon integration smoke
+
+on:
+  push:
+    branches: ["feature/v0.21-service-finance-invoices"]
+    paths:
+      - "functions/lockon-api.mjs"
+      - "database/migrations/**"
+      - ".github/workflows/temp-neon-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temp-neon-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: wandering-field-13057181
+      NEON_BRANCH_ID: br-spring-pond-b1hqe48m
+      NEON_FUNCTION_SLUG: lockonapi
+      TEMP_API_URL: https://br-spring-pond-b1hqe48m-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require temp Neon credential
+        shell: bash
+        run: |
+          if [ -z "$NEON_API_KEY" ]; then
+            echo "::error::Brak repo secret NEON_API_KEY potrzebnego do automatycznego temp smoke."
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Build exact Neon bundle
+        shell: bash
+        run: |
+          npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 pdfmake@0.2.20 esbuild@0.25.12
+          node --check functions/lockon-api.mjs
+          mkdir -p central-api-dist
+          npx esbuild functions/lockon-api.mjs \
+            --bundle \
+            --platform=node \
+            --target=node24 \
+            --format=esm \
+            --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" \
+            --outfile=central-api-dist/index.mjs
+          zip -j temp-neon-lockonapi.zip central-api-dist/index.mjs
+          sha256sum temp-neon-lockonapi.zip central-api-dist/index.mjs
+
+      - name: Deploy bundle to temp Neon only
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$NEON_BRANCH_ID/functions/$NEON_FUNCTION_SLUG/deployments"
+          http="$(curl --silent --show-error --output deploy.json --write-out '%{http_code}' \
+            --request POST "$endpoint" \
+            --header "Authorization: Bearer $NEON_API_KEY" \
+            --form "zip=@temp-neon-lockonapi.zip")"
+          if [[ "$http" -lt 200 || "$http" -ge 300 ]]; then
+            echo "::error::Temp Neon deploy HTTP $http"
+            cat deploy.json
+            exit 1
+          fi
+          node - <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs=require('fs');
+          const d=JSON.parse(fs.readFileSync('deploy.json','utf8'));
+          const id=d.id ?? d.deployment?.id ?? d.deployment_id;
+          if(id===undefined || id===null) throw new Error('Neon deploy response has no deployment id');
+          console.log('deployment_id='+id);
+          NODE
+
+      - name: Wait for deployed revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$NEON_BRANCH_ID/functions/$NEON_FUNCTION_SLUG"
+          expected="${{ steps.deploy.outputs.deployment_id }}"
+          ready=0
+          for attempt in $(seq 1 60); do
+            curl --silent --show-error --fail "$endpoint" --header "Authorization: Bearer $NEON_API_KEY" > function.json
+            state="$(node - <<'NODE'
+          const fs=require('fs');
+          const f=JSON.parse(fs.readFileSync('function.json','utf8'));
+          const d=f.current_deployment ?? f.active_deployment ?? f.deployment ?? {};
+          process.stdout.write(String(d.status ?? 'unknown'));
+          NODE
+          )"
+            id="$(node - <<'NODE'
+          const fs=require('fs');
+          const f=JSON.parse(fs.readFileSync('function.json','utf8'));
+          const d=f.current_deployment ?? f.active_deployment ?? f.deployment ?? {};
+          process.stdout.write(String(d.id ?? ''));
+          NODE
+          )"
+            if [[ "$id" == "$expected" && "$state" == "completed" ]]; then
+              ready=1
+              break
+            fi
+            if [[ "$id" == "$expected" && "$state" == "failed" ]]; then
+              echo "::error::Temp Neon deployment $expected failed."
+              exit 1
+            fi
+            sleep 5
+          done
+          if [[ "$ready" != "1" ]]; then
+            echo "::error::Temp Neon deployment did not become active."
+            exit 1
+          fi
+
+      - name: Temp health, CORS and authenticated smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --fail "$TEMP_API_URL/health" > health.json
+          node -e "const d=require('./health.json'); if(!d.ok) process.exit(1)"
+
+          curl --silent --show-error --fail \
+            --request OPTIONS "$TEMP_API_URL/service/orders" \
+            --header "Origin: https://app.serviceos.pl" \
+            --header "Access-Control-Request-Method: GET" \
+            --header "Access-Control-Request-Headers: authorization,content-type" \
+            --dump-header cors.headers --output /dev/null
+          grep -iq '^access-control-allow-origin: https://app.serviceos.pl' cors.headers
+          grep -iq '^access-control-allow-headers:.*authorization' cors.headers
+
+          curl --silent --show-error --fail --request POST "$TEMP_API_URL/auth/dev-owner" > auth.json
+          token="$(node -e "const d=require('./auth.json'); if(!d.token) process.exit(1); process.stdout.write(d.token)")"
+          curl --silent --show-error --fail "$TEMP_API_URL/me" --header "Authorization: Bearer $token" > me.json
+          node - <<'NODE'
+          const d=require('./me.json');
+          if(d.user?.role!=='OWNER') throw new Error('Temp dev login did not return OWNER');
+          if(!Array.isArray(d.points) || d.points.length<1) throw new Error('Temp owner has no service points');
+          NODE
