@@ -25,6 +25,8 @@ const SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 90;
 const WEB_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 90;
 const WEB_SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 5;
 const WEBSITE_CODE_TTL_MS = 1000 * 60 * 5;
+const WEBSITE_REDEEM_WINDOW_MS = 60_000;
+const WEBSITE_REDEEM_ATTEMPT_LIMIT = 12;
 const BODY_LIMIT = 64 * 1024;
 const GLOBAL_ROLES = new Set(['OWNER', 'BOSS']);
 const REQUESTABLE_ROLES = new Set(['BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
@@ -73,6 +75,35 @@ const splitRevenueAmount = (amount, technicianPercent) => {
 };
 const tokenHash = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const b64url = (value) => Buffer.from(value).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+
+const websiteRedeemAttempts = new Map();
+const requestClientAddress = (request) => {
+  const direct = request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip');
+  const forwarded = request.headers.get('x-forwarded-for');
+  return cleanText(direct || forwarded?.split(',')[0] || '', 96);
+};
+const consumeWebsiteRedeemAttempt = (request) => {
+  const key = requestClientAddress(request);
+  if (!key) return null;
+  const now = Date.now();
+  let state = websiteRedeemAttempts.get(key);
+  if (!state || state.resetAt <= now) state = { count: 0, resetAt: now + WEBSITE_REDEEM_WINDOW_MS };
+  if (state.count >= WEBSITE_REDEEM_ATTEMPT_LIMIT) {
+    throw Object.assign(new Error('Zbyt wiele prób parowania. Spróbuj ponownie za minutę.'), { status: 429, code: 'RATE_LIMITED' });
+  }
+  state.count += 1;
+  websiteRedeemAttempts.set(key, state);
+  if (websiteRedeemAttempts.size > 2048) {
+    for (const [entryKey, entry] of websiteRedeemAttempts) {
+      if (entry.resetAt <= now) websiteRedeemAttempts.delete(entryKey);
+      if (websiteRedeemAttempts.size <= 1536) break;
+    }
+  }
+  return key;
+};
+const clearWebsiteRedeemAttempts = (key) => {
+  if (key) websiteRedeemAttempts.delete(key);
+};
 
 const corsHeaders = (request) => {
   const origin = request.headers.get('origin') || '';
@@ -2272,6 +2303,7 @@ const route = async (request) => {
   }
 
   if (method === 'POST' && url.pathname === '/website/redeem') {
+    const redeemRateKey = consumeWebsiteRedeemAttempt(request);
     const body = await readJson(request);
     const code = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (code.length !== 8) return json(request, { error: 'CODE', message: 'Nieprawidłowy kod.' }, 400);
@@ -2298,6 +2330,7 @@ const route = async (request) => {
         [makeId('ses'), userResult.rows[0].id, tokenHash(token), 'WEB', new Date(now + SESSION_TTL_MS), new Date(now + SESSION_ABSOLUTE_TTL_MS)]
       );
       await client.query('COMMIT');
+      clearWebsiteRedeemAttempts(redeemRateKey);
       return json(request, { token, ...(await authPayload(userResult.rows[0])) });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
