@@ -107,6 +107,11 @@ jobs:
             if (-not $electron.Contains($_)) { throw "Missing secure invoice IPC contract: $_" }
           }
 
+          $api = Get-Content functions/lockon-api.mjs -Raw
+          @("COALESCE(s.current_point_id,s.home_point_id,s.point_id)","t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')","!imei||!serialNumber||!deviceNotes","FOR UPDATE") | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing v1 service safety regression contract: $_" }
+          }
+
       - name: Typecheck renderer
         run: npm run typecheck
 
