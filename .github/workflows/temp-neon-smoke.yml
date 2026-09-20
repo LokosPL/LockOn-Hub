@@ -30,12 +30,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Require temp Neon credential
+      - name: Detect temp Neon credential
+        id: neon_credential
         shell: bash
         run: |
-          if [ -z "$NEON_API_KEY" ]; then
-            echo "::error::Brak repo secret NEON_API_KEY potrzebnego do automatycznego temp smoke."
-            exit 1
+          if [ -n "$NEON_API_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Brak repo secret NEON_API_KEY. Bundle zostanie zbudowany i zachowany jako artefakt; deploy i HTTP smoke są pomijane."
           fi
 
       - name: Setup Node.js
@@ -59,7 +62,16 @@ jobs:
           zip -j temp-neon-lockonapi.zip central-api-dist/index.mjs
           sha256sum temp-neon-lockonapi.zip central-api-dist/index.mjs
 
+      - name: Upload exact temp Neon bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: temp-neon-lockonapi
+          path: temp-neon-lockonapi.zip
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Deploy bundle to temp Neon only
+        if: steps.neon_credential.outputs.available == 'true'
         id: deploy
         shell: bash
         run: |
@@ -83,6 +95,7 @@ jobs:
           NODE
 
       - name: Wait for deployed revision
+        if: steps.neon_credential.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -121,6 +134,7 @@ jobs:
           fi
 
       - name: Temp health, CORS and authenticated smoke
+        if: steps.neon_credential.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
