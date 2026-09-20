@@ -1834,32 +1834,62 @@ const renderStatusEmail = (item) => {
   return { subject, text, html, displayName };
 };
 
-const sendGmail = async (sender, recipient, subject, textBody, htmlBody, displayName = 'LockOn ServiceOS') => {
+const sendGmail = async (sender, recipient, subject, textBody, htmlBody, displayName = 'LockOn ServiceOS', attachments = []) => {
   const refreshToken = decryptSecret(sender.refresh_token_ciphertext);
   const legacyClientSecret = sender.oauth_client_secret_ciphertext ? decryptSecret(sender.oauth_client_secret_ciphertext) : '';
   const accessToken = await refreshGmailAccess(refreshToken, legacyClientSecret);
-  const boundary = 'lockon_' + crypto.randomBytes(12).toString('hex');
+  const altBoundary = 'lockon_alt_' + crypto.randomBytes(12).toString('hex');
+  const mixedBoundary = 'lockon_mix_' + crypto.randomBytes(12).toString('hex');
   const fromName = encodeSubject(sanitizeHeader(displayName || 'LockOn ServiceOS'));
-  const raw = [
-    'From: ' + fromName + ' <' + sanitizeHeader(sender.sender_email) + '>',
-    'To: ' + sanitizeHeader(recipient),
-    'Subject: ' + encodeSubject(sanitizeHeader(subject)),
-    'MIME-Version: 1.0',
-    'Content-Type: multipart/alternative; boundary="' + boundary + '"',
-    '',
-    '--' + boundary,
+  const safeAttachments=(Array.isArray(attachments)?attachments:[]).slice(0,4).map((item)=>({
+    fileName:sanitizeHeader(item?.fileName||'dokument.pdf').replace(/[\\/"]/g,'_').slice(0,160),
+    contentType:sanitizeHeader(item?.contentType||'application/octet-stream').slice(0,120),
+    content:Buffer.isBuffer(item?.content)?item.content:Buffer.from(item?.content||'')
+  })).filter((item)=>item.content.length>0&&item.content.length<=8*1024*1024);
+
+  const alternative=[
+    '--' + altBoundary,
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
     '',
     Buffer.from(textBody, 'utf8').toString('base64'),
-    '--' + boundary,
+    '--' + altBoundary,
     'Content-Type: text/html; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
     '',
     Buffer.from(htmlBody, 'utf8').toString('base64'),
-    '--' + boundary + '--'
-  ].join('\r\n');
+    '--' + altBoundary + '--'
+  ];
 
+  const rawLines=[
+    'From: ' + fromName + ' <' + sanitizeHeader(sender.sender_email) + '>',
+    'To: ' + sanitizeHeader(recipient),
+    'Subject: ' + encodeSubject(sanitizeHeader(subject)),
+    'MIME-Version: 1.0'
+  ];
+
+  if(safeAttachments.length){
+    rawLines.push('Content-Type: multipart/mixed; boundary="' + mixedBoundary + '"','',
+      '--' + mixedBoundary,
+      'Content-Type: multipart/alternative; boundary="' + altBoundary + '"','',
+      ...alternative
+    );
+    for(const attachment of safeAttachments){
+      rawLines.push(
+        '--' + mixedBoundary,
+        'Content-Type: ' + attachment.contentType + '; name="' + attachment.fileName + '"',
+        'Content-Disposition: attachment; filename="' + attachment.fileName + '"',
+        'Content-Transfer-Encoding: base64',
+        '',
+        attachment.content.toString('base64')
+      );
+    }
+    rawLines.push('--' + mixedBoundary + '--');
+  }else{
+    rawLines.push('Content-Type: multipart/alternative; boundary="' + altBoundary + '"','',...alternative);
+  }
+
+  const raw=rawLines.join('\r\n');
   const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
