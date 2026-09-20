@@ -46,6 +46,9 @@ jobs:
           const health = await call('/health', null);
           if (health?.ok !== true) throw new Error('health failed');
 
+          await call('/support/leave', owner, 'POST', {});
+          await call('/support/leave', user, 'POST', {});
+
           const ownerBot = await call('/assistant/chat', owner, 'POST', { message: 'P0A owner bot ' + marker, target: 'BOT' });
           if (!ownerBot?.assistantMessage || ownerBot?.consultantState !== 'BOT') {
             throw new Error('OWNER bot did not answer after self-assignment repair');
