@@ -21,7 +21,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
     label: 'Właściciel aplikacji',
     shortLabel: 'Właściciel',
     description: 'Pełny dostęp do obecnych funkcji ServiceOS, administracji, rozliczeń, wsparcia i aktualizacji.',
-    navigation: ['dashboard', 'service', 'browser', 'earnings', 'administration', 'support', 'settings'],
+    navigation: ['dashboard', 'service', 'browser', 'earnings', 'administration', 'customers', 'support', 'settings'],
     canManageUpdates: true,
     canManageSettings: true,
     canUseSupportDesk: true,
@@ -54,7 +54,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
     label: 'Wsparcie LockOnOS',
     shortLabel: 'Wsparcie',
     description: 'Dostęp do przypisanych punktów, przeglądarki i modułu wsparcia. Dane klientów może odczytywać wyłącznie w dozwolonym zakresie wsparcia.',
-    navigation: ['dashboard', 'browser', 'support', 'settings'],
+    navigation: ['dashboard', 'browser', 'customers', 'support', 'settings'],
     canManageUpdates: false,
     canManageSettings: false,
     canUseSupportDesk: true,
@@ -86,4 +86,5 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
 };
 
 export const roleCanNavigate = (role: UserRole, key: NavigationKey, supportEnabled = false) =>
-  ROLE_DEFINITIONS[role].navigation.includes(key) || (key === 'support' && supportEnabled);
+  ROLE_DEFINITIONS[role].navigation.includes(key) ||
+  (supportEnabled && (key === 'support' || key === 'customers'));
