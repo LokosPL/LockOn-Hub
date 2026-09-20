@@ -14,20 +14,22 @@
 - Neon Function slug: `lockonapi`
 - API: `https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech`
 
-### Aktualny stan produkcyjny — 2026-09-20 / v0.20.1 + WWW code-only
+### Aktualny stan produkcyjny — 2026-09-20 / v0.20.2 + konta klientów Google
 
-- aplikacja / backend source `main` po PR #52: `aa668840f642bd30bb2b5f7f9deec908cd67b59f` (commit handoffu jest późniejszy)
-- publiczny release Windows: **v0.20.1**; v0.20.0 jest wydaniem pośrednim i nie jest aktualną bazą
-- instalator `LockOn-ServiceOS-Setup.exe`: SHA-256 `cf7c4f500a2cb9015cfab5bcb28965452fcbf80f103503d7bdcd23d1c591a30e`
-- strona / panel WWW `main` po Site PR #26: `2356678eb9a57c72559083a914ac041a1addda07`
-- GitHub Pages: deploy **#94 SUCCESS**; Site Verify po merge **#190 SUCCESS**
-- aktywny Neon `lockonapi`: deployment **v33**, completed
-- pracownik w WWW/PWA może uzyskać sesję **wyłącznie przez jednorazowy kod z aplikacji Windows**; `POST /auth/google-web` jest backendowo wyłączony i zwraca `404 WEB_CODE_ONLY`
-- jedyną ścieżką utworzenia sesji WEB pracownika jest `POST /website/redeem` z kodem wygenerowanym przez aktywną sesję desktopową
-- publiczny WWW nie ładuje Google Identity, nie publikuje `googleClientId`; cache PWA: `serviceos-shell-v21`
-- backend PR #52: Verify Neon API #22 SUCCESS, CodeQL #280 SUCCESS; po merge Build central API #148 SUCCESS i CodeQL #281 SUCCESS
-- produkcyjny smoke v33: `/health` 200; `/auth/google-web` 404 `WEB_CODE_ONLY`; niepełny `/website/redeem` 400 `CODE`; bez tworzenia fikcyjnych danych i bez testów destrukcyjnych
-- testowa gałąź Neon `verify-web-code-only-20260920` / `br-rapid-mountain-b1lkmpt3` pozostaje zachowana i nie została usunięta
+- aplikacja / backend source `main`: `8d836edc743811909e69330781fa90d2a352fab5` (handoff jest późniejszy)
+- publiczny release Windows: **v0.20.2**
+- instalator `LockOn-ServiceOS-Setup.exe`: SHA-256 `5d8642c49e088724fff9db918f21c9910adf860c596c2e4e17ed66bca46ce7c2`
+- release workflow #42 SUCCESS; Verify main #544 SUCCESS; CodeQL #291 SUCCESS
+- strona / panel WWW `main` po Site PR #34: `77f6a8372dea00b6e8f1af3a13ef120454438ea9`
+- GitHub Pages: deploy **#101 SUCCESS**; Site Verify #245 SUCCESS; Mobile UI visual smoke #22 SUCCESS
+- aktywny Neon `lockonapi`: deployment **v34**, completed
+- migracja produkcyjna: `2026-09-20-customer-accounts-google` zastosowana addytywnie; dodano `customer_portal_accounts` oraz `auth_method=CODE|GOOGLE` do sesji klienta
+- portal klienta ma dwa tryby: **kod = tylko podgląd** oraz **Google = pełne konto** z wiadomościami, nowymi wycenami i ustawieniami powiadomień
+- po pierwszym powiązaniu kodu z Google klient może później logować się bez kodu; Google klienta działa tylko na `klient.html` i nie zmienia zasady code-only dla pracownika
+- desktop v0.20.2 ma moduł **Klienci** dla OWNER oraz Wsparcia LockOn: statystyki użycia, wyszukiwanie, kod klienta, wysyłkę kodu e-mailem, obrót kodu, blokadę/odblokowanie portalu i unieważnianie sesji
+- ustawienia klienta obejmują osobne powiadomienia: postęp naprawy, gotowe do odbioru, wyceny i wiadomości; backend respektuje je przy wysyłce
+- backend temp smoke i production smoke v34 SUCCESS: `/health` 200, customer Google config aktywny, błędny kod odrzucany, fałszywy token Google odrzucany, endpoint administracji klientów chroniony bez sesji
+- zachowane gałęzie Neon: `verify-web-code-only-20260920` / `br-rapid-mountain-b1lkmpt3` oraz `verify-customer-accounts-google-20260920` / `br-frosty-shadow-b17elnrj`
 
 ### Historyczny stan produkcyjny — 2026-09-19 / v0.17.0
 
@@ -742,11 +744,27 @@ Dla każdego priorytetu:
 - Backend checks: Verify Neon API #22 SUCCESS, CodeQL #280 SUCCESS przed merge; Build central API #148 SUCCESS i CodeQL #281 SUCCESS po merge.
 - Desktop pozostaje **v0.20.1**; ta zmiana nie wymaga nowego instalatora.
 
+## Konta klientów Google + zarządzanie portalem — v0.20.2 / Neon v34 / Site PR #34
+
+- Hub PR #55: pełny backend i desktop do obsługi kont klientów; przed merge Verify Neon API, Verify app i CodeQL były zielone.
+- Produkcyjna migracja jest addytywna; istniejące kody i sesje CODE pozostają kompatybilne.
+- Kod klienta tworzy sesję `CODE` i daje wyłącznie odczyt. Backend blokuje nowe wyceny, wiadomości i zmianę ustawień dla CODE.
+- Po kodzie klient wybiera „Tylko podgląd” albo „Pełne konto Google”. Link Google wymaga zgodności adresu Google z e-mailem klienta zapisanym w ServiceOS.
+- Po powiązaniu Google klient może wejść bez kodu przez `POST /public/customer-portal/google/login`.
+- Konto Google tworzy sesję `GOOGLE`; tylko ta sesja może pisać do serwisu, zakładać wyceny i zmieniać preferencje.
+- Portal ma własne preferencje: `serviceUpdates`, `readyForPickup`, `quoteUpdates`, `messages`.
+- Blokada portalu klienta natychmiast unieważnia jego sesje; blokada i operacje zarządcze są audytowane.
+- Endpointy `/customer-accounts` wymagają OWNER / roli SUPPORT / dodatkowego `support_enabled`; nie-OWNER jest ograniczony do punktów w swoim zakresie.
+- Desktop v0.20.2: nowy moduł Klienci pokazuje liczbę klientów, kont Google, aktywnych sesji i blokad oraz umożliwia zarządzanie kodem i dostępem.
+- „Wyślij kod” wysyła klientowi kod oraz link portalu; po powiązaniu Google e-mail zawiera także wejście bez kodu.
+- Pracowniczy panel WWW pozostaje **wyłącznie code-only**. Nie przywracaj Google do `/auth/google-web`.
+- Tymczasowej gałęzi Neon użytej do weryfikacji tej migracji nie usunięto.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
 2. Sprawdź aktualny `main`, latest release, otwarte PR-y i wszystkie aktywne workflow w obu repozytoriach.
 3. Sprawdź Neon: projekt `wandering-field-13057181`, produkcyjną gałąź `br-steep-bonus-b1f1qh8u`, bazę `lockon`, aktywny deployment `lockonapi` oraz schemat.
-4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to **v0.20.1**, produkcyjny backend to **lockonapi v33**, a strona/PWA jest po **Site PR #26 / Pages #94** z code-only logowaniem pracownika i cache `serviceos-shell-v21`. Nie rozpoczynaj historycznych priorytetów ponownie.
+4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to **v0.20.2**, produkcyjny backend to **lockonapi v34**, a strona/PWA jest po **Site PR #34 / Pages #101** z kontami klientów Google i cache `serviceos-shell-v23`. Pracownicze WWW nadal jest code-only. Nie rozpoczynaj historycznych priorytetów ponownie.
 5. Przy kolejnej pracy najpierw sprawdź nowe wymagania użytkownika, aktualny main/release/Neon i dopiero utwórz następny backlog lub poprawkę.
 6. Pracuj samodzielnie przez GitHub i Neon; nie proś użytkownika o informacje, które można sprawdzić narzędziami.
