@@ -1200,32 +1200,29 @@ const renderStatusEmail = (item) => {
     'To automatyczna wiadomość z ' + displayName + '.'
   ].filter((line,index,array)=>line!=='' || (index>0 && array[index-1]!=='' )).join('\n');
 
-  const html = '<!doctype html><html lang="pl"><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"></head><body style="margin:0;background:#111318;color:#eceff3;font-family:Arial,sans-serif;word-break:break-word">' +
-    '<div style="width:100%;max-width:620px;box-sizing:border-box;margin:0 auto;padding:20px 12px">' +
-      '<div style="border:1px solid #2a2f37;border-radius:16px;background:#171a20;overflow:hidden">' +
-        '<div style="padding:18px 22px;border-bottom:1px solid #2a2f37;background:#13161b">' +
-          '<div style="font-size:12px;color:#ff7b45;font-weight:700;letter-spacing:.08em">LOCKON SERVICEOS</div>' +
-          '<div style="font-size:20px;font-weight:800;margin-top:6px">Aktualizacja zlecenia #' + escapeHtml(item.order_number) + '</div>' +
+  const html = '<!doctype html><html lang="pl"><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"></head><body style="margin:0;background:#0b0d10;color:#f3f5f7;font-family:Arial,sans-serif;word-break:break-word">' +
+    '<div style="width:100%;max-width:600px;box-sizing:border-box;margin:0 auto;padding:18px 10px 28px">' +
+      '<div style="padding:10px 4px 18px;font-size:13px;font-weight:800;color:#f3f5f7">LockOn <span style="color:#737d88;font-weight:500">ServiceOS</span></div>' +
+      '<div style="border:1px solid #252b33;border-radius:20px;background:#11151a;overflow:hidden">' +
+        '<div style="padding:24px 22px 20px">' +
+          '<div style="font-size:11px;color:#ff8b60;font-weight:800;letter-spacing:.1em">ZLECENIE #' + escapeHtml(item.order_number) + '</div>' +
+          '<div style="font-size:26px;line-height:1.15;font-weight:850;margin-top:8px">Mamy aktualizację Twojej naprawy</div>' +
+          '<p style="margin:12px 0 0;color:#909aa5;font-size:14px;line-height:1.55">Dzień dobry ' + escapeHtml(item.first_name) + '. Poniżej najważniejsza informacja — bez technicznych szczegółów.</p>' +
         '</div>' +
-        '<div style="padding:22px">' +
-          '<p style="margin:0 0 16px">Dzień dobry <strong>' + escapeHtml(item.first_name) + '</strong>,</p>' +
-          '<p style="margin:0 0 14px;color:#aeb6c0;line-height:1.55">' + escapeHtml(intro) + '</p>' +
-          '<div style="padding:16px;border-radius:12px;background:#101318;border:1px solid #333944">' +
-            '<div style="font-size:11px;color:#7f8995;text-transform:uppercase">Aktualny etap</div>' +
-            '<div style="font-size:21px;font-weight:800;color:#ff8754;margin-top:5px">' + escapeHtml(label) + '</div>' +
-          '</div>' +
-          (transferNote ? '<p style="margin:14px 0 0;padding:12px;border-radius:10px;background:#12161c;color:#aeb6c0;font-size:12px;line-height:1.5">' + escapeHtml(transferNote) + '</p>' : '') +
-          '<div style="margin-top:16px;font-size:13px;color:#aeb6c0">' +
-            '<strong style="color:#e8ebef">' + escapeHtml(item.brand) + ' ' + escapeHtml(item.model) + '</strong><br>' +
-            'Punkt prowadzący: ' + escapeHtml(item.point_name) +
-            (contactPoint ? '<br>Kontakt / lokalizacja operacyjna: ' + escapeHtml(contactPoint) : '') +
-          '</div>' +
-          (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:block;box-sizing:border-box;width:100%;margin-top:18px;padding:14px 16px;border-radius:10px;background:#ff7445;color:#fff;text-align:center;text-decoration:none;font-size:16px;line-height:1.35;font-weight:800">Śledź to zlecenie</a>' : '') +
-          (item.customer_portal_code ? '<div style="margin-top:16px;padding:16px;border-radius:12px;background:#101318;border:1px solid #333944"><div style="font-size:11px;color:#7f8995;text-transform:uppercase">Twój stały identyfikator klienta</div><div style="font-size:20px;font-weight:800;color:#eceff3;letter-spacing:.06em;margin-top:6px">' + escapeHtml(item.customer_portal_code) + '</div><p style="margin:8px 0 0;color:#8f99a5;font-size:12px;line-height:1.5">Zachowaj go. Dzięki niemu zobaczysz historię wszystkich swoich wizyt serwisowych i napiszesz do punktu o wycenę.</p>' + (item.customer_portal_url ? '<a href="' + escapeHtml(item.customer_portal_url) + '" style="display:inline-block;margin-top:10px;color:#ff9869;font-size:13px;font-weight:700;text-decoration:none">Otwórz portal klienta</a>' : '') + '</div>' : '') +
-          '<p style="margin:20px 0 0;font-size:12px;color:#818b97;line-height:1.5">' + escapeHtml(footer) + '</p>' +
+        '<div style="margin:0 22px;padding:18px;border-radius:15px;background:#171d23;border:1px solid #2a323c">' +
+          '<div style="font-size:10px;color:#7e8995;text-transform:uppercase;letter-spacing:.08em;font-weight:800">Teraz</div>' +
+          '<div style="font-size:22px;line-height:1.25;font-weight:850;color:#f3f5f7;margin-top:6px">' + escapeHtml(label) + '</div>' +
+          '<div style="margin-top:10px;color:#929ca7;font-size:13px">' + escapeHtml(item.brand) + ' ' + escapeHtml(item.model) + '</div>' +
+        '</div>' +
+        (transferNote ? '<div style="margin:12px 22px 0;padding:12px 14px;border-radius:12px;background:#15191f;color:#aab2bb;font-size:12px;line-height:1.5">' + escapeHtml(transferNote) + '</div>' : '') +
+        '<div style="padding:18px 22px 22px">' +
+          '<div style="font-size:12px;color:#858f9a;line-height:1.55">Punkt: <strong style="color:#dce1e6">' + escapeHtml(contactPoint || item.point_name) + '</strong></div>' +
+          (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:block;box-sizing:border-box;width:100%;margin-top:16px;padding:15px 16px;border-radius:12px;background:#ff7048;color:#fff;text-align:center;text-decoration:none;font-size:15px;line-height:1.3;font-weight:850">Zobacz zlecenie →</a>' : '') +
+          (item.customer_portal_code ? '<div style="margin-top:18px;padding-top:17px;border-top:1px solid #252b33"><div style="font-size:10px;color:#747f8a;text-transform:uppercase;letter-spacing:.07em;font-weight:800">Twój kod klienta</div><div style="font-size:17px;font-weight:800;color:#e9edf1;letter-spacing:.045em;margin-top:5px">' + escapeHtml(item.customer_portal_code) + '</div>' + (item.customer_portal_url ? '<a href="' + escapeHtml(item.customer_portal_url) + '" style="display:inline-block;margin-top:9px;color:#ff9a76;font-size:12px;font-weight:800;text-decoration:none">Wszystkie zlecenia i wyceny →</a>' : '') + '</div>' : '') +
+          '<p style="margin:18px 0 0;font-size:11px;color:#707b86;line-height:1.5">' + escapeHtml(footer) + '</p>' +
         '</div>' +
       '</div>' +
-      '<div style="padding:12px 4px;text-align:center;font-size:10px;color:#626b75">Automatyczne powiadomienie z ' + escapeHtml(displayName) + '.</div>' +
+      '<div style="padding:13px 4px;text-align:center;font-size:10px;color:#59636d">Automatyczna wiadomość z ' + escapeHtml(displayName) + '.</div>' +
     '</div></body></html>';
   return { subject, text, html, displayName };
 };
