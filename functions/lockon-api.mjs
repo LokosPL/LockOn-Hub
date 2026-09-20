@@ -2215,6 +2215,87 @@ const route = async (request) => {
     return json(request, await authPayload(await loadUser(session.user.id)));
   }
 
+  if (method === 'GET' && url.pathname === '/customer-accounts') {
+    const session=await requireActive(request);
+    requireSupportAccess(session.user);
+    return json(request,await customerAccountManagementOverview(session.user,url.searchParams.get('q')||''));
+  }
+
+  const customerAccountCodeMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/code$/);
+  if(method==='POST'&&customerAccountCodeMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerAccountCodeMatch[1]);
+    const body=await readJson(request);
+    const rotate=body.rotate===true;
+    const identity=rotate ? await rotateCustomerPortalCode(customer.id) : await ensureCustomerPortalCode(customer.id);
+    let revoked=0;
+    if(rotate) revoked=await revokeCustomerPortalSessions(customer.id);
+    await audit(session,rotate?'CUSTOMER_CODE_ROTATED':'CUSTOMER_CODE_VIEWED','customer',customer.id,null,{revokedSessions:revoked});
+    return json(request,{ok:true,code:identity.code,created:identity.created===true,rotated:rotate,revoked});
+  }
+
+  const customerAccountSendCodeMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/send-code$/);
+  if(method==='POST'&&customerAccountSendCodeMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerAccountSendCodeMatch[1]);
+    if(!customer.email)return json(request,{error:'CUSTOMER_EMAIL_REQUIRED',message:'Klient nie ma zapisanego adresu e-mail.'},409);
+    const identity=await ensureCustomerPortalCode(customer.id);
+    const account=await customerPortalAccount(customer.id);
+    const point=(await q(
+      "SELECT COALESCE((SELECT COALESCE(s.current_point_id,s.home_point_id,s.point_id) FROM service_orders s WHERE s.customer_id=$1 ORDER BY s.updated_at DESC LIMIT 1),(SELECT r.routed_point_id FROM customer_quote_requests r WHERE r.customer_id=$1 ORDER BY r.updated_at DESC LIMIT 1)) AS point_id",
+      [customer.id]
+    )).rows[0];
+    if(!point?.point_id)return json(request,{error:'CUSTOMER_POINT_REQUIRED',message:'Nie znaleziono punktu powiązanego z tym klientem.'},409);
+    await requirePoint(u,point.point_id);
+    const sender=await loadActiveMailSender(point.point_id);
+    if(!sender)return json(request,{error:'NO_SENDER',message:'Brak aktywnego nadawcy Gmail dla punktu klienta.'},409);
+    const settings=await mailSettingsForPoint(point.point_id);
+    const portalUrl=PUBLIC_PORTAL_URL+'/klient.html';
+    const googleUrl=portalUrl+'?google=1';
+    const name=[customer.first_name,customer.last_name].filter(Boolean).join(' ');
+    const subject='LockOn ServiceOS · Twój dostęp do portalu klienta';
+    const textBody=
+      'Dzień dobry'+(name?' '+name:'')+'.\n\n'+
+      'Twój kod klienta: '+identity.code+'\n'+
+      'Portal: '+portalUrl+'\n\n'+
+      (account?.google_sub?'Masz połączone konto Google. Możesz też zalogować się bez kodu: '+googleUrl+'\n\n':'')+
+      'Kod daje dostęp tylko do podglądu. Pełne konto Google pozwala pisać do serwisu i zmieniać ustawienia powiadomień.';
+    const htmlBody='<!doctype html><html lang="pl"><body style="margin:0;background:#0b0d10;color:#f3f5f7;font-family:Arial,sans-serif">'+
+      '<div style="max-width:560px;margin:auto;padding:28px 14px"><div style="font-size:13px;font-weight:800">LockOn <span style="color:#77818c;font-weight:500">ServiceOS</span></div>'+
+      '<div style="margin-top:18px;padding:24px;border:1px solid #252d35;border-radius:18px;background:#11161c"><div style="font-size:11px;color:#ff8b60;font-weight:800;letter-spacing:.08em">PORTAL KLIENTA</div>'+
+      '<h1 style="font-size:24px;margin:9px 0 8px">Twój kod do portalu</h1><p style="color:#909ba5;font-size:14px;line-height:1.55">Kod pozwala szybko sprawdzić zlecenia i wyceny.</p>'+
+      '<div style="margin:18px 0;padding:15px;border-radius:12px;background:#0a0f14;border:1px solid #2a333c;font-size:20px;font-weight:800;letter-spacing:.06em">'+escapeHtml(identity.code)+'</div>'+
+      '<a href="'+escapeHtml(portalUrl)+'" style="display:block;padding:14px;border-radius:12px;background:#ff7048;color:#fff;text-decoration:none;text-align:center;font-weight:800">Otwórz portal</a>'+
+      (account?.google_sub?'<a href="'+escapeHtml(googleUrl)+'" style="display:block;margin-top:13px;color:#ff9a76;text-decoration:none;text-align:center;font-size:12px;font-weight:800">Nie chcę wpisywać kodu — zaloguj przez Google →</a>':'')+
+      '<p style="margin:18px 0 0;color:#707b86;font-size:11px;line-height:1.5">Pełne konto Google daje możliwość pisania do serwisu i ustawienia własnych powiadomień.</p></div></div></body></html>';
+    const sent=await sendGmail(sender,customer.email,subject,textBody,htmlBody,settings.sender_display_name||'LockOn ServiceOS');
+    await audit(session,'CUSTOMER_CODE_SENT','customer',customer.id,point.point_id,{recipient:customer.email,messageId:sent.id,googleLinked:Boolean(account?.google_sub)});
+    return json(request,{ok:true,recipient:customer.email,messageId:sent.id});
+  }
+
+  const customerAccountBlockMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/block$/);
+  if(method==='POST'&&customerAccountBlockMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerAccountBlockMatch[1]);
+    const body=await readJson(request),blocked=body.blocked===true,reason=cleanText(body.reason,500);
+    await q(
+      "INSERT INTO customer_portal_accounts(customer_id,blocked_at,blocked_reason,blocked_by_user_id,updated_at) VALUES($1,CASE WHEN $2 THEN now() ELSE NULL END,CASE WHEN $2 THEN NULLIF($3,'') ELSE NULL END,CASE WHEN $2 THEN $4 ELSE NULL END,now()) ON CONFLICT(customer_id) DO UPDATE SET blocked_at=CASE WHEN $2 THEN now() ELSE NULL END,blocked_reason=CASE WHEN $2 THEN NULLIF($3,'') ELSE NULL END,blocked_by_user_id=CASE WHEN $2 THEN $4 ELSE NULL END,updated_at=now()",
+      [customer.id,blocked,reason,u.id]
+    );
+    const revoked=blocked?await revokeCustomerPortalSessions(customer.id):0;
+    await audit(session,blocked?'CUSTOMER_ACCOUNT_BLOCKED':'CUSTOMER_ACCOUNT_UNBLOCKED','customer',customer.id,null,{reason:reason||null,revokedSessions:revoked});
+    return json(request,{ok:true,blocked,revoked});
+  }
+
+  const customerAccountLogoutMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/logout-all$/);
+  if(method==='POST'&&customerAccountLogoutMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerAccountLogoutMatch[1]);
+    const revoked=await revokeCustomerPortalSessions(customer.id);
+    await audit(session,'CUSTOMER_SESSIONS_REVOKED','customer',customer.id,null,{revokedSessions:revoked});
+    return json(request,{ok:true,revoked});
+  }
+
   if (method === 'GET' && url.pathname === '/admin/overview') {
     const session = await requireActive(request);
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
