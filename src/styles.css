@@ -1345,3 +1345,100 @@ input,textarea,select{line-height:1.45}
 
 .support-assignment-lock{display:flex;align-items:flex-start;gap:8px;width:100%;padding:10px 12px;border:1px solid rgba(255,184,92,.18);border-radius:9px;background:rgba(255,184,92,.05);color:#c7a06d;font-size:11px;line-height:1.45}
 .global-update-action-error{display:block;margin-top:7px;color:#ff9d94;font-size:10px;line-height:1.4}
+
+
+/* v0.21 service costing, invoice archive and technician workspace */
+.service-inline-error,.service-inline-success{margin:10px 0;padding:9px 11px;border-radius:9px;font-size:11px;line-height:1.45}
+.service-inline-error{border:1px solid rgba(255,88,88,.22);background:rgba(255,88,88,.07);color:#ffb0b0}
+.service-inline-success{border:1px solid rgba(79,201,131,.22);background:rgba(79,201,131,.07);color:#a6e5bf}
+
+.service-costing-card{grid-column:1/-1}
+.service-cost-summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:12px 0}
+.service-cost-summary article{min-width:0;padding:11px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.018)}
+.service-cost-summary article span{display:block;color:var(--muted2);font-size:9px;text-transform:uppercase;letter-spacing:.08em}
+.service-cost-summary article strong{display:block;margin-top:5px;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.service-cost-summary article.danger strong{color:#ff8f8f}
+.service-cost-inputs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-bottom:14px}
+.service-cost-inputs label,.service-part-numbers label{display:flex;flex-direction:column;gap:6px}
+.service-cost-inputs span,.service-part-numbers span{font-size:9px;color:var(--muted2);text-transform:uppercase;letter-spacing:.08em}
+.service-parts-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:14px 0 9px}
+.service-parts-head>div{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700}
+.service-parts-head>small{font-size:9px;color:var(--muted2)}
+.service-parts-list{display:grid;gap:8px;margin-bottom:10px}
+.service-part-row{position:relative;padding:10px 38px 10px 10px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.015)}
+.service-part-main{display:grid;grid-template-columns:minmax(220px,1.6fr) minmax(300px,1fr);gap:9px;align-items:end}
+.service-part-numbers{display:grid;grid-template-columns:88px minmax(120px,1fr) minmax(100px,.8fr);gap:8px;align-items:end}
+.service-part-numbers>div{min-height:52px;padding:8px 9px;border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;justify-content:center}
+.service-part-numbers>div strong{font-size:12px}
+.service-part-invoice-check{display:flex!important;flex-direction:row!important;align-items:center;gap:7px!important;margin-top:9px;font-size:10px!important;color:#aab3bd!important;text-transform:none!important;letter-spacing:0!important}
+.service-part-invoice-check input{width:auto}
+.service-part-invoice-meta{display:grid;grid-template-columns:1fr 1fr 150px;gap:8px;margin-top:8px}
+.service-part-remove{position:absolute;right:8px;top:8px;width:27px;height:27px;border-radius:7px;background:transparent;color:#7f8995;display:grid;place-items:center}
+.service-part-remove:hover{background:rgba(255,80,80,.08);color:#ff9292}
+.service-invoice-divider{height:1px;background:var(--line);margin:18px 0 0}
+.service-invoice-upload-grid{display:grid;grid-template-columns:1fr 1fr 150px 130px auto;gap:8px;align-items:center}
+.service-invoice-list{display:grid;gap:7px;margin-top:10px}
+.service-invoice-list>article{display:grid;grid-template-columns:28px 1fr 30px 30px;gap:8px;align-items:center;padding:9px;border:1px solid var(--line);border-radius:9px}
+.service-invoice-list>article>svg{color:#ff7741}
+.service-invoice-list>article>div{min-width:0;display:flex;flex-direction:column;gap:2px}
+.service-invoice-list strong{font-size:11px}.service-invoice-list span,.service-invoice-list small{font-size:9px;color:var(--muted2)}
+.service-invoice-list button,.invoice-file-actions button,.technician-note-grid header button{width:28px;height:28px;border-radius:7px;background:transparent;color:#7d8793;display:grid;place-items:center}
+.service-invoice-list button:hover,.invoice-file-actions button:hover,.technician-note-grid header button:hover{background:#1b2027;color:white}
+
+.technician-calendar-card,.technician-notes-room,.invoice-warehouse{margin-top:2px}
+.technician-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-bottom:14px}
+.technician-kpi-grid article{display:grid;grid-template-columns:30px 1fr auto;align-items:center;gap:8px;padding:11px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.018)}
+.technician-kpi-grid article svg{color:#ff7440}.technician-kpi-grid span{font-size:10px;color:var(--muted2)}.technician-kpi-grid strong{font-size:18px}
+.technician-week-grid{display:grid;grid-template-columns:repeat(7,minmax(125px,1fr));gap:7px;overflow-x:auto;padding-bottom:4px}
+.technician-day{min-width:125px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#0e1217}
+.technician-day>header{padding:8px 9px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.technician-day>header strong{font-size:10px;text-transform:capitalize}.technician-day>header span{min-width:21px;height:20px;border-radius:7px;background:#171c22;display:grid;place-items:center;font-size:9px}
+.technician-day>div{min-height:130px;padding:6px;display:grid;align-content:start;gap:5px}
+.technician-job{width:100%;padding:7px;border:1px solid var(--line);border-radius:8px;background:#13181e;text-align:left;display:flex;flex-direction:column;gap:3px;color:inherit}
+.technician-job:hover{border-color:rgba(255,113,55,.35);background:#171d24}
+.technician-job>span{font-size:8px;color:#ff8a58}.technician-job>strong{font-size:10px}.technician-job>small{font-size:8px;color:var(--muted2)}
+.technician-job.waiting-parts{border-color:rgba(255,182,62,.19)}.technician-job.ready{border-color:rgba(91,212,141,.18)}
+.technician-day-empty{padding:9px 3px;color:#505965;text-align:center}
+.technician-queues{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:14px}
+.technician-queues>section{border:1px solid var(--line);border-radius:11px;padding:10px;min-width:0}
+.technician-queues h3{margin:0 0 8px;font-size:11px;display:flex;justify-content:space-between}.technician-queues h3 b{color:#ff7b45}
+.technician-queues button{width:100%;display:grid;grid-template-columns:50px 1fr auto;gap:7px;padding:8px;border-top:1px solid var(--line);background:transparent;text-align:left;color:inherit}
+.technician-queues button:hover{background:rgba(255,255,255,.025)}.technician-queues button span{font-size:9px;color:#ff7e49}.technician-queues button strong{font-size:10px}.technician-queues button small{font-size:9px;color:var(--muted2)}
+
+.technician-note-compose{padding:11px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.015);display:grid;gap:8px}
+.technician-note-compose>div{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.technician-note-compose label{display:flex;align-items:center;gap:6px;font-size:10px;color:#a8b1bc}.technician-note-compose label input{width:auto}
+.technician-note-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:10px}
+.technician-note-grid article{min-height:145px;padding:11px;border:1px solid var(--line);border-radius:11px;background:#10151b;display:flex;flex-direction:column}
+.technician-note-grid article.pinned{border-color:rgba(255,119,65,.28);box-shadow:inset 0 1px rgba(255,119,65,.05)}
+.technician-note-grid header{display:flex;justify-content:space-between;gap:8px;align-items:center}.technician-note-grid header>div{display:flex;align-items:center;gap:6px}.technician-note-grid header svg{color:#ff7741}
+.technician-note-grid p{white-space:pre-wrap;overflow-wrap:anywhere;color:#c6ccd3;font-size:10px;line-height:1.55;flex:1}.technician-note-grid small{font-size:8px;color:var(--muted2)}
+
+.invoice-warehouse-actions{display:flex;align-items:center;gap:7px}.invoice-warehouse-actions input{max-width:155px}
+.invoice-warehouse-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-bottom:12px}
+.invoice-warehouse-summary article{padding:11px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.018)}
+.invoice-warehouse-summary span{display:block;color:var(--muted2);font-size:9px;text-transform:uppercase}.invoice-warehouse-summary strong{display:block;margin-top:4px;font-size:15px}
+.invoice-warehouse-list{display:grid;gap:7px}
+.invoice-warehouse-list>article{display:grid;grid-template-columns:36px 1fr auto;gap:9px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:10px;background:#10151a}
+.invoice-file-icon{width:32px;height:32px;border-radius:9px;background:rgba(255,112,53,.08);color:#ff7943;display:grid;place-items:center}
+.invoice-file-main{min-width:0;display:flex;flex-direction:column;gap:2px}.invoice-file-main strong{font-size:11px}.invoice-file-main span,.invoice-file-main small{font-size:9px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.invoice-file-actions{display:flex;gap:4px}
+
+.monthly-invoice-prompt{margin:0 0 12px;padding:11px 12px;border:1px solid rgba(255,117,60,.25);border-radius:12px;background:linear-gradient(100deg,rgba(255,99,29,.075),rgba(255,99,29,.018));display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:10px;align-items:center}
+.monthly-invoice-icon{width:34px;height:34px;border-radius:10px;background:rgba(255,111,46,.1);display:grid;place-items:center;color:#ff7c47}
+.monthly-invoice-prompt>div:nth-child(2){display:flex;flex-direction:column;gap:3px}.monthly-invoice-prompt strong{font-size:11px}.monthly-invoice-prompt span{font-size:9px;color:#929ca8;line-height:1.45}.monthly-invoice-prompt small{font-size:9px;color:#ffb58d}
+.monthly-invoice-actions{display:flex;align-items:center;gap:6px}.monthly-dismiss{width:28px;height:28px;border-radius:8px;background:transparent;color:#747f8b;display:grid;place-items:center}.monthly-dismiss:hover{background:rgba(255,255,255,.04);color:white}
+
+@media(max-width:1250px){
+  .service-cost-summary{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .service-part-main{grid-template-columns:1fr}
+  .service-invoice-upload-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .service-invoice-upload-grid button{grid-column:1/-1}
+  .technician-queues,.technician-note-grid{grid-template-columns:1fr}
+}
+@media(max-width:760px){
+  .service-cost-summary,.service-cost-inputs,.invoice-warehouse-summary,.technician-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .service-part-numbers,.service-part-invoice-meta,.service-invoice-upload-grid{grid-template-columns:1fr}
+  .invoice-warehouse-actions{width:100%;flex-wrap:wrap}.invoice-warehouse-actions>*{flex:1 1 140px}
+  .monthly-invoice-prompt{grid-template-columns:36px 1fr}.monthly-invoice-actions{grid-column:1/-1;flex-wrap:wrap}
+}
