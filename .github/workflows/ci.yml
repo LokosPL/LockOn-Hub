@@ -56,6 +56,23 @@ jobs:
       - name: Validate backend syntax
         run: node --check server/index.mjs
 
+      - name: Verify packaged backend hotfix contracts
+        shell: pwsh
+        run: |
+          $source = Get-Content server/index.mjs -Raw
+          @(
+            "SUPPORT_ALREADY_ASSIGNED",
+            "SELF_SUPPORT_NOT_ALLOWED",
+            "CONSULTANT_NOT_REQUESTED",
+            "target:'BOT'",
+            "target:'CONSULTANT'",
+            "value === null || value === undefined || value === ''"
+          ) | ForEach-Object {
+            if (-not $source.Contains($_)) {
+              throw "Missing packaged backend contract: $_"
+            }
+          }
+
       - name: Typecheck renderer
         run: npm run typecheck
 
