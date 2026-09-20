@@ -774,7 +774,7 @@ const getVisibleOrderByNumber = async (user, number) => {
     access = " AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id))";
   }
   const { rows } = await q(
-    "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
+    "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts ca ON ca.customer_id=c.id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
     params
   );
   if (!rows[0]) return null;
@@ -1344,6 +1344,7 @@ const renderStatusEmail = (item) => {
     item.tracking_url ? 'Śledź zlecenie: ' + item.tracking_url : '',
     item.customer_portal_code ? 'Twój stały identyfikator klienta: ' + item.customer_portal_code : '',
     item.customer_portal_url ? 'Historia wszystkich serwisów i zapytania o wycenę: ' + item.customer_portal_url : '',
+    item.customer_google_sub && item.customer_portal_url ? 'Masz połączone konto Google? Zaloguj się bez kodu: ' + item.customer_portal_url + '?google=1' : '',
     '',
     footer,
     '',
@@ -1368,7 +1369,7 @@ const renderStatusEmail = (item) => {
         '<div style="padding:18px 22px 22px">' +
           '<div style="font-size:12px;color:#858f9a;line-height:1.55">Punkt: <strong style="color:#dce1e6">' + escapeHtml(contactPoint || item.point_name) + '</strong></div>' +
           (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:block;box-sizing:border-box;width:100%;margin-top:16px;padding:15px 16px;border-radius:12px;background:#ff7048;color:#fff;text-align:center;text-decoration:none;font-size:15px;line-height:1.3;font-weight:850">Zobacz zlecenie →</a>' : '') +
-          (item.customer_portal_code ? '<div style="margin-top:18px;padding-top:17px;border-top:1px solid #252b33"><div style="font-size:10px;color:#747f8a;text-transform:uppercase;letter-spacing:.07em;font-weight:800">Twój kod klienta</div><div style="font-size:17px;font-weight:800;color:#e9edf1;letter-spacing:.045em;margin-top:5px">' + escapeHtml(item.customer_portal_code) + '</div>' + (item.customer_portal_url ? '<a href="' + escapeHtml(item.customer_portal_url) + '" style="display:inline-block;margin-top:9px;color:#ff9a76;font-size:12px;font-weight:800;text-decoration:none">Wszystkie zlecenia i wyceny →</a>' : '') + '</div>' : '') +
+          (item.customer_portal_code ? '<div style="margin-top:18px;padding-top:17px;border-top:1px solid #252b33"><div style="font-size:10px;color:#747f8a;text-transform:uppercase;letter-spacing:.07em;font-weight:800">Twój kod klienta</div><div style="font-size:17px;font-weight:800;color:#e9edf1;letter-spacing:.045em;margin-top:5px">' + escapeHtml(item.customer_portal_code) + '</div>' + (item.customer_portal_url ? '<a href="' + escapeHtml(item.customer_portal_url) + '" style="display:inline-block;margin-top:9px;color:#ff9a76;font-size:12px;font-weight:800;text-decoration:none">Wszystkie zlecenia i wyceny →</a>' : '') + (item.customer_google_sub && item.customer_portal_url ? '<div style="margin-top:10px"><a href="' + escapeHtml(item.customer_portal_url + '?google=1') + '" style="color:#9ca7b1;font-size:11px;font-weight:700;text-decoration:none">Nie chcę wpisywać kodu — zaloguj przez Google →</a></div>' : '') + '</div>' : '') +
           '<p style="margin:18px 0 0;font-size:11px;color:#707b86;line-height:1.5">' + escapeHtml(footer) + '</p>' +
         '</div>' +
       '</div>' +
@@ -1453,7 +1454,7 @@ const sendCustomerPortalEventEmail = async ({
 
 const processNotification = async (notificationId) => {
   const { rows } = await q(
-    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,s.customer_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
+    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,s.customer_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,ca.google_sub AS customer_google_sub,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
     [notificationId]
   );
   const item = rows[0];
