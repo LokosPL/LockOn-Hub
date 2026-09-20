@@ -14,22 +14,24 @@
 - Neon Function slug: `lockonapi`
 - API: `https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech`
 
-### Aktualny stan produkcyjny — 2026-09-20 / v0.20.2 + konta klientów Google
+### Aktualny stan produkcyjny — 2026-09-20 / v0.20.3 + centrum klientów i Google login v2
 
-- aplikacja / backend source `main`: `8d836edc743811909e69330781fa90d2a352fab5` (handoff jest późniejszy)
-- publiczny release Windows: **v0.20.2**
-- instalator `LockOn-ServiceOS-Setup.exe`: SHA-256 `5d8642c49e088724fff9db918f21c9910adf860c596c2e4e17ed66bca46ce7c2`
-- release workflow #42 SUCCESS; Verify main #544 SUCCESS; CodeQL #291 SUCCESS
-- strona / panel WWW `main` po Site PR #34: `77f6a8372dea00b6e8f1af3a13ef120454438ea9`
-- GitHub Pages: deploy **#101 SUCCESS**; Site Verify #245 SUCCESS; Mobile UI visual smoke #22 SUCCESS
-- aktywny Neon `lockonapi`: deployment **v34**, completed
-- migracja produkcyjna: `2026-09-20-customer-accounts-google` zastosowana addytywnie; dodano `customer_portal_accounts` oraz `auth_method=CODE|GOOGLE` do sesji klienta
-- portal klienta ma dwa tryby: **kod = tylko podgląd** oraz **Google = pełne konto** z wiadomościami, nowymi wycenami i ustawieniami powiadomień
-- po pierwszym powiązaniu kodu z Google klient może później logować się bez kodu; Google klienta działa tylko na `klient.html` i nie zmienia zasady code-only dla pracownika
-- desktop v0.20.2 ma moduł **Klienci** dla OWNER oraz Wsparcia LockOn: statystyki użycia, wyszukiwanie, kod klienta, wysyłkę kodu e-mailem, obrót kodu, blokadę/odblokowanie portalu i unieważnianie sesji
-- ustawienia klienta obejmują osobne powiadomienia: postęp naprawy, gotowe do odbioru, wyceny i wiadomości; backend respektuje je przy wysyłce
-- backend temp smoke i production smoke v34 SUCCESS: `/health` 200, customer Google config aktywny, błędny kod odrzucany, fałszywy token Google odrzucany, endpoint administracji klientów chroniony bez sesji
-- zachowane gałęzie Neon: `verify-web-code-only-20260920` / `br-rapid-mountain-b1lkmpt3` oraz `verify-customer-accounts-google-20260920` / `br-frosty-shadow-b17elnrj`
+- aplikacja / backend source `main`: `70274520e548e76249887840541c71b66bdf6f08` (handoff jest późniejszy)
+- publiczny release Windows: **v0.20.3**
+- instalator `LockOn-ServiceOS-Setup.exe`: SHA-256 `b17e6e4e728af9f2454077449be5a08768cb09ca58523734746fa7fbdcb606b0`
+- release workflow #43 SUCCESS; Verify main #557 SUCCESS; CodeQL #298 SUCCESS
+- strona / panel WWW `main` po Site PR #35: `08deb9d94fa6a0a8a75fc2b480a8bd429c797ca6`
+- GitHub Pages: deploy **#102 SUCCESS**; Site Verify #250 SUCCESS; Mobile UI visual smoke #24 SUCCESS
+- aktywny Neon `lockonapi`: deployment **v35**, completed
+- brak nowej migracji DB w v0.20.3; produkcyjny schemat z `2026-09-20-customer-accounts-google` pozostaje aktualny
+- desktop ma przebudowane **Centrum klienta** w stylistyce modułu Serwis: filtry, karta klienta, naprawy, historia statusów, urządzenia, wyceny/rozmowy oraz pełna kontrola dostępu do portalu
+- dostęp do Centrum klienta ma OWNER, główna rola SUPPORT oraz każda aktywna rola z dodatkowym `support_enabled=true`; backend nadal ogranicza nie-globalne konto do klientów powiązanych z jego punktami
+- Wsparcie może edytować dane klienta, zarządzać kodem, sesjami, blokadą, odłączeniem Google oraz obsługiwać wyceny/rozmowy w swoim zakresie; zmiana e-mailu odłącza stare Google i unieważnia sesje GOOGLE
+- Google klienta obsługuje teraz jawny wybór konta przez OAuth access token oraz bezpieczny fallback ID token; backend sprawdza audience i zweryfikowany e-mail
+- pierwsze wejście przez Google dla istniejącego klienta może poprosić o kod **jeden raz**; po poprawnym kodzie Google jest łączone automatycznie i kolejne logowania mogą odbywać się bez kodu
+- klient nadal może wybrać tryb kodowy tylko do odczytu; pełne operacje portalu wymagają sesji GOOGLE
+- temp smoke i production smoke v35 SUCCESS: `/health` 200, Google config aktywny, fałszywy access token odrzucany 401, nowe endpointy profilu/odłączenia Google chronione bez sesji
+- zachowane gałęzie Neon: `verify-web-code-only-20260920` / `br-rapid-mountain-b1lkmpt3`, `verify-customer-accounts-google-20260920` / `br-frosty-shadow-b17elnrj` oraz `verify-customer-control-v0203` / `br-tiny-bar-b1w5axxk`
 
 ### Historyczny stan produkcyjny — 2026-09-19 / v0.17.0
 
@@ -760,11 +762,31 @@ Dla każdego priorytetu:
 - Pracowniczy panel WWW pozostaje **wyłącznie code-only**. Nie przywracaj Google do `/auth/google-web`.
 - Tymczasowej gałęzi Neon użytej do weryfikacji tej migracji nie usunięto.
 
+## Centrum klienta + Google login v2 — v0.20.3 / Neon v35 / Site PR #35
+
+- Hub PR #58 przebudował moduł Klienci w pełne centrum obsługi, wizualnie i hierarchicznie spójne z modułem Serwis.
+- Lista klientów ma filtry: wszyscy, aktywni teraz, konto Google, tylko kod i zablokowani; są też KPI kont Google, sesji i blokad.
+- Karta klienta ma zakładki: Klient, Zlecenia, Wyceny, Dostęp.
+- W zakładce Klient można edytować dane kontaktowe, zobaczyć urządzenia, ostatnią aktywność i preferencje powiadomień klienta.
+- Zlecenia pokazują status, lokalizację, termin, serwisanta, koszt dostępny dla backendowego widoku oraz rozwijaną historię statusów.
+- Wyceny pokazują rozmowę klient–serwis; uprawnione Wsparcie może odpowiedzieć oraz zapisać wycenę w swoim zakresie.
+- Dostęp grupuje kod klienta, wysyłkę kodu/linku, obrót kodu, wylogowanie sesji, blokadę/odblokowanie i ręczne odłączenie Google.
+- Uprawnienie do tego modułu wynika z `OWNER || role_code=SUPPORT || support_enabled=true`; zwykła rola pracownika nie musi być zmieniana na SUPPORT.
+- Zakres klientów jest egzekwowany backendowo przez `requireCustomerAccountAccess`; nie-globalne Wsparcie widzi klientów tylko z powiązanych punktów/zapytań.
+- `POST /customer-accounts/:id/profile` zapisuje dane klienta i audyt; zmiana e-mailu przy aktywnym Google automatycznie odłącza poprzednią tożsamość i zamyka sesje GOOGLE.
+- `POST /customer-accounts/:id/google/unlink` bezpiecznie odłącza Google i unieważnia jego sesje.
+- Portal klienta Site PR #35 używa jawnego Google OAuth token client (`openid email profile`) po kliknięciu klienta; jeśli ten mechanizm jest niedostępny, pozostaje fallback Google Identity ID token.
+- Backend v35 akceptuje oba typy credentialu i dla access tokenu weryfikuje Google tokeninfo/userinfo, właściwe audience oraz potwierdzony e-mail.
+- Jeżeli Google rozpoznaje e-mail klienta, ale konto nie było jeszcze połączone, portal prosi o kod jeden raz i po poprawnym kodzie automatycznie kończy linkowanie Google.
+- Nie twórz automatycznie pełnego konta Google wyłącznie na podstawie zgodnego e-mailu bez jednorazowego potwierdzenia kodem.
+- Pracownicze WWW/PWA nadal pozostaje wyłącznie code-only i nie używa logowania Google.
+- Testowa gałąź Neon `verify-customer-control-v0203` / `br-tiny-bar-b1w5axxk` pozostaje zachowana; nie usuwaj jej bez potwierdzenia użytkownika.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md`.
 2. Sprawdź aktualny `main`, latest release, otwarte PR-y i wszystkie aktywne workflow w obu repozytoriach.
 3. Sprawdź Neon: projekt `wandering-field-13057181`, produkcyjną gałąź `br-steep-bonus-b1f1qh8u`, bazę `lockon`, aktywny deployment `lockonapi` oraz schemat.
-4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to **v0.20.2**, produkcyjny backend to **lockonapi v34**, a strona/PWA jest po **Site PR #34 / Pages #101** z kontami klientów Google i cache `serviceos-shell-v23`. Pracownicze WWW nadal jest code-only. Nie rozpoczynaj historycznych priorytetów ponownie.
+4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to **v0.20.3**, produkcyjny backend to **lockonapi v35**, a strona/PWA jest po **Site PR #35 / Pages #102** z Google login v2 dla klientów i cache `serviceos-shell-v24`. Pracownicze WWW nadal jest code-only. Nie rozpoczynaj historycznych priorytetów ponownie.
 5. Przy kolejnej pracy najpierw sprawdź nowe wymagania użytkownika, aktualny main/release/Neon i dopiero utwórz następny backlog lub poprawkę.
 6. Pracuj samodzielnie przez GitHub i Neon; nie proś użytkownika o informacje, które można sprawdzić narzędziami.
