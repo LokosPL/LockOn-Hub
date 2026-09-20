@@ -9,6 +9,7 @@ import type { SupportPresence, SupportTicket } from '../types/electron';
 interface SupportDeskProps {
   role: UserRole;
   supportEnabled?: boolean;
+  currentUserId?: string;
   onOpenChat: () => void;
 }
 
@@ -27,7 +28,7 @@ const stateLabel = (state: SupportPresence['consultantState']) => ({
   JOINED:'Konsultant w rozmowie'
 }[state]);
 
-export function SupportDesk({ role, supportEnabled = false, onOpenChat }: SupportDeskProps) {
+export function SupportDesk({ role, supportEnabled = false, currentUserId = '', onOpenChat }: SupportDeskProps) {
   const isConsultant = role === 'OWNER' || role === 'SUPPORT' || supportEnabled;
   const [tickets,setTickets]=useState<SupportTicket[]>([]);
   const [presence,setPresence]=useState<SupportPresence[]>([]);
@@ -40,6 +41,7 @@ export function SupportDesk({ role, supportEnabled = false, onOpenChat }: Suppor
     () => tickets.find((ticket)=>ticket.id===selectedId) ?? tickets.find((ticket)=>ticket.status==='OPEN') ?? tickets[0] ?? null,
     [tickets,selectedId]
   );
+  const selectedAssignedElsewhere=Boolean(selected?.assignedSupportUserId&&selected.assignedSupportUserId!==currentUserId);
 
   const load=async(silent=false)=>{
     if(!isConsultant)return;
@@ -69,6 +71,12 @@ export function SupportDesk({ role, supportEnabled = false, onOpenChat }: Suppor
   },[isConsultant]);
 
   const take=async(ticket:SupportTicket)=>{
+    if(busy)return;
+    if(ticket.assignedSupportUserId&&ticket.assignedSupportUserId!==currentUserId){
+      setError('Ta rozmowa jest już obsługiwana przez innego konsultanta.');
+      await load(true);
+      return;
+    }
     setBusy(true);setError('');
     try{
       await window.lockOn.support.take(ticket.id);
@@ -80,6 +88,11 @@ export function SupportDesk({ role, supportEnabled = false, onOpenChat }: Suppor
 
   const reply=async()=>{
     if(!selected||!draft.trim()||busy)return;
+    if(selected.assignedSupportUserId&&selected.assignedSupportUserId!==currentUserId){
+      setError('Ta rozmowa jest już obsługiwana przez innego konsultanta.');
+      await load(true);
+      return;
+    }
     setBusy(true);setError('');
     try{
       if(!selected.assignedSupportUserId) await window.lockOn.support.take(selected.id);
@@ -87,17 +100,23 @@ export function SupportDesk({ role, supportEnabled = false, onOpenChat }: Suppor
       setDraft('');
       await load(true);
       setSelectedId(selected.id);
-    }catch(e){setError(e instanceof Error?e.message:'Nie udało się wysłać odpowiedzi.');}
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się wysłać odpowiedzi.');await load(true);}
     finally{setBusy(false);}
   };
 
   const close=async(ticket:SupportTicket)=>{
-    if(!window.confirm('Zamknąć tę rozmowę wsparcia?'))return;
+    if(busy)return;
+    if(ticket.assignedSupportUserId&&ticket.assignedSupportUserId!==currentUserId){
+      setError('Ta rozmowa jest już obsługiwana przez innego konsultanta.');
+      await load(true);
+      return;
+    }
+    if(!window.confirm('Zakończyć kanał konsultanta? Historia bota pozostanie zachowana i użytkownik nadal będzie mógł korzystać z bota.'))return;
     setBusy(true);setError('');
     try{
       await window.lockOn.support.close(ticket.id);
       await load(true);
-    }catch(e){setError(e instanceof Error?e.message:'Nie udało się zamknąć rozmowy.');}
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się zakończyć kanału konsultanta.');await load(true);}
     finally{setBusy(false);}
   };
 
@@ -143,7 +162,7 @@ export function SupportDesk({ role, supportEnabled = false, onOpenChat }: Suppor
       <aside className="panel-card support-presence-panel">
         <div className="section-head">
           <div><span>AKTYWNOŚĆ</span><h2>Użytkownicy online</h2></div>
-          <button className="button small secondary" onClick={()=>void load()}><RefreshCw size={14}/></button>
+          <button className="button small secondary" disabled={busy} onClick={()=>void load()}><RefreshCw className={busy?'spin':''} size={14}/></button>
         </div>
         <div className="support-presence-list">
           {presence.map((person)=>{
@@ -201,12 +220,16 @@ export function SupportDesk({ role, supportEnabled = false, onOpenChat }: Suppor
           </div>
 
           {selected.status==='OPEN'&&<div className="support-consultant-compose">
-            {!selected.assignedSupportUserId&&<button className="button primary" disabled={busy} onClick={()=>void take(selected)}><UserRoundCheck size={14}/> Dołącz do rozmowy</button>}
-            <textarea value={draft} maxLength={2000} onChange={(event)=>setDraft(event.target.value)}
-              onKeyDown={(event)=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();void reply();}}}
-              placeholder="Napisz odpowiedź do użytkownika…" rows={2}/>
-            <button className="button primary" disabled={busy||!draft.trim()} onClick={()=>void reply()}><Send size={14}/> Wyślij</button>
-            <button className="button secondary" disabled={busy} onClick={()=>void close(selected)}><XCircle size={14}/> Zakończ kanał</button>
+            {selectedAssignedElsewhere ? (
+              <div className="support-assignment-lock"><ShieldCheck size={15}/><span>Rozmowę obsługuje {selected.assignedSupportName || 'inny konsultant'}. Odśwież listę, gdy kanał zostanie zwolniony.</span></div>
+            ) : <>
+              {!selected.assignedSupportUserId&&<button className="button primary" disabled={busy} onClick={()=>void take(selected)}><UserRoundCheck size={14}/> Dołącz do rozmowy</button>}
+              <textarea value={draft} maxLength={2000} disabled={busy} onChange={(event)=>setDraft(event.target.value)}
+                onKeyDown={(event)=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();void reply();}}}
+                placeholder="Napisz odpowiedź do użytkownika…" rows={2}/>
+              <button className="button primary" disabled={busy||!draft.trim()} onClick={()=>void reply()}><Send size={14}/> Wyślij</button>
+              <button className="button secondary" disabled={busy} onClick={()=>void close(selected)}><XCircle size={14}/> Zakończ kanał</button>
+            </>}
           </div>}
         </> : <div className="support-empty-workspace"><Headphones size={28}/><strong>Nikt nie czeka na konsultanta.</strong><span>Aktywni użytkownicy korzystający tylko z bota pozostają po lewej stronie bez dostępu do ich treści rozmowy.</span></div>}
       </section>
