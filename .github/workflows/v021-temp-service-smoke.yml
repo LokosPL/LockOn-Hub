@@ -1,0 +1,117 @@
+name: v0.21 temp service finance smoke
+
+on:
+  push:
+    branches: ["tmp/v021-service-finance-smoke"]
+    paths:
+      - ".github/workflows/v021-temp-service-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      API_URL: https://br-spring-pond-b1hqe48m-lockonapi.compute.c-5.eu-central-1.aws.neon.tech/
+      ORDER_ID: srv_d4444444444444444444
+    steps:
+      - name: Exercise costing, private PDF storage and role guards
+        shell: bash
+        run: |
+          node <<'NODE'
+          const crypto=require('node:crypto');
+          const base=process.env.API_URL;
+          const orderId=process.env.ORDER_ID;
+          const call=async(path,{method='GET',token,body,headers={}}={})=>{
+            const response=await fetch(new URL(path.replace(/^\//,''),base),{
+              method,
+              headers:{...(body!==undefined?{'content-type':'application/json'}:{}),...(token?{authorization:'Bearer '+token}:{}),...headers},
+              body:body===undefined?undefined:JSON.stringify(body),
+              redirect:'error'
+            });
+            let payload=null;try{payload=await response.json();}catch{}
+            return {status:response.status,payload,response};
+          };
+
+          const health=await call('/health');
+          if(health.status!==200||health.payload?.ok!==true)throw new Error('health failed '+JSON.stringify(health.payload));
+
+          const login=await call('/auth/dev-owner',{method:'POST',body:{}});
+          if(login.status!==200||!login.payload?.token)throw new Error('dev owner login failed '+JSON.stringify(login.payload));
+          const token=login.payload.token;
+
+          const initial=await call('/service/orders/'+orderId+'/costing',{token});
+          if(initial.status!==200)throw new Error('initial costing '+initial.status+' '+JSON.stringify(initial.payload));
+
+          const saved=await call('/service/orders/'+orderId+'/costing',{
+            method:'POST',token,
+            body:{
+              laborCostGross:250,
+              otherCostGross:30,
+              parts:[
+                {description:'Wyświetlacz Samsung S25',quantity:2,unitCostGross:120.5,invoiceReceived:true,invoiceNumber:'FV/V021/1',supplier:'Test Supplier',purchasedAt:'2026-09-20'}
+              ]
+            }
+          });
+          if(saved.status!==200)throw new Error('save costing '+saved.status+' '+JSON.stringify(saved.payload));
+          if(saved.payload?.partsCostGross!==241||saved.payload?.laborCostGross!==250||saved.payload?.internalCostGross!==521||saved.payload?.marginGross!==579){
+            throw new Error('costing math mismatch '+JSON.stringify(saved.payload));
+          }
+
+          const pdf=Buffer.from('%PDF-1.4\n% ServiceOS v0.21 smoke\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n');
+          const sha256=crypto.createHash('sha256').update(pdf).digest('hex');
+          const intent=await call('/service/orders/'+orderId+'/invoices/upload-intent',{
+            method:'POST',token,
+            body:{fileName:'fv-v021.pdf',sizeBytes:pdf.length,sha256,invoiceNumber:'FV/V021/1',supplier:'Test Supplier',invoiceDate:'2026-09-20',grossAmount:241}
+          });
+          if(intent.status!==200||!intent.payload?.uploadUrl||!intent.payload?.invoiceId)throw new Error('upload intent '+intent.status+' '+JSON.stringify(intent.payload));
+
+          const upload=await fetch(intent.payload.uploadUrl,{
+            method:'PUT',
+            headers:intent.payload.requiredHeaders,
+            body:pdf,
+            redirect:'error'
+          });
+          if(!upload.ok)throw new Error('storage PUT '+upload.status+' '+await upload.text());
+
+          const complete=await call('/service/invoices/'+intent.payload.invoiceId+'/complete',{method:'POST',token,body:{}});
+          if(complete.status!==200)throw new Error('complete '+complete.status+' '+JSON.stringify(complete.payload));
+
+          const after=await call('/service/orders/'+orderId+'/costing',{token});
+          if(after.status!==200||after.payload?.invoices?.length<1)throw new Error('invoice missing from costing '+JSON.stringify(after.payload));
+
+          const list=await call('/service/invoices?month=2026-09',{token});
+          if(list.status!==200||!list.payload?.invoices?.some(x=>x.id===intent.payload.invoiceId))throw new Error('invoice warehouse missing '+JSON.stringify(list.payload));
+
+          const download=await call('/service/invoices/'+intent.payload.invoiceId+'/download-intent',{method:'POST',token,body:{}});
+          if(download.status!==200||!download.payload?.downloadUrl)throw new Error('download intent '+JSON.stringify(download.payload));
+          const downloaded=Buffer.from(await (await fetch(download.payload.downloadUrl,{redirect:'error'})).arrayBuffer());
+          if(downloaded.subarray(0,5).toString('ascii')!=='%PDF-')throw new Error('downloaded object is not PDF');
+
+          const batch=await call('/service/invoices/download-batch',{method:'POST',token,body:{period:'2026-09'}});
+          if(batch.status!==200||!batch.payload?.files?.some(x=>x.id===intent.payload.invoiceId))throw new Error('batch missing invoice '+JSON.stringify(batch.payload));
+
+          const techWorkspace=await call('/service/technician-workspace',{token});
+          if(techWorkspace.status!==403)throw new Error('owner must not enter technician workspace: '+techWorkspace.status);
+
+          const techNotes=await call('/service/technician-notes',{token});
+          if(techNotes.status!==403)throw new Error('owner must not read technician private notes: '+techNotes.status);
+
+          const bad=Buffer.from('NOT-A-PDF');
+          const badHash=crypto.createHash('sha256').update(bad).digest('hex');
+          const badIntent=await call('/service/orders/'+orderId+'/invoices/upload-intent',{
+            method:'POST',token,
+            body:{fileName:'fake.pdf',sizeBytes:bad.length,sha256:badHash,invoiceNumber:'BAD/V021'}
+          });
+          if(badIntent.status!==200)throw new Error('bad upload intent failed too early '+JSON.stringify(badIntent.payload));
+          const badPut=await fetch(badIntent.payload.uploadUrl,{method:'PUT',headers:badIntent.payload.requiredHeaders,body:bad,redirect:'error'});
+          if(!badPut.ok)throw new Error('bad storage PUT '+badPut.status);
+          const badComplete=await call('/service/invoices/'+badIntent.payload.invoiceId+'/complete',{method:'POST',token,body:{}});
+          if(badComplete.status!==409||badComplete.payload?.error!=='PDF_VERIFY_FAILED'){
+            throw new Error('fake PDF was not rejected '+badComplete.status+' '+JSON.stringify(badComplete.payload));
+          }
+
+          console.log('V021_TEMP_SERVICE_FINANCE_SMOKE_OK');
+          NODE
