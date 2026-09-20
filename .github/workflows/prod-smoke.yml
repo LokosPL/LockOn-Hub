@@ -1,0 +1,59 @@
+name: Production API smoke
+
+on:
+  push:
+    branches: ["feature/v0.21-service-finance-invoices"]
+    paths:
+      - ".github/workflows/prod-smoke.yml"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PROD_API_URL: https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+      PROD_SITE_ORIGIN: https://app.serviceos.pl
+    steps:
+      - name: Production health and security headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --fail-with-body --dump-header health.headers "$PROD_API_URL/health" --output health.json
+          node -e "const d=require('./health.json');if(d.ok!==true||d.service!=='LockOn ServiceOS Central API')throw new Error('Production health payload mismatch')"
+          grep -qi '^cache-control: no-store' health.headers
+          grep -qi '^x-content-type-options: nosniff' health.headers
+          grep -qi '^x-frame-options: DENY' health.headers
+
+      - name: Production CORS allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --dump-header allowed.headers --output /dev/null --request OPTIONS "$PROD_API_URL/health"             --header "Origin: $PROD_SITE_ORIGIN"             --header "Access-Control-Request-Method: GET"
+          grep -qi "^access-control-allow-origin: $PROD_SITE_ORIGIN" allowed.headers
+
+          curl --silent --show-error --dump-header denied.headers --output /dev/null --request OPTIONS "$PROD_API_URL/health"             --header "Origin: https://evil.invalid"             --header "Access-Control-Request-Method: GET"
+          if grep -qi '^access-control-allow-origin:' denied.headers; then
+            echo "::error::Production API exposed CORS to an unapproved origin"
+            cat denied.headers
+            exit 1
+          fi
+
+      - name: Production dev login disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --show-error --output dev-owner.json --write-out '%{http_code}'             --request POST "$PROD_API_URL/auth/dev-owner"             --header 'Content-Type: application/json'             --data '{}')"
+          test "$code" = "404"
+          node -e "const d=require('./dev-owner.json');if(d.error!=='NOT_FOUND')throw new Error('Unexpected dev-owner response')"
+
+      - name: Production auth guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --show-error --output me.json --write-out '%{http_code}' "$PROD_API_URL/me")"
+          test "$code" = "401"
