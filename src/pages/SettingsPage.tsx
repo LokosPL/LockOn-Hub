@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, Eye, MonitorUp, Palette, ShieldCheck, Sparkles } from 'lucide-react';
 import { ROLE_DEFINITIONS, ROLE_ORDER, type UserRole } from '../config/roles';
-import type { AuthState } from '../types/electron';
+import type { AppInfo, AuthState } from '../types/electron';
 import {
   applyScale,
   applyTheme,
@@ -36,6 +36,11 @@ export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleCh
   const [scaleBusy, setScaleBusy] = useState(false);
   const scaleBusyRef = useRef(false);
   const [settingsError, setSettingsError] = useState('');
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+
+  useEffect(() => {
+    void window.lockOn.app.getInfo().then(setAppInfo).catch(() => setAppInfo(null));
+  }, []);
 
   const changeTheme = (theme: UiTheme) => {
     applyTheme(theme);
@@ -66,7 +71,17 @@ export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleCh
           <h1>Dopasuj ServiceOS do siebie</h1>
           <p>Motyw i wielkość interfejsu są zapisywane lokalnie na tym komputerze. Każdy użytkownik może ustawić je po swojemu, niezależnie od roli.</p>
         </div>
-        {actualRole === 'OWNER' && (
+        <section className="panel-card team-config-card">
+        <div>
+          <div className="eyebrow">O APLIKACJI</div>
+          <h2>LockOn ServiceOS{appInfo ? ` v${appInfo.version}` : ''}</h2>
+          <p>{appInfo
+            ? `Wersja produktu ${appInfo.version} · build aktualizatora ${appInfo.buildVersion}.`
+            : 'Pobieram informacje o wersji…'}</p>
+        </div>
+      </section>
+
+      {actualRole === 'OWNER' && (
           <div className="settings-role-card">
             <ShieldCheck size={22}/>
             <div><span>Twoja faktyczna rola</span><strong>{ROLE_DEFINITIONS[actualRole].label}</strong></div>
