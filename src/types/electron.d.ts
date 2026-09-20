@@ -54,7 +54,7 @@ export interface FinancePayload { entries: RevenueEntry[]; points: FinancePointB
 export interface TechnicianSettlementSettings { configured:boolean; technicianPercent:number|null; bossPercent:number|null; }
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
-export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; handlingMode:'STANDARD'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
+export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; handlingMode:'STANDARD'|'COMPLAINT_FLOW'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
 export interface ServiceWorkflow {
   stageNumber:number; stageTotal:number; stageLabel:string;
   nextActionCode:string; nextAction:string;
@@ -73,7 +73,9 @@ export interface ServiceOrderSummary extends ServiceOrder {
   workflow?:ServiceWorkflow;
   latestTransfer?:ServiceTransfer|null; transfers?:ServiceTransfer[];
 }
-export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; reusedDevice?:boolean; notification?:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; }
+export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; reusedDevice?:boolean; notification?:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; serviceCard?:{required:boolean;printMode?:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY'|null;customerEmailRequired?:boolean}; }
+export interface ServiceCardOpenResult { opened:boolean; filePath:string; fileName:string; printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY'; staffScanCode?:string; }
+export interface ServiceScanResult { ok:true; scanAction:string; readyChanged:boolean; order:ServiceOrderSummary|null; notification?:NotificationRetryResult; }
 export interface ServiceStatusResult {
   order:ServiceOrderSummary;
   notification:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string};
@@ -211,7 +213,9 @@ declare global {
         listTransfers: (incoming?:boolean,status?:string) => Promise<ServiceTransfer[]>;
         transferOrder: (orderId:string,payload:{toPointId?:string;note?:string;kind?:ServiceTransfer['kind']}) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
         updateTransferStatus: (transferId:string,status:ServiceTransfer['status'],note?:string) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
-        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';handlingMode?:'STANDARD'|'TRANSFER_ONLY';assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string}) => Promise<ServiceCreateOrderResult>;
+        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string}) => Promise<ServiceCreateOrderResult>;
+        openServiceCard: (orderId:string,printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY') => Promise<ServiceCardOpenResult>;
+        scanServiceCard: (payload:{actingPointId:string;token?:string;code?:string}) => Promise<ServiceScanResult>;
         listOrders: () => Promise<ServiceOrderSummary[]>;
         getHistory: (orderId:string) => Promise<ServiceStatusHistoryItem[]>;
         getNotes: (orderId:string) => Promise<ServiceOrderNote[]>;
