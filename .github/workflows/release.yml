@@ -66,7 +66,27 @@ jobs:
             Write-Error "BUILD_VERSION ($requestedBuild) nie zgadza się z package.json ($build)."
             exit 1
           }
-          if ($product -notmatch '^\d+\.\d+\.\d+\.\d+
+          if ($product -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            Write-Error "RELEASE_VERSION musi mieć format czteroczłonowy, np. 1.0.0.0."
+            exit 1
+          }
+          if ($build -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            Write-Error "BUILD_VERSION musi być poprawnym SemVer dla npm/electron-updater."
+            exit 1
+          }
+          if (-not (Test-Path RELEASE_READY)) {
+            Write-Error "Brak RELEASE_READY. Produkcyjny release jest zablokowany do czasu finalnego smoke."
+            exit 1
+          }
+          $ready = (Get-Content RELEASE_READY -Raw).Trim()
+          $expected = "$product|$build"
+          if ($ready -ne $expected) {
+            Write-Error "RELEASE_READY ($ready) nie odpowiada bieżącym wersjom ($expected)."
+            exit 1
+          }
+          "product_version=$product" >> $env:GITHUB_OUTPUT
+          "build_version=$build" >> $env:GITHUB_OUTPUT
+
       - name: Build application
         run: npm run build
 
@@ -125,133 +145,3 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.build_version }}
         run: |
           gh release create "v$env:BUILD_VERSION" "release/LockOn-ServiceOS-Setup.exe" "release/LockOn-ServiceOS-Setup.exe.blockmap" "release/latest.yml" "release/SHA256SUMS.txt" --title "LockOn ServiceOS v$env:VERSION" --notes-file release-notes.md --latest
-) {
-            Write-Error "RELEASE_VERSION musi mieć format czteroczłonowy, np. 1.0.0.0."
-            exit 1
-          }
-          if ($build -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?
-      - name: Build application
-        run: npm run build
-
-      - name: Build Windows installer
-        run: npx electron-builder --win --publish never
-
-      - name: Generate SHA-256 checksums
-        shell: pwsh
-        run: |
-          $files = @(
-            "release/LockOn-ServiceOS-Setup.exe",
-            "release/LockOn-ServiceOS-Setup.exe.blockmap",
-            "release/latest.yml"
-          )
-          $lines = foreach ($file in $files) {
-            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $([System.IO.Path]::GetFileName($file))"
-          }
-          Set-Content -Path release/SHA256SUMS.txt -Value $lines -Encoding ascii
-
-      - name: Generate build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
-        with:
-          subject-path: |
-            release/LockOn-ServiceOS-Setup.exe
-            release/LockOn-ServiceOS-Setup.exe.blockmap
-            release/latest.yml
-            release/SHA256SUMS.txt
-
-      - name: Prepare release notes
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.version.outputs.product_version }}
-        run: |
-          $notes = @"
-          Oficjalne wydanie LockOn ServiceOS v$env:VERSION.
-
-          Pobierz **LockOn-ServiceOS-Setup.exe**.
-          Instalator i pliki aktualizatora powstały w tym workflow i mają poświadczenie pochodzenia buildu w GitHub Artifact Attestations.
-
-          Code signing policy:
-          https://github.com/LokosPL/LockOn-Hub/blob/main/CODE_SIGNING.md
-
-          Do czasu akceptacji projektu przez SignPath Foundation instalator może pozostawać niepodpisany.
-          "@
-          Set-Content -Path release-notes.md -Value $notes -Encoding utf8
-
-      - name: Publish GitHub Release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.product_version }}
-        run: |
-          gh release create "v$env:VERSION" "release/LockOn-ServiceOS-Setup.exe" "release/LockOn-ServiceOS-Setup.exe.blockmap" "release/latest.yml" "release/SHA256SUMS.txt" --title "LockOn ServiceOS v$env:VERSION" --notes-file release-notes.md --latest
-) {
-            Write-Error "BUILD_VERSION musi być poprawnym SemVer dla npm/electron-updater."
-            exit 1
-          }
-          if (-not (Test-Path RELEASE_READY)) {
-            Write-Error "Brak RELEASE_READY. Produkcyjny release jest zablokowany do czasu finalnego smoke."
-            exit 1
-          }
-          $ready = (Get-Content RELEASE_READY -Raw).Trim()
-          $expected = "$product|$build"
-          if ($ready -ne $expected) {
-            Write-Error "RELEASE_READY ($ready) nie odpowiada bieżącym wersjom ($expected)."
-            exit 1
-          }
-          "product_version=$product" >> $env:GITHUB_OUTPUT
-          "build_version=$build" >> $env:GITHUB_OUTPUT
-
-      - name: Build application
-        run: npm run build
-
-      - name: Build Windows installer
-        run: npx electron-builder --win --publish never
-
-      - name: Generate SHA-256 checksums
-        shell: pwsh
-        run: |
-          $files = @(
-            "release/LockOn-ServiceOS-Setup.exe",
-            "release/LockOn-ServiceOS-Setup.exe.blockmap",
-            "release/latest.yml"
-          )
-          $lines = foreach ($file in $files) {
-            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $([System.IO.Path]::GetFileName($file))"
-          }
-          Set-Content -Path release/SHA256SUMS.txt -Value $lines -Encoding ascii
-
-      - name: Generate build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
-        with:
-          subject-path: |
-            release/LockOn-ServiceOS-Setup.exe
-            release/LockOn-ServiceOS-Setup.exe.blockmap
-            release/latest.yml
-            release/SHA256SUMS.txt
-
-      - name: Prepare release notes
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.version.outputs.product_version }}
-        run: |
-          $notes = @"
-          Oficjalne wydanie LockOn ServiceOS v$env:VERSION.
-
-          Pobierz **LockOn-ServiceOS-Setup.exe**.
-          Instalator i pliki aktualizatora powstały w tym workflow i mają poświadczenie pochodzenia buildu w GitHub Artifact Attestations.
-
-          Code signing policy:
-          https://github.com/LokosPL/LockOn-Hub/blob/main/CODE_SIGNING.md
-
-          Do czasu akceptacji projektu przez SignPath Foundation instalator może pozostawać niepodpisany.
-          "@
-          Set-Content -Path release-notes.md -Value $notes -Encoding utf8
-
-      - name: Publish GitHub Release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.product_version }}
-        run: |
-          gh release create "v$env:VERSION" "release/LockOn-ServiceOS-Setup.exe" "release/LockOn-ServiceOS-Setup.exe.blockmap" "release/latest.yml" "release/SHA256SUMS.txt" --title "LockOn ServiceOS v$env:VERSION" --notes-file release-notes.md --latest
