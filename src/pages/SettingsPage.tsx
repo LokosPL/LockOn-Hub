@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Check, Eye, MonitorUp, Palette, ShieldCheck, Sparkles } from 'lucide-react';
 import { ROLE_DEFINITIONS, ROLE_ORDER, type UserRole } from '../config/roles';
 import type { AuthState } from '../types/electron';
@@ -34,6 +34,7 @@ export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleCh
   const actualRole = auth.role as UserRole;
   const [preferences, setPreferences] = useState(loadUiPreferences);
   const [scaleBusy, setScaleBusy] = useState(false);
+  const scaleBusyRef = useRef(false);
   const [settingsError, setSettingsError] = useState('');
 
   const changeTheme = (theme: UiTheme) => {
@@ -42,7 +43,8 @@ export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleCh
   };
 
   const changeScale = async (scale: UiScale) => {
-    if (scaleBusy) return;
+    if (scaleBusyRef.current) return;
+    scaleBusyRef.current = true;
     setScaleBusy(true);
     setSettingsError('');
     try {
@@ -51,6 +53,7 @@ export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleCh
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : 'Nie udało się zmienić skali interfejsu.');
     } finally {
+      scaleBusyRef.current = false;
       setScaleBusy(false);
     }
   };
