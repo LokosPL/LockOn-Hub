@@ -1860,24 +1860,110 @@ const route = async (request) => {
     });
   }
 
+  if (method === 'GET' && url.pathname === '/public/customer-portal/config') {
+    return json(request,{
+      googleEnabled:Boolean(GOOGLE_CUSTOMER_WEB_CLIENT_ID),
+      googleClientId:GOOGLE_CUSTOMER_WEB_CLIENT_ID || null
+    });
+  }
+
   if (method === 'POST' && url.pathname === '/public/customer-portal/login') {
     const body = await readJson(request);
     const code = normalizeCustomerPortalCode(body.customerId || body.code);
-    if (!code) return json(request,{error:'CUSTOMER_ID',message:'Identyfikator klienta jest nieprawidłowy.'},400);
-    const customer = (await q("SELECT id FROM customers WHERE portal_code_hash=$1 LIMIT 1",[tokenHash(code)])).rows[0];
-    if (!customer) return json(request,{error:'CUSTOMER_ID',message:'Nie znaleziono klienta dla tego identyfikatora.'},401);
-    const session = await createCustomerPortalSession(customer.id);
-    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_PORTAL_LOGIN','customer',$2,$3::jsonb)",[makeId('aud'),customer.id,JSON.stringify({clientType:'CUSTOMER_PORTAL'})]);
-    return json(request,{sessionToken:session.token,expiresAt:session.expiresAt,...(await loadCustomerPortalPayload(customer.id))});
+    if (!code) return json(request,{error:'CUSTOMER_ID',message:'Kod klienta jest nieprawidłowy.'},400);
+    const customer = (await q(
+      "SELECT c.id,a.blocked_at,a.blocked_reason FROM customers c LEFT JOIN customer_portal_accounts a ON a.customer_id=c.id WHERE c.portal_code_hash=$1 LIMIT 1",
+      [tokenHash(code)]
+    )).rows[0];
+    if (!customer) return json(request,{error:'CUSTOMER_ID',message:'Nie znaleziono klienta dla tego kodu.'},401);
+    if (customer.blocked_at) return json(request,{error:'CUSTOMER_ACCOUNT_BLOCKED',message:customer.blocked_reason?'Dostęp do portalu został zablokowany: '+cleanText(customer.blocked_reason,180):'Dostęp do portalu został zablokowany.'},403);
+    const session = await createCustomerPortalSession(customer.id,'CODE');
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_PORTAL_LOGIN','customer',$2,$3::jsonb)",[
+      makeId('aud'),customer.id,JSON.stringify({clientType:'CUSTOMER_PORTAL',authMethod:'CODE'})
+    ]);
+    return json(request,{sessionToken:session.token,expiresAt:session.expiresAt,...(await loadCustomerPortalPayload(customer.id,{auth_method:'CODE'}))});
+  }
+
+  if (method === 'POST' && url.pathname === '/public/customer-portal/google/link') {
+    const customerSession = await requireCustomerPortal(request);
+    if (!GOOGLE_CUSTOMER_WEB_CLIENT_ID) return json(request,{error:'GOOGLE_NOT_CONFIGURED',message:'Logowanie Google dla klientów nie jest jeszcze dostępne.'},503);
+    const body = await readJson(request);
+    if (!body.idToken) return json(request,{error:'MISSING_TOKEN',message:'Brak tokena Google.'},400);
+    let profile;
+    try { profile = await verifyGoogle(String(body.idToken),GOOGLE_CUSTOMER_WEB_CLIENT_ID); }
+    catch { return json(request,{error:'GOOGLE_AUTH_FAILED',message:'Google nie potwierdził tożsamości.'},401); }
+    const customerEmail=normalizeEmail(customerSession.email||'');
+    if (!customerEmail) return json(request,{error:'CUSTOMER_EMAIL_REQUIRED',message:'Najpierw poproś punkt LockOn o zapisanie Twojego adresu e-mail przy kliencie.'},409);
+    if (profile.email!==customerEmail) return json(request,{error:'GOOGLE_EMAIL_MISMATCH',message:'Konto Google musi używać tego samego adresu e-mail, który jest zapisany przy kliencie: '+customerEmail},409);
+    const already=(await q("SELECT customer_id FROM customer_portal_accounts WHERE google_sub=$1 AND customer_id<>$2 LIMIT 1",[profile.sub,customerSession.customer_id])).rows[0];
+    if (already) return json(request,{error:'GOOGLE_ALREADY_LINKED',message:'To konto Google jest już połączone z innym klientem.'},409);
+    await q(
+      "INSERT INTO customer_portal_accounts(customer_id,google_sub,google_email,google_name,google_picture_url,linked_at,last_login_at,updated_at) VALUES($1,$2,$3,$4,$5,now(),now(),now()) ON CONFLICT(customer_id) DO UPDATE SET google_sub=EXCLUDED.google_sub,google_email=EXCLUDED.google_email,google_name=EXCLUDED.google_name,google_picture_url=EXCLUDED.google_picture_url,linked_at=COALESCE(customer_portal_accounts.linked_at,now()),last_login_at=now(),blocked_at=NULL,blocked_reason=NULL,blocked_by_user_id=NULL,updated_at=now()",
+      [customerSession.customer_id,profile.sub,profile.email,profile.name,profile.picture]
+    );
+    await q("DELETE FROM customer_portal_sessions WHERE id=$1",[customerSession.session_id]);
+    const session=await createCustomerPortalSession(customerSession.customer_id,'GOOGLE');
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_GOOGLE_LINKED','customer',$2,$3::jsonb)",[
+      makeId('aud'),customerSession.customer_id,JSON.stringify({clientType:'CUSTOMER_PORTAL',googleEmail:profile.email})
+    ]);
+    return json(request,{sessionToken:session.token,expiresAt:session.expiresAt,...(await loadCustomerPortalPayload(customerSession.customer_id,{auth_method:'GOOGLE'}))});
+  }
+
+  if (method === 'POST' && url.pathname === '/public/customer-portal/google/login') {
+    if (!GOOGLE_CUSTOMER_WEB_CLIENT_ID) return json(request,{error:'GOOGLE_NOT_CONFIGURED',message:'Logowanie Google dla klientów nie jest jeszcze dostępne.'},503);
+    const body=await readJson(request);
+    if (!body.idToken) return json(request,{error:'MISSING_TOKEN',message:'Brak tokena Google.'},400);
+    let profile;
+    try { profile=await verifyGoogle(String(body.idToken),GOOGLE_CUSTOMER_WEB_CLIENT_ID); }
+    catch { return json(request,{error:'GOOGLE_AUTH_FAILED',message:'Google nie potwierdził tożsamości.'},401); }
+    let account=(await q(
+      "SELECT a.customer_id,a.blocked_at,a.blocked_reason,c.email FROM customer_portal_accounts a JOIN customers c ON c.id=a.customer_id WHERE a.google_sub=$1 LIMIT 1",
+      [profile.sub]
+    )).rows[0];
+    if (!account) {
+      const matching=(await q("SELECT id FROM customers WHERE lower(email)=lower($1) LIMIT 1",[profile.email])).rows[0];
+      if (matching) return json(request,{error:'CUSTOMER_GOOGLE_NOT_LINKED',message:'To konto Google pasuje do klienta, ale nie jest jeszcze połączone. Wpisz kod klienta jeden raz i wybierz „Połącz konto Google”.'},409);
+      return json(request,{error:'CUSTOMER_GOOGLE_NOT_FOUND',message:'Nie znaleziono połączonego konta klienta. Użyj kodu klienta, aby połączyć Google.'},403);
+    }
+    if (account.blocked_at) return json(request,{error:'CUSTOMER_ACCOUNT_BLOCKED',message:account.blocked_reason?'Dostęp do portalu został zablokowany: '+cleanText(account.blocked_reason,180):'Dostęp do portalu został zablokowany.'},403);
+    await q(
+      "UPDATE customer_portal_accounts SET google_email=$2,google_name=$3,google_picture_url=$4,last_login_at=now(),updated_at=now() WHERE customer_id=$1",
+      [account.customer_id,profile.email,profile.name,profile.picture]
+    );
+    const session=await createCustomerPortalSession(account.customer_id,'GOOGLE');
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_GOOGLE_LOGIN','customer',$2,$3::jsonb)",[
+      makeId('aud'),account.customer_id,JSON.stringify({clientType:'CUSTOMER_PORTAL',googleEmail:profile.email})
+    ]);
+    return json(request,{sessionToken:session.token,expiresAt:session.expiresAt,...(await loadCustomerPortalPayload(account.customer_id,{auth_method:'GOOGLE'}))});
   }
 
   if (method === 'GET' && url.pathname === '/public/customer-portal/me') {
     const customerSession = await requireCustomerPortal(request);
-    return json(request,await loadCustomerPortalPayload(customerSession.customer_id));
+    return json(request,await loadCustomerPortalPayload(customerSession.customer_id,customerSession));
+  }
+
+  if (method === 'POST' && url.pathname === '/public/customer-portal/settings') {
+    const customerSession=await requireCustomerPortalFull(request);
+    const body=await readJson(request);
+    const current=await customerPortalAccount(customerSession.customer_id);
+    const prefs={
+      serviceUpdates:body.serviceUpdates===undefined ? current?.notify_service_updates!==false : body.serviceUpdates===true,
+      readyForPickup:body.readyForPickup===undefined ? current?.notify_ready_for_pickup!==false : body.readyForPickup===true,
+      quoteUpdates:body.quoteUpdates===undefined ? current?.notify_quote_updates!==false : body.quoteUpdates===true,
+      messages:body.messages===undefined ? current?.notify_messages!==false : body.messages===true
+    };
+    await q(
+      "UPDATE customer_portal_accounts SET notify_service_updates=$2,notify_ready_for_pickup=$3,notify_quote_updates=$4,notify_messages=$5,updated_at=now() WHERE customer_id=$1",
+      [customerSession.customer_id,prefs.serviceUpdates,prefs.readyForPickup,prefs.quoteUpdates,prefs.messages]
+    );
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_SETTINGS_UPDATED','customer',$2,$3::jsonb)",[
+      makeId('aud'),customerSession.customer_id,JSON.stringify({clientType:'CUSTOMER_PORTAL',notificationPreferences:prefs})
+    ]);
+    return json(request,await loadCustomerPortalPayload(customerSession.customer_id,customerSession));
   }
 
   if (method === 'POST' && url.pathname === '/public/customer-portal/quotes') {
-    const customerSession = await requireCustomerPortal(request);
+    const customerSession = await requireCustomerPortalFull(request);
     const body = await readJson(request);
     let requestedPointId = cleanText(body.requestedPointId,80);
     const serviceOrderId = cleanText(body.serviceOrderId,80) || null;
@@ -1925,7 +2011,7 @@ const route = async (request) => {
 
   const customerQuoteMessageMatch=url.pathname.match(/^\/public\/customer-portal\/quotes\/([^/]+)\/messages$/);
   if(method==='POST'&&customerQuoteMessageMatch){
-    const customerSession=await requireCustomerPortal(request);
+    const customerSession=await requireCustomerPortalFull(request);
     const body=await readJson(request);
     const message=cleanText(body.message,1000);
     if(!message)return json(request,{error:'MESSAGE_REQUIRED',message:'Wpisz wiadomość.'},400);
