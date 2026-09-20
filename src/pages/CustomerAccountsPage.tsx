@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Ban,
@@ -79,6 +79,10 @@ export function CustomerAccountsPage() {
   const [query,setQuery]=useState('');
   const [filter,setFilter]=useState<CustomerFilter>('ALL');
   const [busy,setBusy]=useState('');
+  const busyRef=useRef('');
+  const listRequestRef=useRef(0);
+  const detailRequestRef=useRef(0);
+  const setBusySafe=(value:string)=>{busyRef.current=value;setBusy(value);};
   const [notice,setNotice]=useState<{tone:'ok'|'error';text:string}|null>(null);
   const [codes,setCodes]=useState<Record<string,string>>({});
 
@@ -94,13 +98,18 @@ export function CustomerAccountsPage() {
   const [profile,setProfile]=useState({firstName:'',lastName:'',email:'',phone:''});
 
   const load=async(silent=false)=>{
-    if(!silent)setBusy('load');
+    const requestId=++listRequestRef.current;
+    if(!silent)setBusySafe('load');
     try{
-      setData(await window.lockOn.customers.list(query));
+      const result=await window.lockOn.customers.list(query);
+      if(requestId!==listRequestRef.current)return;
+      setData(result);
       if(!silent)setNotice(null);
     }catch(error){
-      if(!silent)setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się pobrać klientów.'});
-    }finally{if(!silent)setBusy('');}
+      if(requestId===listRequestRef.current&&!silent)setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się pobrać klientów.'});
+    }finally{
+      if(requestId===listRequestRef.current&&!silent&&busyRef.current==='load')setBusySafe('');
+    }
   };
 
   const selected=useMemo(
@@ -136,19 +145,21 @@ export function CustomerAccountsPage() {
   },[query]);
 
   const openCustomer=async(customer:CustomerAccountSummary)=>{
+    const requestId=++detailRequestRef.current;
     setSelectedId(customer.id);
     setDetail(null);
     setQuotes([]);
     setDetailTab('OVERVIEW');
     setExpandedOrderId(null);
     setEditProfile(false);
-    setBusy(customer.id+':open');
+    setBusySafe(customer.id+':open');
     setNotice(null);
     try{
       const [card,allQuotes]=await Promise.all([
         window.lockOn.service.getCustomer(customer.id),
         window.lockOn.service.listCustomerQuotes()
       ]);
+      if(requestId!==detailRequestRef.current)return;
       setDetail(card);
       setQuotes(allQuotes.filter((item)=>item.customerId===customer.id));
       setProfile({
@@ -158,90 +169,93 @@ export function CustomerAccountsPage() {
         phone:card.customer.phone||''
       });
     }catch(error){
+      if(requestId!==detailRequestRef.current)return;
       setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się otworzyć klienta.'});
       setSelectedId(null);
-    }finally{setBusy('');}
+    }finally{
+      if(requestId===detailRequestRef.current&&busyRef.current===customer.id+':open')setBusySafe('');
+    }
   };
 
   const refreshDetail=async()=>{
-    if(!selectedId)return;
+    if(busyRef.current||!selectedId)return;
     const customer=data?.customers.find((item)=>item.id===selectedId);
     if(!customer)return;
     await Promise.all([load(true),openCustomer(customer)]);
   };
 
   const getCode=async(customer:CustomerAccountSummary,rotate=false)=>{
-    if(busy)return;
+    if(busyRef.current)return;
     if(rotate&&!window.confirm(`Wygenerować nowy kod dla ${customer.name}? Stary kod i sesje kodowe przestaną działać.`))return;
-    setBusy(customer.id+':code');setNotice(null);
+    setBusySafe(customer.id+':code');setNotice(null);
     try{
       const result=await window.lockOn.customers.getCode(customer.id,rotate);
       setCodes(current=>({...current,[customer.id]:result.code}));
       setNotice({tone:'ok',text:rotate?'Nowy kod klienta jest gotowy.':'Kod klienta jest gotowy.'});
       await load(true);
     }catch(error){setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się pobrać kodu.'});}
-    finally{setBusy('');}
+    finally{setBusySafe('');}
   };
 
   const sendCode=async(customer:CustomerAccountSummary)=>{
-    if(busy)return;
+    if(busyRef.current)return;
     if(!customer.email){setNotice({tone:'error',text:'Ten klient nie ma zapisanego adresu e-mail.'});return;}
-    setBusy(customer.id+':mail');setNotice(null);
+    setBusySafe(customer.id+':mail');setNotice(null);
     try{
       const result=await window.lockOn.customers.sendCode(customer.id);
       setNotice({tone:'ok',text:`Kod i link do portalu wysłano na ${result.recipient}.`});
     }catch(error){setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się wysłać kodu.'});}
-    finally{setBusy('');}
+    finally{setBusySafe('');}
   };
 
   const toggleBlock=async(customer:CustomerAccountSummary)=>{
-    if(busy)return;
+    if(busyRef.current)return;
     const next=!customer.blocked;
     if(!window.confirm(next
       ? `Zablokować portal klienta ${customer.name}? Wszystkie aktywne sesje zostaną zamknięte.`
       : `Odblokować portal klienta ${customer.name}?`))return;
     const reason=next ? (window.prompt('Powód blokady (opcjonalnie):','')||'') : '';
-    setBusy(customer.id+':block');setNotice(null);
+    setBusySafe(customer.id+':block');setNotice(null);
     try{
       await window.lockOn.customers.block(customer.id,next,reason);
       setNotice({tone:'ok',text:next?'Portal klienta został zablokowany.':'Portal klienta został odblokowany.'});
       await load(true);
     }catch(error){setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się zmienić blokady.'});}
-    finally{setBusy('');}
+    finally{setBusySafe('');}
   };
 
   const logoutAll=async(customer:CustomerAccountSummary)=>{
-    if(busy)return;
+    if(busyRef.current)return;
     if(!window.confirm(`Wylogować ${customer.name} ze wszystkich aktywnych sesji portalu?`))return;
-    setBusy(customer.id+':logout');setNotice(null);
+    setBusySafe(customer.id+':logout');setNotice(null);
     try{
       const result=await window.lockOn.customers.logoutAll(customer.id);
       setNotice({tone:'ok',text:`Zamknięto sesje: ${result.revoked}.`});
       await load(true);
     }catch(error){setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się zakończyć sesji.'});}
-    finally{setBusy('');}
+    finally{setBusySafe('');}
   };
 
   const unlinkGoogle=async(customer:CustomerAccountSummary)=>{
-    if(busy)return;
+    if(busyRef.current)return;
     if(!customer.googleLinked)return;
     if(!window.confirm(`Odłączyć konto Google klienta ${customer.name}? Klient nadal będzie mógł wejść kodem i ponownie połączyć Google.`))return;
-    setBusy(customer.id+':unlink');setNotice(null);
+    setBusySafe(customer.id+':unlink');setNotice(null);
     try{
       const result=await window.lockOn.customers.unlinkGoogle(customer.id);
       setNotice({tone:'ok',text:`Konto Google odłączone. Zamknięte sesje Google: ${result.revoked}.`});
       await load(true);
       if(selectedId===customer.id)await refreshDetail();
     }catch(error){setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się odłączyć Google.'});}
-    finally{setBusy('');}
+    finally{setBusySafe('');}
   };
 
   const saveProfile=async()=>{
-    if(busy||!selectedId||!selected)return;
+    if(busyRef.current||!selectedId||!selected)return;
     if(!profile.firstName.trim()){setNotice({tone:'error',text:'Podaj imię klienta.'});return;}
     const emailChanged=(detail?.customer.email||'').trim().toLowerCase()!==profile.email.trim().toLowerCase();
     if(emailChanged&&selected.googleLinked&&!window.confirm('Zmiana e-mailu odłączy obecne konto Google klienta dla bezpieczeństwa. Kontynuować?'))return;
-    setBusy(selectedId+':profile');setNotice(null);
+    setBusySafe(selectedId+':profile');setNotice(null);
     try{
       const result=await window.lockOn.customers.updateProfile(selectedId,{
         firstName:profile.firstName.trim(),
@@ -254,7 +268,7 @@ export function CustomerAccountsPage() {
       setNotice({tone:'ok',text:result.googleDisconnected?'Dane zapisane. Poprzednie konto Google zostało bezpiecznie odłączone.':'Dane klienta zapisane.'});
       await load(true);
     }catch(error){setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się zapisać danych klienta.'});}
-    finally{setBusy('');}
+    finally{setBusySafe('');}
   };
 
   const copyCode=async(customerId:string)=>{
@@ -264,44 +278,44 @@ export function CustomerAccountsPage() {
   };
 
   const toggleHistory=async(order:ServiceOrderSummary)=>{
-    if(busy)return;
+    if(busyRef.current)return;
     if(expandedOrderId===order.id){setExpandedOrderId(null);return;}
     setExpandedOrderId(order.id);
     if(histories[order.id])return;
-    setBusy(order.id+':history');
+    setBusySafe(order.id+':history');
     try{
       const history=await window.lockOn.service.getHistory(order.id);
       setHistories((current)=>({...current,[order.id]:history}));
     }catch(error){setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się pobrać historii zlecenia.'});}
-    finally{setBusy('');}
+    finally{setBusySafe('');}
   };
 
   const replyQuote=async(item:CustomerQuoteRequest)=>{
-    if(busy)return;
+    if(busyRef.current)return;
     const message=(quoteReply[item.id]||'').trim();
     if(!message)return;
-    setBusy(item.id+':reply');setNotice(null);
+    setBusySafe(item.id+':reply');setNotice(null);
     try{
       await window.lockOn.service.replyCustomerQuote(item.id,message);
       setQuoteReply((current)=>({...current,[item.id]:''}));
       setNotice({tone:'ok',text:'Wiadomość wysłana do klienta.'});
       if(selected)await openCustomer(selected);
     }catch(error){setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się wysłać wiadomości.'});}
-    finally{setBusy('');}
+    finally{setBusySafe('');}
   };
 
   const priceQuote=async(item:CustomerQuoteRequest)=>{
-    if(busy)return;
+    if(busyRef.current)return;
     const amount=Number(String(quoteAmount[item.id]||'').replace(',','.'));
     if(!Number.isFinite(amount)||amount<0){setNotice({tone:'error',text:'Podaj prawidłową kwotę wyceny.'});return;}
-    setBusy(item.id+':price');setNotice(null);
+    setBusySafe(item.id+':price');setNotice(null);
     try{
       await window.lockOn.service.priceCustomerQuote(item.id,amount);
       setQuoteAmount((current)=>({...current,[item.id]:''}));
       setNotice({tone:'ok',text:'Wycena zapisana i przekazana klientowi.'});
       if(selected)await openCustomer(selected);
     }catch(error){setNotice({tone:'error',text:error instanceof Error?error.message:'Nie udało się zapisać wyceny.'});}
-    finally{setBusy('');}
+    finally{setBusySafe('');}
   };
 
   const stats=data?.stats;
@@ -312,7 +326,7 @@ export function CustomerAccountsPage() {
     const prefs=selected.notificationPreferences;
     return <div className="customer-accounts-page customer-control-center page-enter">
       <section className="customer-detail-heading">
-        <button className="customer-back-button" onClick={()=>{setSelectedId(null);setDetail(null);setQuotes([]);}}><ArrowLeft size={16}/> Klienci</button>
+        <button className="customer-back-button" disabled={Boolean(busy)} onClick={()=>{detailRequestRef.current+=1;setBusySafe('');setSelectedId(null);setDetail(null);setQuotes([]);}}><ArrowLeft size={16}/> Klienci</button>
         <div className="customer-detail-title">
           <div className="customer-detail-avatar">{selected.googlePicture?<img src={selected.googlePicture} alt="" referrerPolicy="no-referrer"/>:initials(selected.name)}</div>
           <div>
@@ -397,7 +411,7 @@ export function CustomerAccountsPage() {
       {detail&&detailTab==='ORDERS'&&<section className="panel-card customer-orders-workspace">
         <div className="panel-heading customer-panel-heading">
           <div><span className="eyebrow">NAPRAWY KLIENTA</span><h2>Zlecenia serwisowe</h2><p>Ta sama czytelna hierarchia co w module Serwis. Kliknij zlecenie, aby zobaczyć historię.</p></div>
-          <button className="button small secondary" onClick={()=>void refreshDetail()}><RefreshCw size={14}/> Odśwież</button>
+          <button className="button small secondary" disabled={Boolean(busy)} onClick={()=>void refreshDetail()}><RefreshCw className={busy? 'spin':''} size={14}/> Odśwież</button>
         </div>
         <div className="customer-order-control-list">
           {orders.map((order)=><article key={order.id} className={'customer-control-order '+orderTone(order)+(expandedOrderId===order.id?' expanded':'')}>
@@ -516,7 +530,7 @@ export function CustomerAccountsPage() {
 
     <section className="customer-account-list customer-control-list">
       {customers.map((customer)=><article className={'panel-card customer-control-row '+(customer.blocked?'blocked':'')} key={customer.id}>
-        <button className="customer-control-open" onClick={()=>void openCustomer(customer)} disabled={busy===customer.id+':open'}>
+        <button className="customer-control-open" onClick={()=>void openCustomer(customer)} disabled={Boolean(busy)}>
           <div className="customer-account-identity">
             {customer.googlePicture?<img src={customer.googlePicture} alt="" referrerPolicy="no-referrer"/>:<div>{initials(customer.name)}</div>}
             <span><strong>{customer.name}</strong><small>{customer.email||'Brak e-mailu'}{customer.phone?' · '+customer.phone:''}</small></span>
