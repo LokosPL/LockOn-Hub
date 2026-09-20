@@ -784,11 +784,34 @@ Dla każdego priorytetu:
 - Pracownicze WWW/PWA nadal pozostaje wyłącznie code-only i nie używa logowania Google.
 - Testowa gałąź Neon `verify-customer-control-v0203` / `br-tiny-bar-b1w5axxk` pozostaje zachowana; nie usuwaj jej bez potwierdzenia użytkownika.
 
+
+## Hotfix stabilności i bezpieczeństwa v0.20.5 — 2026-09-20
+
+- Hub PR #63 scalony do `main`: commit `dae6c15d80551e1c89c952fbc5a4d24276c076b5`.
+- Publiczny Windows release: **v0.20.5**, release workflow **#45 SUCCESS**, opublikowany 2026-09-20T17:16:46Z.
+- Instalator `LockOn-ServiceOS-Setup.exe`: SHA-256 `f4f776475e3ad3f51e4314bbabd9ec8c34076ee89bb988738bb99299226d51cf`, rozmiar 116579377 B.
+- Finalne kontrole po merge: Verify ServiceOS **#620 SUCCESS**, CodeQL **#331 SUCCESS**, central API bundle **#182 SUCCESS**.
+- Produkcyjny Neon `lockonapi`: **deployment v38 / completed**. Wdrożono dokładnie bundle zweryfikowany przed merge.
+- Temp Neon: wykorzystano zachowaną gałąź `verify-hotfix-v0204` / `br-spring-pond-b1hqe48m` z deploymentem testowym v2. Nowej gałęzi nie utworzono, ponieważ projekt osiągnął limit branchy; istniejących branchy nie usuwano.
+- Temp auth smoke **SUCCESS**: `/health` 200; błędny kod pracownika i kod klienta są throttlowane — 13. próba w 60 s zwraca `429 RATE_LIMITED`; buckety są niezależne.
+- Production smoke **SUCCESS**: `/health` 200, niezalogowane `/me` 401, pojedynczy błędny `/website/redeem` 401 oraz błędny kod klienta 401.
+- Centrum klienta ma ochronę przed stale-response race: listy i karta klienta ignorują odpowiedzi starszych requestów; mutacje korzystają z synchronicznego locka `busyRef`, więc szybkie podwójne kliknięcia nie uruchamiają równoległych akcji.
+- Moduł Serwis ignoruje stare wyniki wyszukiwania klienta i pokazuje stan wyszukiwania.
+- Wbudowana przeglądarka blokuje równoległe akcje nawigacji, ogranicza długość adresu i pokazuje błędy IPC/nawigacji zamiast cichych rejected Promise.
+- Ustawienia skali mają synchroniczny lock i jawny komunikat błędu.
+- Publiczny central API ma defense-in-depth throttling per endpoint/IP dla:
+  - kodu pracownika `/website/redeem`: 12 prób / 60 s;
+  - kodu klienta `/public/customer-portal/login`: 12 prób / 60 s;
+  - Google login klienta: 30 prób / 60 s.
+- Rate limiter jest pamięciowy per instancja funkcji i jest dodatkową warstwą ochrony, a nie globalnym rozproszonym limitem.
+- Stałe kontrakty regresyjne dla UI locków i public auth throttling są częścią CI.
+- Priorytet 0A jest zakończony wcześniej (równoległy BOT/CONSULTANT, self-support block, prywatność kanałów). Następny niezamknięty backlog z pakietu START to **Priorytet 0B**.
+
 ## Jak zacząć w nowym czacie
 
 1. Otwórz i przeczytaj **cały** `PROJECT_HANDOFF.md` oraz **cały** `NEXT_CHAT_START.md`. Ten drugi plik zawiera bieżący backlog i protokół komend `GitHub Neon` → `START`.
 2. Sprawdź aktualny `main`, latest release, otwarte PR-y i wszystkie aktywne workflow w obu repozytoriach.
 3. Sprawdź Neon: projekt `wandering-field-13057181`, produkcyjną gałąź `br-steep-bonus-b1f1qh8u`, bazę `lockon`, aktywny deployment `lockonapi` oraz schemat.
-4. Aktualny backlog Priorytety 1–10 jest zakończony; bieżące publiczne wydanie to **v0.20.3**, produkcyjny backend to **lockonapi v35**, a strona/PWA jest po **Site PR #35 / Pages #102** z Google login v2 dla klientów i cache `serviceos-shell-v24`. Pracownicze WWW nadal jest code-only. Nie rozpoczynaj historycznych priorytetów ponownie.
+4. Bieżące publiczne wydanie to **v0.20.5**, produkcyjny backend to **lockonapi v38**, a strona/PWA pozostaje po **Site PR #35 / Pages #102** z Google login v2 dla klientów i cache `serviceos-shell-v24`. Priorytet 0A jest zakończony; przy pracy z pakietem START przejdź do pierwszego niezamkniętego priorytetu, obecnie **0B**.
 5. Przy kolejnej pracy najpierw sprawdź nowe wymagania użytkownika, aktualny main/release/Neon i dopiero utwórz następny backlog lub poprawkę.
 6. Pracuj samodzielnie przez GitHub i Neon; nie proś użytkownika o informacje, które można sprawdzić narzędziami.
