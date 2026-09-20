@@ -2337,14 +2337,15 @@ const route = async (request) => {
   if (method === 'GET' && url.pathname === '/admin/overview') {
     const session = await requireActive(request);
     if (session.user.role_code !== 'OWNER') throw Object.assign(new Error('Brak uprawnień.'), { status: 403 });
-    const [points, users, loginEvents, pendingRevenue, sessions, recentAudit, transferSummary] = await Promise.all([
+    const [points, users, loginEvents, pendingRevenue, sessions, recentAudit, transferSummary, customerPortalSummary] = await Promise.all([
       q("SELECT p.id,p.name,p.city,p.active,p.service_enabled,p.accepts_external_repairs,p.external_repairs_paused,p.service_note,coalesce(t.active_technician_count,0)::int AS active_technician_count,(p.service_enabled OR coalesce(t.active_technician_count,0)>0) AS effective_service_enabled,(NOT p.external_repairs_paused AND (coalesce(t.active_technician_count,0)>0 OR (p.service_enabled AND p.accepts_external_repairs))) AS effective_accepts_external_repairs FROM points p LEFT JOIN LATERAL (SELECT count(*)::int AS active_technician_count FROM user_point_access a JOIN users u ON u.id=a.user_id WHERE a.point_id=p.id AND u.role_code='TECHNICIAN' AND u.status='ACTIVE' AND u.blocked_at IS NULL) t ON true ORDER BY p.name"),
       q("SELECT id,google_sub,email,name,picture_url,role_code,technician_split_percent,support_enabled,status,blocked_at,blocked_reason,blocked_by_user_id,first_login_at,last_login_at FROM users ORDER BY created_at DESC"),
       q("SELECT a.id,a.actor_user_id AS user_id,u.email,u.name,u.role_code AS role,u.status,a.created_at FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id WHERE a.action LIKE 'LOGIN_%' ORDER BY a.created_at DESC LIMIT 100"),
       q("SELECT r.*,u.name AS technician_name,u.email AS technician_email,p.name AS point_name,p.city AS point_city,p.active AS point_active FROM revenue_entries r JOIN users u ON u.id=r.user_id JOIN points p ON p.id=r.point_id WHERE r.status='PENDING' ORDER BY r.created_at DESC"),
       q("SELECT client_type,count(*)::int AS count FROM auth_sessions WHERE revoked_at IS NULL AND expires_at>now() AND absolute_expires_at>now() GROUP BY client_type"),
       q("SELECT a.id,a.action,a.entity_type,a.entity_id,a.point_id,a.metadata,a.created_at,u.name AS actor_name,u.email AS actor_email FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id ORDER BY a.created_at DESC LIMIT 80"),
-      q("SELECT status,count(*)::int AS count FROM service_order_transfers GROUP BY status")
+      q("SELECT status,count(*)::int AS count FROM service_order_transfers GROUP BY status"),
+      q("SELECT (SELECT count(*)::int FROM customer_portal_accounts WHERE google_sub IS NOT NULL) AS google_accounts,(SELECT count(*)::int FROM customer_portal_accounts WHERE blocked_at IS NOT NULL) AS blocked_accounts,(SELECT count(*)::int FROM customer_portal_sessions WHERE expires_at>now()) AS active_customer_sessions")
     ]);
     const mappedUsers = [];
     for (const user of users.rows) mappedUsers.push(await publicUser(user));
@@ -2368,7 +2369,10 @@ const route = async (request) => {
         webSessions: Number(sessionCounts.WEB||0),
         servicePoints: points.rows.filter((point)=>point.effective_service_enabled===true).length,
         openTransfers: Number(transferCounts.REQUESTED||0)+Number(transferCounts.IN_TRANSIT||0)+Number(transferCounts.DELIVERED||0),
-        blockedUsers: mappedUsers.filter((u)=>u.blocked).length
+        blockedUsers: mappedUsers.filter((u)=>u.blocked).length,
+        customerGoogleAccounts:Number(customerPortalSummary.rows[0]?.google_accounts||0),
+        customerPortalSessions:Number(customerPortalSummary.rows[0]?.active_customer_sessions||0),
+        blockedCustomerAccounts:Number(customerPortalSummary.rows[0]?.blocked_accounts||0)
       },
       transferSummary: transferCounts,
       recentAudit: recentAudit.rows.map((row)=>({
