@@ -8,7 +8,7 @@ export type UpdateState =
   | { status: 'error'; message: string }
   | { status: 'development'; message: string };
 
-export interface AppInfo { name: string; author: string; version: string; platform: string; packaged: boolean; apiBaseUrl?: string; }
+export interface AppInfo { name: string; author: string; version: string; buildVersion: string; platform: string; packaged: boolean; apiBaseUrl?: string; }
 export interface SplashProgress { percent: number; label: string; }
 export type UserRole = 'OWNER' | 'BOSS' | 'COORDINATOR' | 'SUPPORT' | 'TECHNICIAN' | 'USER';
 export type AccountStatus = 'PENDING' | 'ACTIVE' | 'REJECTED';
@@ -143,7 +143,7 @@ export interface InternetSpeedResult {
 }
 export interface ConnectivityDiagnostics {
   testedAt:string; internetOk:boolean; internetLatencyMs:number|null; apiOk:boolean; apiLatencyMs:number|null;
-  apiError?:string|null; version:string; platform:string; packaged:boolean; apiBaseUrl:string;
+  apiError?:string|null; version:string; buildVersion:string; platform:string; packaged:boolean; apiBaseUrl:string;
 }
 export interface SupportPresence {
   userId:string; name:string; email:string; role:UserRole|null; supportEnabled:boolean;
