@@ -39,11 +39,6 @@ export function UpdatePrompt() {
     }
   };
 
-  const version =
-    update.status === 'available' || update.status === 'downloaded' || update.status === 'not-available'
-      ? update.version
-      : '';
-
   const hidden =
     update.status === 'idle' ||
     update.status === 'checking' ||
@@ -71,7 +66,7 @@ export function UpdatePrompt() {
       <aside className="global-update-toast" aria-live="polite">
         <div className="global-update-icon"><Download size={18} /></div>
         <div className="global-update-copy">
-          <strong>Pobieram aktualizację {version ? 'v' + version : ''}</strong>
+          <strong>Pobieram aktualizację ServiceOS</strong>
           <span>Pracuj normalnie — ServiceOS pobiera nową wersję w tle.</span>
           {update.status === 'downloading' && (
             <div className="global-update-progress" aria-label={'Pobrano ' + percent + '%'}>
@@ -89,7 +84,7 @@ export function UpdatePrompt() {
       <aside className="global-update-toast update-ready" aria-live="polite">
         <div className="global-update-icon"><Rocket size={18} /></div>
         <div className="global-update-copy">
-          <strong><CheckCircle2 size={14}/> Aktualizacja v{update.version} pobrana automatycznie</strong>
+          <strong><CheckCircle2 size={14}/> Aktualizacja ServiceOS pobrana automatycznie</strong>
           <span>
             Masz teraz v{appInfo?.version ?? '—'}. Chcesz zaktualizować aplikację teraz?
             ServiceOS sam zamknie się na moment, zaktualizuje i uruchomi ponownie.
