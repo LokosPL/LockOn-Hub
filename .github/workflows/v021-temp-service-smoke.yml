@@ -68,6 +68,20 @@ jobs:
           });
           if(intent.status!==200||!intent.payload?.uploadUrl||!intent.payload?.invoiceId)throw new Error('upload intent '+intent.status+' '+JSON.stringify(intent.payload));
 
+          const preflight=await fetch(intent.payload.uploadUrl,{
+            method:'OPTIONS',
+            headers:{
+              origin:'https://app.serviceos.pl',
+              'access-control-request-method':'PUT',
+              'access-control-request-headers':'content-type,x-amz-meta-sha256'
+            },
+            redirect:'error'
+          });
+          const allowOrigin=preflight.headers.get('access-control-allow-origin')||'';
+          if(!preflight.ok||!(allowOrigin==='*'||allowOrigin==='https://app.serviceos.pl')){
+            throw new Error('browser CORS preflight failed '+preflight.status+' allow-origin='+allowOrigin);
+          }
+
           const upload=await fetch(intent.payload.uploadUrl,{
             method:'PUT',
             headers:intent.payload.requiredHeaders,
