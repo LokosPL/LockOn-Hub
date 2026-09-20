@@ -138,7 +138,7 @@ const toAuthState = (
       name: payload.user.name,
       picture: payload.user.picture
     },
-    point: points[0] ?? null,
+    point: points.find((point)=>point.id===payload.activePointId) ?? points[0] ?? null,
     points,
     role: payload.user.role,
     technicianSplitPercent: payload.user.technicianSplitPercent ?? null,
