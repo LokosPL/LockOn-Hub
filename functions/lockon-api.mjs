@@ -1612,7 +1612,8 @@ const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
       currentPointId:row.current_point_id||null,currentPointName:row.current_point_name||null,
       estimatedCompletionAt:row.estimated_completion_at||null,estimatedCost:row.estimated_cost==null?null:Number(row.estimated_cost),
       finalCost:row.final_cost==null?null:Number(row.final_cost),currency:row.currency||'PLN',
-      receivedAt:row.received_at,completedAt:row.completed_at||null,createdAt:row.created_at,updatedAt:row.updated_at
+      receivedAt:row.received_at,completedAt:row.completed_at||null,createdAt:row.created_at,updatedAt:row.updated_at,
+      serviceCardAvailable:true
     })),
     points:pointsResult.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
     quoteRequests:quotesResult.rows.map((row)=>({
@@ -2597,6 +2598,15 @@ const route = async (request) => {
   if (method === 'GET' && url.pathname === '/public/customer-portal/me') {
     const customerSession = await requireCustomerPortal(request);
     return json(request,await loadCustomerPortalPayload(customerSession.customer_id,customerSession));
+  }
+
+  const customerServiceCardMatch=url.pathname.match(/^\/public\/customer-portal\/orders\/([^/]+)\/service-card$/);
+  if(method==='GET'&&customerServiceCardMatch){
+    const customerSession=await requireCustomerPortal(request);
+    const owned=(await q("SELECT id FROM service_orders WHERE id=$1 AND customer_id=$2 LIMIT 1",[customerServiceCardMatch[1],customerSession.customer_id])).rows[0];
+    if(!owned)return json(request,{error:'NOT_FOUND',message:'Nie znaleziono tej karty serwisowej.'},404);
+    const card=await renderServiceCardPdf(owned.id,'CUSTOMER');
+    return json(request,{orderId:owned.id,orderNumber:card.context.orderNumber,fileName:card.fileName,mimeType:'application/pdf',pdfBase64:card.buffer.toString('base64')});
   }
 
   if (method === 'POST' && url.pathname === '/public/customer-portal/settings') {
