@@ -2162,7 +2162,7 @@ const roleSelfDescription = (role, supportEnabled = false) => {
     OWNER: 'Jesteś właścicielem ServiceOS. Masz pełny dostęp do administracji, punktów, serwisu, rozliczeń, audytu i bezpieczeństwa.',
     BOSS: 'Jesteś Szefem. Masz globalny dostęp operacyjny do punktów, napraw, przychodów i rozliczeń.',
     COORDINATOR: 'Jesteś Koordynatorem. Pracujesz na przypisanych punktach i możesz zarządzać ich obsługą serwisową.',
-    SUPPORT: 'Masz starszy profil Wsparcia LockOn. Po aktualizacji wsparcie jest dodatkowym uprawnieniem niezależnym od głównej roli.',
+    SUPPORT: 'Masz rolę Wsparcie LockOn. Możesz obsługiwać zgłoszenia użytkowników i kanał konsultanta w przypisanym zakresie, bez dostępu do rozliczeń ani administracji właściciela.',
     TECHNICIAN: 'Jesteś Serwisantem. Pracujesz na przypisanych punktach, zleceniach i własnych rozliczeniach.',
     USER: 'Jesteś Pracownikiem punktu. Możesz przyjmować zlecenia, edytować dane przyjęcia, anulować je i przekazywać urządzenia.'
   }[role] || 'Twoje konto nie ma jeszcze aktywnej roli.');

@@ -336,3 +336,214 @@ jobs:
           NODE
 
           api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
+
+
+      - name: Temp complaint flow E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
+          point_id="$(node -e "const d=require('./me.json');process.stdout.write(d.points[0].id)")"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/me/active-point"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$point_id")" > complaint-point.json
+
+          suffix="cmp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          imei="$(printf '870000%09d' "$((GITHUB_RUN_ID % 1000000000))")"
+          imei="${imei:0:15}"
+          node - <<'NODE' "$suffix" "$imei" > complaint-body.json
+          const [suffix,imei]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'Reklamacja '+suffix,
+            email:'complaint-'+suffix+'@invalid.test',
+            phone:'+48111222333',
+            brand:'LockOn',
+            model:'Complaint E2E',
+            imei,
+            serialNumber:'CMP-'+suffix,
+            deviceNotes:'Syntetyczna reklamacja TEMP E2E.',
+            issueDescription:'Reklamacja TEMP: weryfikacja trybu COMPLAINT_FLOW.',
+            orderType:'COMPLAINT'
+          }));
+          NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data @complaint-body.json > complaint.json
+
+          node - <<'NODE'
+          const d=require('./complaint.json');
+          if(!d.order?.id) throw new Error('Complaint order was not created');
+          if(d.order.orderType!=='COMPLAINT') throw new Error('Complaint orderType mismatch');
+          if(d.order.handlingMode!=='COMPLAINT_FLOW') throw new Error('Complaint did not derive COMPLAINT_FLOW');
+          if(d.serviceCard?.required!==true) throw new Error('Complaint did not require service card');
+          NODE
+
+          complaint_id="$(node -e "const d=require('./complaint.json');process.stdout.write(d.order.id)")"
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders/$complaint_id/service-card"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data '{"printMode":"PHYSICAL_AND_ONLINE"}' > complaint-card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./complaint-card.json');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-') throw new Error('Complaint card is not PDF');
+          fs.writeFileSync('complaint-card.pdf',pdf);
+          NODE
+          pdftotext -layout complaint-card.pdf complaint-card.txt
+          grep -qi 'Reklamacja' complaint-card.txt || { echo "::error::Complaint label missing from service card"; exit 1; }
+
+      - name: Temp private technician notes E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          tech_token="$(node -e "const d=require('./role-TECHNICIAN.json');process.stdout.write(d.token)")"
+          owner_token="$(node -e "const d=require('./role-OWNER.json');process.stdout.write(d.token)")"
+          marker="Prywatna notatka CI ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({title:'TEMP E2E',body:process.argv[1],pinned:true}))" "$marker")" > tech-note.json
+
+          note_id="$(node -e "const d=require('./tech-note.json');if(!d.id)throw new Error('Missing private note id');process.stdout.write(d.id)")"
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $tech_token" > tech-notes.json
+          node - <<'NODE' "$marker" "$note_id"
+          const notes=require('./tech-notes.json'), marker=process.argv[2], id=process.argv[3];
+          if(!notes.some(x=>x.id===id&&x.body===marker&&x.pinned===true)) throw new Error('Technician cannot read own private note');
+          NODE
+
+          owner_code="$(curl --silent --show-error --output owner-private-note.json --write-out '%{http_code}'             "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $owner_token")"
+          [ "$owner_code" = "403" ] || { echo "::error::OWNER unexpectedly read technician private notes: HTTP $owner_code"; cat owner-private-note.json; exit 1; }
+
+          curl --silent --show-error --fail-with-body             --request DELETE "$TEMP_API_URL/service/technician-notes/$note_id"             --header "Authorization: Bearer $tech_token" > tech-note-delete.json
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $tech_token" > tech-notes-after.json
+          node -e "const d=require('./tech-notes-after.json');if(d.some(x=>x.id===process.argv[1]))throw new Error('Private note was not deleted')" "$note_id"
+
+      - name: Temp private invoice signed URL E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner_token="$(node -e "const d=require('./role-OWNER.json');process.stdout.write(d.token)")"
+          user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
+          support_token="$(node -e "const d=require('./role-SUPPORT.json');process.stdout.write(d.token)")"
+          order_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.id)")"
+
+          test -s service-card.pdf
+          size_bytes="$(stat -c%s service-card.pdf)"
+          sha256="$(sha256sum service-card.pdf | awk '{print $1}')"
+          invoice_date="$(date -u +%F)"
+          period="${invoice_date:0:7}"
+          file_name="CI-Faktura-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.pdf"
+
+          node - <<'NODE' "$file_name" "$size_bytes" "$sha256" "$invoice_date" > invoice-intent-body.json
+          const [fileName,sizeBytes,sha256,invoiceDate]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            fileName,
+            sizeBytes:Number(sizeBytes),
+            sha256,
+            invoiceNumber:'CI/'+Date.now(),
+            supplier:'LockOn CI TEMP',
+            invoiceDate,
+            grossAmount:123.45
+          }));
+          NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders/$order_id/invoices/upload-intent"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data @invoice-intent-body.json > invoice-intent.json
+
+          invoice_id="$(node -e "const d=require('./invoice-intent.json');if(!d.invoiceId||!d.uploadUrl)throw new Error('Missing signed upload intent');if(d.expiresInSeconds!==600)throw new Error('Unexpected signed URL TTL');process.stdout.write(d.invoiceId)")"
+          upload_url="$(node -e "const d=require('./invoice-intent.json');process.stdout.write(d.uploadUrl)")"
+          node -e "const d=require('./invoice-intent.json');if(d.requiredHeaders?.['content-type']!=='application/pdf'||d.requiredHeaders?.['x-amz-meta-sha256']!==process.argv[1])throw new Error('Signed upload headers mismatch')" "$sha256"
+
+          curl --silent --show-error --fail-with-body             --request PUT "$upload_url"             --header "content-type: application/pdf"             --header "x-amz-meta-sha256: $sha256"             --data-binary @service-card.pdf > /dev/null
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/invoices/$invoice_id/complete"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data '{}' > invoice-complete.json
+          node -e "const d=require('./invoice-complete.json');if(d.id!==process.argv[1]||d.status!=='READY')throw new Error('Invoice did not become READY')" "$invoice_id"
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/invoices?month=$period"             --header "Authorization: Bearer $owner_token" > invoices-list.json
+          node -e "const d=require('./invoices-list.json');if(!d.invoices?.some(x=>x.id===process.argv[1]))throw new Error('Ready invoice missing from warehouse')" "$invoice_id"
+
+          for role_token in "$user_token" "$support_token"; do
+            denied="$(curl --silent --show-error --output invoice-denied.json --write-out '%{http_code}'               --request POST "$TEMP_API_URL/service/invoices/$invoice_id/download-intent"               --header "Authorization: Bearer $role_token"               --header "Content-Type: application/json"               --data '{}')"
+            [ "$denied" = "403" ] || { echo "::error::Unauthorized role obtained invoice download intent: HTTP $denied"; cat invoice-denied.json; exit 1; }
+          done
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/invoices/$invoice_id/download-intent"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data '{}' > invoice-download.json
+          download_url="$(node -e "const d=require('./invoice-download.json');if(!d.downloadUrl||d.expiresInSeconds!==600)throw new Error('Missing signed download URL');const u=new URL(d.downloadUrl);if(![...u.searchParams.keys()].some(k=>k.toLowerCase()==='x-amz-signature'))throw new Error('Download URL is not signed');process.stdout.write(d.downloadUrl)")"
+
+          curl --silent --show-error --fail-with-body "$download_url" --output downloaded-invoice.pdf
+          cmp service-card.pdf downloaded-invoice.pdf
+
+          unsigned_url="$(node -e "const u=new URL(process.argv[1]);u.search='';process.stdout.write(u.toString())" "$download_url")"
+          unsigned_code="$(curl --silent --show-error --output unsigned-invoice.txt --write-out '%{http_code}' "$unsigned_url")"
+          [ "$unsigned_code" != "200" ] || { echo "::error::Private invoice object is publicly readable"; exit 1; }
+
+          tampered_url="$(node -e "const u=new URL(process.argv[1]);const k=[...u.searchParams.keys()].find(x=>x.toLowerCase()==='x-amz-signature');u.searchParams.set(k,'0'.repeat(64));process.stdout.write(u.toString())" "$download_url")"
+          tampered_code="$(curl --silent --show-error --output tampered-invoice.txt --write-out '%{http_code}' "$tampered_url")"
+          [ "$tampered_code" != "200" ] || { echo "::error::Tampered invoice signature was accepted"; exit 1; }
+
+          curl --silent --show-error --fail-with-body             --request DELETE "$TEMP_API_URL/service/invoices/$invoice_id"             --header "Authorization: Bearer $owner_token" > invoice-delete.json
+
+      - name: Temp hotline privacy and handoff E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
+          support_token="$(node -e "const d=require('./role-SUPPORT.json');process.stdout.write(d.token)")"
+          user_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.user.id)")"
+          point_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.activePointId||d.points?.[0]?.id||'')")"
+          [ -n "$point_id" ]
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data '{}' > hotline-reset.json
+
+          private_marker="BOT-PRIVATE-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/assistant/chat"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({message:process.argv[1],target:'BOT'}))" "$private_marker")" > hotline-bot.json
+          node - <<'NODE'
+          const d=require('./hotline-bot.json');
+          if(!d.assistantMessage?.text) throw new Error('Bot did not answer before consultant request');
+          if(d.consultantState!=='BOT') throw new Error('Unexpected consultant state before request');
+          NODE
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/tickets"             --header "Authorization: Bearer $support_token" > hotline-tickets-before.json
+          node -e "const d=require('./hotline-tickets-before.json');if(d.some(x=>x.userId===process.argv[1]))throw new Error('Bot-only conversation leaked into consultant queue')" "$user_id"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/request"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1],message:'Proszę konsultanta o dołączenie.'}))" "$point_id")" > hotline-request.json
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/tickets"             --header "Authorization: Bearer $support_token" > hotline-tickets-waiting.json
+          node - <<'NODE' "$user_id" "$private_marker"
+          const tickets=require('./hotline-tickets-waiting.json'), userId=process.argv[2], secret=process.argv[3];
+          const t=tickets.find(x=>x.userId===userId);
+          if(!t) throw new Error('Consultant request missing from queue');
+          if((t.messages||[]).some(m=>String(m.text||'').includes(secret))) throw new Error('Private bot message leaked to consultant after request');
+          NODE
+
+          consultant_marker="CONSULTANT-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/assistant/chat"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({message:process.argv[1],target:'CONSULTANT'}))" "$consultant_marker")" > hotline-consultant-msg.json
+          node -e "const d=require('./hotline-consultant-msg.json');if(d.assistantMessage!==null||d.userMessage?.target!=='CONSULTANT')throw new Error('Consultant-target message generated bot reply')"
+
+          parallel_bot_marker="BOT-WHILE-WAITING-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/assistant/chat"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({message:process.argv[1],target:'BOT'}))" "$parallel_bot_marker")" > hotline-parallel-bot.json
+          node -e "const d=require('./hotline-parallel-bot.json');if(!d.assistantMessage?.text||d.consultantState!=='WAITING')throw new Error('Bot stopped helping while consultant was requested')"
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/tickets"             --header "Authorization: Bearer $support_token" > hotline-tickets-after.json
+          node - <<'NODE' "$user_id" "$consultant_marker" "$parallel_bot_marker" > hotline-ticket-id.txt
+          const tickets=require('./hotline-tickets-after.json');
+          const [userId,consultantMarker,botMarker]=process.argv.slice(2);
+          const t=tickets.find(x=>x.userId===userId);
+          if(!t) throw new Error('Waiting ticket missing');
+          if(!(t.messages||[]).some(m=>String(m.text||'').includes(consultantMarker))) throw new Error('Consultant-target message missing from queue');
+          if((t.messages||[]).some(m=>String(m.text||'').includes(botMarker))) throw new Error('Parallel private bot message leaked to consultant');
+          process.stdout.write(t.id);
+          NODE
+          ticket_id="$(cat hotline-ticket-id.txt)"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/tickets/$ticket_id/take"             --header "Authorization: Bearer $support_token"             --header "Content-Type: application/json"             --data '{}' > hotline-take.json
+
+          support_marker="ODPOWIEDZ-KONSULTANTA-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/tickets/$ticket_id/reply"             --header "Authorization: Bearer $support_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({message:process.argv[1]}))" "$support_marker")" > hotline-reply.json
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/conversation"             --header "Authorization: Bearer $user_token" > hotline-user-conversation.json
+          node - <<'NODE' "$support_marker" "$private_marker" "$parallel_bot_marker"
+          const d=require('./hotline-user-conversation.json');
+          const [supportMarker,privateMarker,parallelBot]=process.argv.slice(2);
+          if(d.consultantState!=='JOINED') throw new Error('Consultant did not join');
+          for(const marker of [supportMarker,privateMarker,parallelBot]){
+            if(!(d.messages||[]).some(m=>String(m.text||'').includes(marker))) throw new Error('User conversation missing '+marker);
+          }
+          NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data '{}' > hotline-leave.json
+          node -e "const d=require('./hotline-leave.json');if(d.consultantState!=='BOT')throw new Error('Bot did not remain after consultant channel closed')"
