@@ -166,6 +166,8 @@ declare global {
       };
       customers: {
         list: (query?:string) => Promise<CustomerAccountOverview>;
+        updateProfile: (customerId:string,payload:{firstName:string;lastName:string;email?:string;phone?:string}) => Promise<{ok:true;customer:ServiceCustomer & {createdAt?:string;updatedAt?:string};googleDisconnected:boolean;revokedGoogleSessions:number}>;
+        unlinkGoogle: (customerId:string) => Promise<{ok:true;unlinked:boolean;revoked:number}>;
         getCode: (customerId:string,rotate?:boolean) => Promise<{ok:true;code:string;created:boolean;rotated:boolean;revoked:number}>;
         sendCode: (customerId:string) => Promise<{ok:true;recipient:string;messageId:string}>;
         block: (customerId:string,blocked:boolean,reason?:string) => Promise<{ok:true;blocked:boolean;revoked:number}>;
