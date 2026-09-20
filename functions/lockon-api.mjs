@@ -1713,6 +1713,7 @@ const staffQuoteVisible = async (user, requestId) => {
 
 const renderStatusEmail = (item) => {
   const displayName = cleanText(item.sender_display_name || 'LockOn ServiceOS', 80).replace(/[\r\n]+/g, ' ');
+  const isIntakeCard = item.template_key === 'SERVICE_INTAKE_CARD';
   const transferStatus = String(item.payload?.transferStatus || '').toUpperCase();
   const transferKind = String(item.payload?.transferKind || 'OUTBOUND_SERVICE').toUpperCase();
   const returnHome = transferKind === 'RETURN_HOME';
@@ -1756,8 +1757,12 @@ const renderStatusEmail = (item) => {
   const customFooter = cleanText(item.footer_text || '', 500);
   const footer = cleanText(defaultContactText + (customFooter ? ' ' + customFooter : ''), 500);
 
-  const subject = 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
-  const intro = isTransfer
+  const subject = isIntakeCard
+    ? 'LockOn ServiceOS · karta serwisowa · zlecenie #' + item.order_number
+    : 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
+  const intro = isIntakeCard
+    ? 'Przyjęliśmy urządzenie ' + item.brand + ' ' + item.model + ' do punktu ' + item.point_name + '. W załączniku znajdziesz kartę serwisową PDF.'
+    : isTransfer
     ? (
         returnHome
           ? (
@@ -1813,7 +1818,7 @@ const renderStatusEmail = (item) => {
       '<div style="border:1px solid #252b33;border-radius:20px;background:#11151a;overflow:hidden">' +
         '<div style="padding:24px 22px 20px">' +
           '<div style="font-size:11px;color:#ff8b60;font-weight:800;letter-spacing:.1em">ZLECENIE #' + escapeHtml(item.order_number) + '</div>' +
-          '<div style="font-size:26px;line-height:1.15;font-weight:850;margin-top:8px">Mamy aktualizację Twojej naprawy</div>' +
+          '<div style="font-size:26px;line-height:1.15;font-weight:850;margin-top:8px">' + (isIntakeCard ? 'Potwierdzenie przyjęcia urządzenia' : 'Mamy aktualizację Twojej naprawy') + '</div>' +
           '<p style="margin:12px 0 0;color:#909aa5;font-size:14px;line-height:1.55">Dzień dobry ' + escapeHtml(item.first_name) + '. Poniżej najważniejsza informacja — bez technicznych szczegółów.</p>' +
         '</div>' +
         '<div style="margin:0 22px;padding:18px;border-radius:15px;background:#171d23;border:1px solid #2a323c">' +
@@ -1825,7 +1830,7 @@ const renderStatusEmail = (item) => {
         '<div style="padding:18px 22px 22px">' +
           '<div style="font-size:12px;color:#858f9a;line-height:1.55">Punkt: <strong style="color:#dce1e6">' + escapeHtml(contactPoint || item.point_name) + '</strong></div>' +
           (item.tracking_url ? '<a href="' + escapeHtml(item.tracking_url) + '" style="display:block;box-sizing:border-box;width:100%;margin-top:16px;padding:15px 16px;border-radius:12px;background:#ff7048;color:#fff;text-align:center;text-decoration:none;font-size:15px;line-height:1.3;font-weight:850">Zobacz zlecenie →</a>' : '') +
-          (item.customer_portal_code ? '<div style="margin-top:18px;padding-top:17px;border-top:1px solid #252b33"><div style="font-size:10px;color:#747f8a;text-transform:uppercase;letter-spacing:.07em;font-weight:800">Twój kod klienta</div><div style="font-size:17px;font-weight:800;color:#e9edf1;letter-spacing:.045em;margin-top:5px">' + escapeHtml(item.customer_portal_code) + '</div>' + (item.customer_portal_url ? '<a href="' + escapeHtml(item.customer_portal_url) + '" style="display:inline-block;margin-top:9px;color:#ff9a76;font-size:12px;font-weight:800;text-decoration:none">Wszystkie zlecenia i wyceny →</a>' : '') + (item.customer_google_sub && item.customer_portal_url ? '<div style="margin-top:10px"><a href="' + escapeHtml(item.customer_portal_url + '?google=1') + '" style="color:#9ca7b1;font-size:11px;font-weight:700;text-decoration:none">Nie chcę wpisywać kodu — zaloguj przez Google →</a></div>' : '') + '</div>' : '') +
+          (item.customer_portal_code ? '<div style="margin-top:18px;padding-top:17px;border-top:1px solid #252b33"><div style="font-size:10px;color:#747f8a;text-transform:uppercase;letter-spacing:.07em;font-weight:800">Twój kod klienta</div><div style="font-size:17px;font-weight:800;color:#e9edf1;letter-spacing:.045em;margin-top:5px">' + escapeHtml(item.customer_portal_code) + '</div>' + (item.customer_portal_url ? '<a href="' + escapeHtml(item.customer_portal_url) + '" style="display:inline-block;margin-top:9px;color:#ff9a76;font-size:12px;font-weight:800;text-decoration:none">Otwórz portal bez wpisywania kodu →</a>' : '') + (item.customer_google_sub ? '<div style="margin-top:10px;color:#9ca7b1;font-size:11px;font-weight:700">Pełne konto Google pozostaje dostępne w portalu klienta.</div>' : '') + '</div>' : '') +
           '<p style="margin:18px 0 0;font-size:11px;color:#707b86;line-height:1.5">' + escapeHtml(footer) + '</p>' +
         '</div>' +
       '</div>' +
