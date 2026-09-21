@@ -30,26 +30,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
         return;
       }
 
-      const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(String(state.role || ''));
-      const singlePoint = state.status === 'ACTIVE' && canManageGmail && state.points.length === 1
-        ? state.points[0]
-        : null;
-
-      if (singlePoint) {
-        setMessage('Zalogowano. Sprawdzam powiadomienia Gmail…');
-        try {
-          const gmail = await window.lockOn.gmail.getStatus(singlePoint.id);
-          if (!gmail.connected) {
-            setMessage('Jeszcze jedna zgoda Google: ServiceOS potrzebuje tylko uprawnienia do wysyłania wiadomości.');
-            await window.lockOn.gmail.connect(singlePoint.id);
-          }
-        } catch (gmailError) {
-          const detail = friendlyError(gmailError, 'Nie udało się włączyć Gmail.');
-          setMessage('Zalogowano do ServiceOS. Powiadomienia Gmail nie zostały jeszcze włączone: ' + detail);
-          await new Promise((resolve) => window.setTimeout(resolve, 1800));
-        }
-      }
-
+      setMessage('Zalogowano. Otwieram ServiceOS…');
       onAuthenticated(state);
     } catch (error) {
       setMessage(friendlyError(error, 'Nie udało się zalogować przez Google.'));
@@ -87,7 +68,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
 
         <div className="login-features">
           <div><ShieldCheck size={17} /><span>Bezpieczne logowanie Google</span></div>
-          <div><CheckCircle2 size={17} /><span>Powiadomienia Gmail po jednorazowej zgodzie</span></div>
+          <div><CheckCircle2 size={17} /><span>Gmail możesz połączyć później w ustawieniach</span></div>
           <div><Building2 size={17} /><span>Dostęp i punkty kontrolowane przez ServiceOS</span></div>
         </div>
 
@@ -113,7 +94,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
         {message && <div className="login-message">{message}</div>}
 
         <div className="login-help">
-          ServiceOS nie czyta skrzynki Gmail. Dla uprawnionych ról prosi tylko o zakres <strong>gmail.send</strong>, potrzebny do wysyłania statusów napraw.
+          Logowanie do ServiceOS działa niezależnie od integracji Gmail. Jeśli Twoja rola tego wymaga, Gmail połączysz osobno po wejściu do aplikacji.
         </div>
       </section>
     </div>
