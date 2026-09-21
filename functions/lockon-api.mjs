@@ -1500,6 +1500,20 @@ const formatServiceCardDate = (value) => {
   return Number.isNaN(date.getTime())?'—':date.toLocaleDateString('pl-PL',{timeZone:'Europe/Warsaw'});
 };
 
+const formatServiceCardDateTime = (value) => {
+  if(!value)return '—';
+  const date=new Date(value);
+  return Number.isNaN(date.getTime())?'—':date.toLocaleString('pl-PL',{
+    timeZone:'Europe/Warsaw',
+    year:'numeric',
+    month:'2-digit',
+    day:'2-digit',
+    hour:'2-digit',
+    minute:'2-digit',
+    hour12:false
+  });
+};
+
 const formatServiceCardMoney = (value,currency='PLN') =>
   value==null?'Nie określono':new Intl.NumberFormat('pl-PL',{style:'currency',currency}).format(Number(value));
 
@@ -1564,11 +1578,11 @@ const deviceServiceCardContent = (context,{compact=false}={}) => ({
       ['IMEI',context.imei||'Nie podano'],
       ['Numer seryjny',context.serialNumber||'Nie podano'],
       ['Typ',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
+      ['Przyjęto',formatServiceCardDateTime(context.receivedAt)],
       ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
       ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
       ['Opis usterki',context.issueDescription],
-      ['Uwagi',context.deviceNotes||'—'],
-      ['Przyjęto',formatServiceCardDate(context.receivedAt)]
+      ['Uwagi',context.deviceNotes||'—']
     ],compact?{labelWidth:82,labelFontSize:6.5,valueFontSize:7.3,rowMargin:2}:{labelWidth:94}),
     {columns:[
       {stack:[
@@ -1597,10 +1611,10 @@ const customerServiceCardContent = (context,{compact=false}={}) => ({
       ['Numer seryjny',context.serialNumber||'Nie podano'],
       ['Punkt',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
       ['Typ',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
+      ['Przyjęto',formatServiceCardDateTime(context.receivedAt)],
       ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
       ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
-      ['Opis usterki',context.issueDescription],
-      ['Przyjęto',formatServiceCardDate(context.receivedAt)]
+      ['Opis usterki',context.issueDescription]
     ],compact?{labelWidth:82,labelFontSize:6.5,valueFontSize:7.2,rowMargin:2}:{labelWidth:94}),
     {columns:[
       {stack:[
@@ -1624,7 +1638,7 @@ const customerServiceCardLandscapeContent = (context) => ({
       {
         width:'61%',
         stack:[
-          {text:'Dane zlecenia i urządzenia',fontSize:10,bold:true,color:'#344054',margin:[0,0,0,6]},
+          {text:'Przyjęcie i urządzenie',fontSize:10,bold:true,color:'#344054',margin:[0,0,0,6]},
           serviceCardInfoTable([
             ['Klient',context.customerName],
             ['Urządzenie',context.device],
@@ -1632,11 +1646,14 @@ const customerServiceCardLandscapeContent = (context) => ({
             ['Numer seryjny',context.serialNumber||'Nie podano'],
             ['Punkt przyjęcia',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
             ['Typ zlecenia',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
+            ['Przyjęto',formatServiceCardDateTime(context.receivedAt)]
+          ],{labelWidth:116,labelFontSize:7.8,valueFontSize:8.8,rowMargin:3.2}),
+          {text:'Obsługa serwisowa',fontSize:10,bold:true,color:'#344054',margin:[0,10,0,6]},
+          serviceCardInfoTable([
             ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
             ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
             ['Opis usterki',context.issueDescription],
-            ['Uwagi',context.deviceNotes||'—'],
-            ['Przyjęto',formatServiceCardDate(context.receivedAt)]
+            ['Uwagi',context.deviceNotes||'—']
           ],{labelWidth:116,labelFontSize:7.8,valueFontSize:8.8,rowMargin:3.2})
         ]
       },
