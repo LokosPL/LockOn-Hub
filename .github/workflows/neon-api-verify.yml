@@ -96,7 +96,10 @@ jobs:
           grep -q "technician_private_notes" database/migrations/2026-09-20-v021-service-finance-invoices.sql
           grep -Fq "COALESCE(s.current_point_id,s.home_point_id,s.point_id)" functions/lockon-api.mjs
           grep -Fq "t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')" functions/lockon-api.mjs
-          grep -Fq '!firstName||!lastName||!brand||!model||!deviceNotes||!issue' functions/lockon-api.mjs
+          grep -Fq '!firstName||!lastName||!issue' functions/lockon-api.mjs
+          grep -Fq "canSetIntakeEta=SERVICE_CREATE_ROLES.has(u.role_code)" functions/lockon-api.mjs
+          grep -Fq "brandInput||'Nie podano'" functions/lockon-api.mjs
+          grep -Fq "deviceNotes=cleanText(body.deviceNotes,1000)||'Brak uwag'" functions/lockon-api.mjs
           grep -Fq 'IMEI powinien zawierać 14–16 cyfr.' functions/lockon-api.mjs
           grep -Fq 'TECHNICIAN_AT_INTAKE' functions/lockon-api.mjs
           grep -Fq "serviceCardNumber='KS-'" functions/lockon-api.mjs
@@ -114,7 +117,7 @@ jobs:
           grep -Fq "const OWNER_OPERATIONAL_NAME = 'System LockOn'" functions/lockon-api.mjs
           grep -Fq "const OWNER_SUPPORT_NAME = 'Właściciel aplikacji'" functions/lockon-api.mjs
           grep -Fq 'canSetIntakeEstimate=SERVICE_CREATE_ROLES.has(u.role_code)' functions/lockon-api.mjs
-          grep -Fq '!firstName||!lastName||!brand||!model||!deviceNotes||!issue' functions/lockon-api.mjs
+          grep -Fq '!firstName||!lastName||!issue' functions/lockon-api.mjs
           grep -Fq 'SELECT id FROM service_orders WHERE id=$1 FOR UPDATE' functions/lockon-api.mjs
       - name: Bundle for Neon Functions
         run: |
