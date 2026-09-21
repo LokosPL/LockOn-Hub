@@ -117,6 +117,34 @@ jobs:
             if (-not $settings.Contains($_)) { throw "Missing settings action guard: $_" }
           }
 
+      - name: Verify Google OAuth reliability contracts
+        shell: pwsh
+        run: |
+          $auth = Get-Content electron/googleAuth.ts -Raw
+          @(
+            "GOOGLE_OAUTH_USER_WAIT_MS = 10 * 60_000",
+            "GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS = 45_000",
+            "clearUserWaitTimer();",
+            "callbackAccepted = true",
+            "AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS)",
+            "googleLoginInFlight"
+          ) | ForEach-Object {
+            if (-not $auth.Contains($_)) { throw "Missing Google OAuth reliability contract: $_" }
+          }
+          if ($auth.Contains("}, 180_000);")) {
+            throw "Legacy 180-second whole-flow OAuth timeout must not return."
+          }
+
+          $api = Get-Content electron/backendApi.ts -Raw
+          @("name === 'AbortError'","name === 'TimeoutError'","signal?: AbortSignal") | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing auth API timeout contract: $_" }
+          }
+
+          $login = Get-Content src/pages/LoginScreen.tsx -Raw
+          if (-not $login.Contains("ServiceOS poczeka na Ciebie")) {
+            throw "Login screen must explain that the app keeps waiting for browser completion."
+          }
+
       - name: Verify Start and browser polish contracts
         shell: pwsh
         run: |
