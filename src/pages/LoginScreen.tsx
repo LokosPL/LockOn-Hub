@@ -22,7 +22,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
 
   const loginGoogle = async () => {
     setBusy('google');
-    setMessage('Otwieram logowanie Google…');
+    setMessage('Otwieram bezpieczne logowanie Google. Dokończ je w przeglądarce — ServiceOS poczeka na Ciebie.');
     try {
       const state = await window.lockOn.auth.loginGoogle();
       if (!state.authenticated) {
@@ -93,7 +93,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
 
         <button className="google-login-button" disabled={Boolean(busy)} onClick={() => void loginGoogle()}>
           <span className="google-g">G</span>
-          <span>{busy === 'google' ? 'Czekam na Google…' : 'Kontynuuj przez Google'}</span>
+          <span>{busy === 'google' ? 'Dokończ logowanie w przeglądarce…' : 'Kontynuuj przez Google'}</span>
           {busy === 'google' ? <LoaderCircle className="spin" size={18} /> : <ArrowRight size={18} />}
         </button>
 
