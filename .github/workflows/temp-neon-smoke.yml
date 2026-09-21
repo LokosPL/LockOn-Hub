@@ -253,21 +253,17 @@ jobs:
           node -e "const d=require('./active-other.json');if(d.activePointId!==process.argv[1])throw new Error('Active point switch failed')" "$OTHER_POINT"
 
           run_suffix="${GITHUB_RUN_ID:-0}${GITHUB_RUN_ATTEMPT:-0}"
-          imei="$(printf '860000%09d' "$((GITHUB_RUN_ID % 1000000000))")"
-          imei="${imei:0:15}"
-          intake="$(node - <<'NODE' "$ORIGINAL_POINT" "$run_suffix" "$imei"
-          const [wrongPoint,suffix,imei]=process.argv.slice(2);
+          intake="$(node - <<'NODE' "$ORIGINAL_POINT" "$run_suffix"
+          const [wrongPoint,suffix]=process.argv.slice(2);
           process.stdout.write(JSON.stringify({
             pointId:wrongPoint,
             firstName:'CI',
             lastName:'Smoke '+suffix,
             email:'serviceos-ci-'+suffix+'@invalid.test',
             phone:'+48123456789',
-            brand:'LockOn',
+            brand:'Samsung',
             model:'CI Smoke',
-            imei,
-            serialNumber:'CI-'+suffix,
-            deviceNotes:'Automatyczny test temp Neon. Dane syntetyczne.',
+            deviceNotes:'Automatyczny test temp Neon bez IMEI i numeru seryjnego.',
             issueDescription:'Automatyczny test intake, PDF i logistyki.',
             orderType:'REPAIR'
           }));
@@ -280,6 +276,7 @@ jobs:
           if(!d.order?.id)throw new Error('Order was not created');
           if(d.order.pointId!==expected)throw new Error('Backend trusted spoofed pointId instead of session active point');
           if(d.order.handlingMode!=='STANDARD')throw new Error('Repair did not derive STANDARD handling mode');
+          if(d.order.assignedTechnicianId!==null)throw new Error('OWNER intake unexpectedly assigned a technician');
           if(d.serviceCard?.required!==true)throw new Error('Service card choice is not required');
           if(d.notification?.queued!==true)throw new Error('Mandatory intake email was not queued');
           NODE
