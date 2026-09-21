@@ -424,6 +424,121 @@ const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 
   return text;
 };
 
+
+interface StartWeatherData {
+  city: string;
+  region: string | null;
+  country: string | null;
+  temperature: number;
+  apparentTemperature: number;
+  minTemperature: number;
+  maxTemperature: number;
+  windSpeed: number;
+  weatherCode: number;
+  condition: string;
+  fetchedAt: string;
+}
+
+const weatherCache = new Map<string, { expiresAt: number; value: StartWeatherData }>();
+
+const weatherCondition = (code: number) => {
+  if (code === 0) return 'Bezchmurnie';
+  if (code === 1) return 'Przeważnie słonecznie';
+  if (code === 2) return 'Częściowe zachmurzenie';
+  if (code === 3) return 'Pochmurno';
+  if (code === 45 || code === 48) return 'Mgła';
+  if ([51, 53, 55, 56, 57].includes(code)) return 'Mżawka';
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return 'Deszcz';
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return 'Śnieg';
+  if ([95, 96, 99].includes(code)) return 'Burza';
+  return 'Zmienna pogoda';
+};
+
+const fetchStartWeather = async (rawCity: unknown): Promise<StartWeatherData> => {
+  const city = String(rawCity ?? '').trim().replace(/\s+/g, ' ').slice(0, 90);
+  if (city.length < 2) throw new Error('Wpisz miasto, aby wyświetlić pogodę.');
+
+  const cacheKey = city.toLocaleLowerCase('pl-PL');
+  const cached = weatherCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const geocodeParams = new URLSearchParams({
+    name: city,
+    count: '1',
+    language: 'pl',
+    format: 'json'
+  });
+  const geocodeResponse = await fetch(
+    'https://geocoding-api.open-meteo.com/v1/search?' + geocodeParams.toString(),
+    { cache: 'no-store', signal: AbortSignal.timeout(8_000) }
+  );
+  if (!geocodeResponse.ok) throw new Error('Nie udało się znaleźć miasta dla pogody.');
+  const geocode = await geocodeResponse.json() as {
+    results?: Array<{ name?: string; latitude?: number; longitude?: number; admin1?: string; country?: string }>;
+  };
+  const location = geocode.results?.[0];
+  if (!location || !Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) {
+    throw new Error('Nie znaleziono takiego miasta.');
+  }
+
+  const forecastParams = new URLSearchParams({
+    latitude: String(location.latitude),
+    longitude: String(location.longitude),
+    current: 'temperature_2m,apparent_temperature,weather_code,wind_speed_10m',
+    daily: 'temperature_2m_max,temperature_2m_min',
+    timezone: 'auto',
+    forecast_days: '1'
+  });
+  const forecastResponse = await fetch(
+    'https://api.open-meteo.com/v1/forecast?' + forecastParams.toString(),
+    { cache: 'no-store', signal: AbortSignal.timeout(8_000) }
+  );
+  if (!forecastResponse.ok) throw new Error('Pogoda jest chwilowo niedostępna.');
+  const forecast = await forecastResponse.json() as {
+    current?: {
+      temperature_2m?: number;
+      apparent_temperature?: number;
+      weather_code?: number;
+      wind_speed_10m?: number;
+    };
+    daily?: {
+      temperature_2m_max?: number[];
+      temperature_2m_min?: number[];
+    };
+  };
+
+  const current = forecast.current;
+  const maxTemperature = forecast.daily?.temperature_2m_max?.[0];
+  const minTemperature = forecast.daily?.temperature_2m_min?.[0];
+  if (
+    !current ||
+    !Number.isFinite(current.temperature_2m) ||
+    !Number.isFinite(current.apparent_temperature) ||
+    !Number.isFinite(current.weather_code) ||
+    !Number.isFinite(current.wind_speed_10m) ||
+    !Number.isFinite(maxTemperature) ||
+    !Number.isFinite(minTemperature)
+  ) {
+    throw new Error('Serwis pogodowy zwrócił niepełne dane.');
+  }
+
+  const value: StartWeatherData = {
+    city: location.name || city,
+    region: location.admin1 || null,
+    country: location.country || null,
+    temperature: Number(current.temperature_2m),
+    apparentTemperature: Number(current.apparent_temperature),
+    minTemperature: Number(minTemperature),
+    maxTemperature: Number(maxTemperature),
+    windSpeed: Number(current.wind_speed_10m),
+    weatherCode: Number(current.weather_code),
+    condition: weatherCondition(Number(current.weather_code)),
+    fetchedAt: new Date().toISOString()
+  };
+  weatherCache.set(cacheKey, { expiresAt: Date.now() + 10 * 60 * 1_000, value });
+  return value;
+};
+
 const INVOICE_PDF_MAX_BYTES = 20 * 1024 * 1024;
 
 const safeDownloadFileName = (value: unknown) => {
@@ -826,6 +941,11 @@ const registerIpc = () => {
     const token = requireSessionToken();
     return backendRequest('/dashboard', {}, token);
   });
+  secureHandle('data:getWeather', async (city: string) => {
+    requireSessionToken();
+    return fetchStartWeather(city);
+  });
+
 
   secureHandle('service:searchCustomers', async (query: string) => {
     const token = requireSessionToken();
