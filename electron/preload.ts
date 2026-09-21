@@ -50,7 +50,8 @@ contextBridge.exposeInMainWorld('lockOn', {
     review: (revenueId: string, action: 'APPROVE' | 'REJECT') => ipcRenderer.invoke('finance:review', revenueId, action)
   },
   data: {
-    getDashboard: () => ipcRenderer.invoke('data:getDashboard')
+    getDashboard: () => ipcRenderer.invoke('data:getDashboard'),
+    getWeather: (city: string) => ipcRenderer.invoke('data:getWeather', city)
   },
   service: {
     searchCustomers: (query: string) => ipcRenderer.invoke('service:searchCustomers', query),
