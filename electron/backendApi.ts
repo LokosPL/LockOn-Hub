@@ -74,7 +74,11 @@ export async function backendRequest<T>(
       redirect: 'error',
       cache: 'no-store'
     });
-  } catch {
+  } catch (error) {
+    const name = error instanceof Error ? error.name : '';
+    if (name === 'AbortError' || name === 'TimeoutError') {
+      throw new Error('LockOn API nie odpowiedziało na czas. Sprawdź połączenie i spróbuj ponownie.');
+    }
     throw new Error(
       `Nie można połączyć się z LockOn API (${activeApiBaseUrl}). ` +
       'Uruchom ponownie ServiceOS. Jeśli problem wróci, zgłoś go w Pomocy.'
@@ -101,16 +105,21 @@ export async function backendRequest<T>(
   return data as T;
 }
 
-export const backendGoogleCodeLogin = (payload: { code:string; codeVerifier:string; redirectUri:string }) =>
+export const backendGoogleCodeLogin = (
+  payload: { code:string; codeVerifier:string; redirectUri:string },
+  signal?: AbortSignal
+) =>
   backendRequest<BackendLoginPayload>('/auth/google-code', {
     method: 'POST',
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal
   });
 
-export const backendGoogleLogin = (idToken: string) =>
+export const backendGoogleLogin = (idToken: string, signal?: AbortSignal) =>
   backendRequest<BackendLoginPayload>('/auth/google', {
     method: 'POST',
-    body: JSON.stringify({ idToken })
+    body: JSON.stringify({ idToken }),
+    signal
   });
 
 export const backendDevOwnerLogin = () =>
