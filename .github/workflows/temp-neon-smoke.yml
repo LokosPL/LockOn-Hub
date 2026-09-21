@@ -2,7 +2,7 @@ name: Temp Neon integration smoke
 
 on:
   push:
-    branches: ["feature/v0.21-service-finance-invoices"]
+    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh"]
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
@@ -78,13 +78,36 @@ jobs:
         run: |
           set -euo pipefail
           target_branch="tmp/v021-service-finance-smoke"
-          target_path=".temp/temp-neon-lockonapi.b64"
+          base64 -w0 temp-neon-lockonapi.zip > bundle-full.b64
+          split -b 180000 -d -a 2 bundle-full.b64 bundle-part-
+          part_count=0
+          for part_file in bundle-part-*; do
+            suffix="$(printf '%02d' "$part_count")"
+            target_path=".temp/temp-neon-lockonapi.part${suffix}"
+            current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
+            TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" PART_FILE="$part_file" node - <<'NODE'
+          const fs=require('fs');
+          const payload={
+            message:'ci: stage exact temp Neon bundle part',
+            content:fs.readFileSync(process.env.PART_FILE).toString('base64'),
+            branch:process.env.TARGET_BRANCH
+          };
+          if(process.env.CURRENT_SHA) payload.sha=process.env.CURRENT_SHA;
+          fs.writeFileSync('bundle-upload.json',JSON.stringify(payload));
+          NODE
+            gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${target_path}" --input bundle-upload.json >/dev/null
+            part_count=$((part_count + 1))
+          done
+
+          bundle_sha="$(sha256sum temp-neon-lockonapi.zip | awk '{print $1}')"
+          printf '{"partCount":%d,"chunkSize":180000,"sha256":"%s"}\n' "$part_count" "$bundle_sha" > bundle-manifest.json
+          target_path=".temp/temp-neon-lockonapi.manifest.json"
           current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
           TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" node - <<'NODE'
           const fs=require('fs');
           const payload={
-            message:'ci: stage exact temp Neon bundle',
-            content:Buffer.from(fs.readFileSync('temp-neon-lockonapi.zip').toString('base64'),'utf8').toString('base64'),
+            message:'ci: stage exact temp Neon bundle manifest',
+            content:fs.readFileSync('bundle-manifest.json').toString('base64'),
             branch:process.env.TARGET_BRANCH
           };
           if(process.env.CURRENT_SHA) payload.sha=process.env.CURRENT_SHA;
@@ -253,21 +276,17 @@ jobs:
           node -e "const d=require('./active-other.json');if(d.activePointId!==process.argv[1])throw new Error('Active point switch failed')" "$OTHER_POINT"
 
           run_suffix="${GITHUB_RUN_ID:-0}${GITHUB_RUN_ATTEMPT:-0}"
-          imei="$(printf '860000%09d' "$((GITHUB_RUN_ID % 1000000000))")"
-          imei="${imei:0:15}"
-          intake="$(node - <<'NODE' "$ORIGINAL_POINT" "$run_suffix" "$imei"
-          const [wrongPoint,suffix,imei]=process.argv.slice(2);
+          intake="$(node - <<'NODE' "$ORIGINAL_POINT" "$run_suffix"
+          const [wrongPoint,suffix]=process.argv.slice(2);
           process.stdout.write(JSON.stringify({
             pointId:wrongPoint,
             firstName:'CI',
             lastName:'Smoke '+suffix,
             email:'serviceos-ci-'+suffix+'@invalid.test',
             phone:'+48123456789',
-            brand:'LockOn',
+            brand:'Samsung',
             model:'CI Smoke',
-            imei,
-            serialNumber:'CI-'+suffix,
-            deviceNotes:'Automatyczny test temp Neon. Dane syntetyczne.',
+            deviceNotes:'Automatyczny test temp Neon bez IMEI i numeru seryjnego.',
             issueDescription:'Automatyczny test intake, PDF i logistyki.',
             orderType:'REPAIR'
           }));
@@ -280,6 +299,7 @@ jobs:
           if(!d.order?.id)throw new Error('Order was not created');
           if(d.order.pointId!==expected)throw new Error('Backend trusted spoofed pointId instead of session active point');
           if(d.order.handlingMode!=='STANDARD')throw new Error('Repair did not derive STANDARD handling mode');
+          if(d.order.assignedTechnicianId!==null)throw new Error('OWNER intake unexpectedly assigned a technician');
           if(d.serviceCard?.required!==true)throw new Error('Service card choice is not required');
           if(d.notification?.queued!==true)throw new Error('Mandatory intake email was not queued');
           NODE

@@ -244,8 +244,37 @@ jobs:
           }
 
           $api = Get-Content functions/lockon-api.mjs -Raw
-          @("COALESCE(s.current_point_id,s.home_point_id,s.point_id)","t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')","!imei||!serialNumber||!deviceNotes","FOR UPDATE") | ForEach-Object {
+          @("COALESCE(s.current_point_id,s.home_point_id,s.point_id)","t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')","FOR UPDATE") | ForEach-Object {
             if (-not $api.Contains($_)) { throw "Missing v1 service safety regression contract: $_" }
+          }
+
+          $brands = Get-Content src/config/phoneBrands.ts -Raw
+          @("'Apple'","'Samsung'","'Xiaomi'","'Huawei'","'Motorola'","'Nokia'","'Nothing'","'OnePlus'") | ForEach-Object {
+            if (-not $brands.Contains($_)) { throw "Missing phone brand suggestion: $_" }
+          }
+
+          @("service-brand-suggestions","service-order-type-picker",'type="date"',"IMEI <em>opcjonalnie</em>","Numer seryjny <em>opcjonalnie</em>") | ForEach-Object {
+            if (-not $service.Contains($_)) { throw "Missing simplified intake UI contract: $_" }
+          }
+          @("<span>Punkt przyjęcia</span>","<span>Sposób obsługi</span>","form.assignedTechnicianId") | ForEach-Object {
+            if ($service.Contains($_)) { throw "Legacy intake control returned: $_" }
+          }
+
+          @(
+            "TECHNICIAN_AT_INTAKE",
+            "!firstName||!lastName||!brand||!model||!deviceNotes||!issue",
+            "IMEI powinien zawierać 14–16 cyfr.",
+            "serviceCardNumber='KS-'",
+            "customerPortalBaseUrl:PUBLIC_PORTAL_URL+'/klient.html'",
+            "Cena orientacyjna",
+            "Warunki przyjęcia i odbioru",
+            "Brak odbioru nie oznacza automatycznego przeniesienia własności urządzenia."
+          ) | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing intake/card regression contract: $_" }
+          }
+          $createOrderValidation = "!firstName||!lastName||!brand||!model||!deviceNotes||!issue"
+          if (-not $api.Contains($createOrderValidation)) {
+            throw "Create-order validation no longer matches the optional IMEI/serial contract."
           }
 
       - name: Typecheck renderer

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BadgeDollarSign, BellRing, CalendarClock, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus,
   Clock3, FileArchive, History, IdCard, Mail, MailCheck, MapPin, MessageSquareText, NotebookPen, PackageCheck, Printer, RefreshCw, RotateCcw, Save, Search, Send,
-  Settings2, Smartphone, StickyNote, Truck, UserCog, UserRound, XCircle
+  Settings2, Smartphone, StickyNote, Truck, UserCog, UserRound, Wrench, XCircle
 } from 'lucide-react';
 import { InvoiceWarehouse } from '../components/InvoiceWarehouse';
 import { MonthlyInvoicePrompt } from '../components/MonthlyInvoicePrompt';
@@ -26,6 +26,7 @@ import type {
   ServiceTransfer
 } from '../types/electron';
 import type { UserRole } from '../config/roles';
+import { PHONE_BRANDS } from '../config/phoneBrands';
 
 interface ServicePageProps {
   auth: AuthState;
@@ -37,15 +38,21 @@ const emptyForm = {
   firstName: '', lastName: '', email: '', phone: '',
   brand: '', model: '', imei: '', serialNumber: '', deviceNotes: '',
   issueDescription: '', orderType: 'REPAIR' as 'REPAIR' | 'COMPLAINT',
-  assignedTechnicianId: '', estimatedCost: '', estimatedCompletionAt: ''
+  estimatedCost: '', estimatedCompletionAt: ''
 };
 
-const toLocalDateTimeInput = (value?: string | null) => {
+const toLocalDateInput = (value?: string | null) => {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return shifted.toISOString().slice(0, 16);
+  return shifted.toISOString().slice(0, 10);
+};
+
+const toApiDateTime = (value: string) => {
+  if (!value) return null;
+  const date = new Date(value + 'T12:00:00');
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
 type OrderDetailsDraft = {
@@ -86,6 +93,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const isActualTechnician = auth.role === 'TECHNICIAN';
   const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'NEW');
   const [form, setForm] = useState(emptyForm);
+  const [brandOpen, setBrandOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [orderFilter, setOrderFilter] = useState('ALL');
   const [matches, setMatches] = useState<ServiceCustomer[]>([]);
@@ -116,7 +124,6 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
   const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
-  const [technicians, setTechnicians] = useState<ServiceTechnician[]>([]);
   const [servicePoints, setServicePoints] = useState<AdminPoint[]>([]);
   const [transfers, setTransfers] = useState<ServiceTransfer[]>([]);
   const [transferDrafts, setTransferDrafts] = useState<Record<string,{toPointId:string;note:string}>>({});
@@ -166,6 +173,17 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     () => orderFilter === 'ALL' ? orders : orders.filter((order)=>order.workflow?.flags.includes(orderFilter)),
     [orders,orderFilter]
   );
+
+  const brandSuggestions = useMemo(() => {
+    const term = form.brand.trim().toLocaleLowerCase('pl-PL');
+    if (!term) return PHONE_BRANDS.slice(0, 10);
+    const starts = PHONE_BRANDS.filter((brand) => brand.toLocaleLowerCase('pl-PL').startsWith(term));
+    const contains = PHONE_BRANDS.filter((brand) => {
+      const normalized = brand.toLocaleLowerCase('pl-PL');
+      return !normalized.startsWith(term) && normalized.includes(term);
+    });
+    return [...starts, ...contains].slice(0, 10);
+  }, [form.brand]);
 
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -223,7 +241,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         assignedTechnicianId: order.assignedTechnicianId ?? '',
         estimatedCost: order.estimatedCost == null ? '' : String(order.estimatedCost),
         finalCost: order.finalCost == null ? '' : String(order.finalCost),
-        estimatedCompletionAt: toLocalDateTimeInput(order.estimatedCompletionAt)
+        estimatedCompletionAt: toLocalDateInput(order.estimatedCompletionAt)
       }
     }));
 
@@ -327,16 +345,6 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   }, [pointId, canManageGmail]);
 
   useEffect(() => {
-    if (!pointId || !canManageOrderMeta) {
-      setTechnicians([]);
-      return;
-    }
-    void window.lockOn.service.listTechnicians(pointId)
-      .then(setTechnicians)
-      .catch(() => setTechnicians([]));
-  }, [pointId, canManageOrderMeta]);
-
-  useEffect(() => {
     if (!focusOrderId || expandedOrderId === focusOrderId) return;
     const order = orders.find((item)=>item.id===focusOrderId);
     if (!order) return;
@@ -375,8 +383,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     if (submitBusyRef.current) return;
     const cleanEmail = form.email.trim();
     const cleanPhone = form.phone.replace(/\D/g, '');
-    if (!form.firstName.trim() || !form.lastName.trim() || !form.brand.trim() || !form.model.trim() || !form.imei.trim() || !form.serialNumber.trim() || !form.deviceNotes.trim() || !form.issueDescription.trim()) {
-      setError('Uzupełnij wszystkie wymagane dane klienta i urządzenia, w tym IMEI, numer seryjny, uwagi i opis usterki.');
+    if (!form.firstName.trim() || !form.lastName.trim() || !form.brand.trim() || !form.model.trim() || !form.deviceNotes.trim() || !form.issueDescription.trim()) {
+      setError('Uzupełnij wymagane dane klienta i urządzenia: markę, model, uwagi oraz opis usterki.');
       return;
     }
     if (!cleanEmail || !cleanPhone) {
@@ -405,8 +413,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         imei: cleanImei,
         pointId,
         estimatedCost: canEditCosts && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
-        assignedTechnicianId: canManageOrderMeta ? form.assignedTechnicianId || undefined : undefined,
-        estimatedCompletionAt: form.estimatedCompletionAt ? new Date(form.estimatedCompletionAt).toISOString() : undefined
+        estimatedCompletionAt: form.estimatedCompletionAt ? (toApiDateTime(form.estimatedCompletionAt) ?? undefined) : undefined
       });
       setResult(created);
       if(created.serviceCard?.required && created.order.orderNumber != null){
@@ -520,7 +527,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         deviceNotes: draft.deviceNotes,
         estimatedCompletionAt: order.handlingMode === 'TRANSFER_ONLY'
           ? null
-          : (draft.estimatedCompletionAt ? new Date(draft.estimatedCompletionAt).toISOString() : null),
+          : (draft.estimatedCompletionAt ? toApiDateTime(draft.estimatedCompletionAt) : null),
         ...(order.handlingMode !== 'TRANSFER_ONLY' && canManageOrderMeta ? {
           assignedTechnicianId: draft.assignedTechnicianId || null
         } : {}),
@@ -539,7 +546,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           assignedTechnicianId: updated.assignedTechnicianId ?? '',
           estimatedCost: updated.estimatedCost == null ? '' : String(updated.estimatedCost),
           finalCost: updated.finalCost == null ? '' : String(updated.finalCost),
-          estimatedCompletionAt: toLocalDateTimeInput(updated.estimatedCompletionAt)
+          estimatedCompletionAt: toLocalDateInput(updated.estimatedCompletionAt)
         }
       }));
       if (customerCards[order.customerId]) {
@@ -800,14 +807,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         <section className="service-card-choice-dialog" role="dialog" aria-modal="true" aria-labelledby="service-card-choice-title">
           <div className="service-card-choice-icon"><Printer size={24}/></div>
           <span>KARTA SERWISOWA · ZLECENIE #{cardChoice.orderNumber}</span>
-          <h2 id="service-card-choice-title">Jaką kartę przygotować przy ladzie?</h2>
-          <p>Karta klienta PDF została automatycznie przypięta do potwierdzenia e-mail. Wybierz wydruk dla obsługi fizycznej urządzenia.</p>
+          <h2 id="service-card-choice-title">Przygotuj kartę dla klienta</h2>
+          <p>Wybierz sposób przekazania dokumentów. Karta klienta jest również dostępna w jego panelu i może zostać wysłana e-mailem.</p>
           <div className="service-card-choice-options">
             <button disabled={cardBusy} onClick={()=>void openCreatedServiceCard('PHYSICAL_AND_ONLINE')}>
-              <strong>A4 · fizyczna + online</strong><span>Pozioma kartka: karta urządzenia + karta klienta, z linią cięcia pośrodku.</span>
+              <Printer size={20}/>
+              <strong>Wydruk przy ladzie</strong>
+              <span>A4 z kartą urządzenia i kartą klienta. Gotowe do przecięcia i wydania razem ze sprzętem.</span>
             </button>
             <button disabled={cardBusy} onClick={()=>void openCreatedServiceCard('ONLINE_ONLY')}>
-              <strong>Tylko online</strong><span>Drukowana jest wyłącznie karta do urządzenia. Klient korzysta z PDF/QR z e-maila i panelu.</span>
+              <Smartphone size={20}/>
+              <strong>Karta online</strong>
+              <span>Drukowana jest karta urządzenia, a klient korzysta z PDF, kodu i panelu WWW.</span>
             </button>
           </div>
           {cardBusy && <small>Generuję zabezpieczony PDF…</small>}
@@ -868,21 +879,50 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
           <section className="panel-card service-card">
             <div className="panel-heading"><div><span className="eyebrow"><Smartphone size={13}/> URZĄDZENIE</span><h2>Telefon i usterka</h2></div></div>
-            <div className="service-form-grid">
-              <label><span>Marka</span><input value={form.brand} onChange={(e)=>update('brand',e.target.value)} /></label>
-              <label><span>Model</span><input value={form.model} onChange={(e)=>update('model',e.target.value)} /></label>
-              <label><span>IMEI</span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr"/></label>
-              <label><span>Numer seryjny</span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Wymagany"/></label>
-              <div className="service-auto-intake full">
-                <div><MapPin size={15}/><span>Punkt przyjęcia</span><strong>{pointOptions.find((p)=>p.id===pointId)?.name ?? 'Brak aktywnego punktu'}</strong></div>
-                <div><ClipboardList size={15}/><span>Sposób obsługi</span><strong>{form.orderType==='COMPLAINT'?'Reklamacja — ustawione automatycznie':'Standardowa naprawa — ustawione automatycznie'}</strong></div>
+            <div className="service-form-grid service-intake-grid">
+              <label className="service-brand-field">
+                <span>Marka</span>
+                <div className="service-brand-combobox">
+                  <input
+                    value={form.brand}
+                    onFocus={()=>setBrandOpen(true)}
+                    onBlur={()=>window.setTimeout(()=>setBrandOpen(false),120)}
+                    onChange={(e)=>{update('brand',e.target.value);setBrandOpen(true);}}
+                    placeholder="Zacznij wpisywać, np. Samsung"
+                    autoComplete="off"
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded={brandOpen && brandSuggestions.length > 0}
+                  />
+                  {brandOpen && brandSuggestions.length > 0 && <div className="service-brand-suggestions" role="listbox">
+                    {brandSuggestions.map((brand)=><button
+                      type="button"
+                      key={brand}
+                      role="option"
+                      onMouseDown={(event)=>event.preventDefault()}
+                      onClick={()=>{update('brand',brand);setBrandOpen(false);}}
+                    ><Smartphone size={14}/><span>{brand}</span></button>)}
+                  </div>}
+                </div>
+              </label>
+              <label><span>Model</span><input value={form.model} onChange={(e)=>update('model',e.target.value)} placeholder="Np. Galaxy S24"/></label>
+              <label><span>IMEI <em>opcjonalnie</em></span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr, jeśli dostępny"/></label>
+              <label><span>Numer seryjny <em>opcjonalnie</em></span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Jeśli dostępny"/></label>
+              <div className="service-order-type-field full">
+                <span>Typ zlecenia</span>
+                <div className="service-order-type-picker" role="group" aria-label="Typ zlecenia">
+                  <button type="button" className={form.orderType==='REPAIR'?'active':''} onClick={()=>update('orderType','REPAIR')}>
+                    <i><Wrench size={18}/></i><span><strong>Naprawa</strong><small>Standardowe przyjęcie urządzenia do serwisu.</small></span>
+                  </button>
+                  <button type="button" className={form.orderType==='COMPLAINT'?'active':''} onClick={()=>update('orderType','COMPLAINT')}>
+                    <i><RotateCcw size={18}/></i><span><strong>Reklamacja</strong><small>Obsługa reklamacyjna z właściwym przebiegiem zlecenia.</small></span>
+                  </button>
+                </div>
               </div>
-              <label><span>Typ</span><select value={form.orderType} onChange={(e)=>update('orderType', e.target.value as 'REPAIR' | 'COMPLAINT')}><option value="REPAIR">Naprawa</option><option value="COMPLAINT">Reklamacja</option></select></label>
-              {canEditStatus && <label><span>Przewidywany termin</span><input type="datetime-local" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>}
-              {canManageOrderMeta && <label><span>Technik</span><select value={form.assignedTechnicianId} onChange={(e)=>update('assignedTechnicianId',e.target.value)}><option value="">Nieprzypisany</option>{technicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+              {canEditStatus && <label><span>Przewidywany termin</span><input type="date" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>}
               {canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>}
-              <label className="full"><span>Uwagi do urządzenia</span><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Stan obudowy, hasło serwisowe przekazane osobno, akcesoria…"/></label>
-              <label className="full"><span>Opis usterki</span><textarea rows={6} value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} /></label>
+              <label className="full"><span>Uwagi do urządzenia</span><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Stan obudowy, akcesoria, ślady uszkodzeń, dodatkowe informacje…"/></label>
+              <label className="full"><span>Opis usterki</span><textarea rows={6} value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder="Opisz objawy i problem zgłoszony przez klienta."/></label>
             </div>
             <button className="button primary wide service-submit" disabled={busy || !pointId} onClick={()=>void submit()}>{busy ? 'Zapisywanie…' : 'Utwórz zlecenie'}</button>
             <small className="service-intake-email-note">Po przyjęciu klient zawsze otrzymuje e-mail z kartą serwisową PDF i bezpośrednim QR do swojego panelu.</small>
@@ -943,7 +983,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       <div className="service-order-quick-meta">
                         {order.handlingMode === 'TRANSFER_ONLY'
                           ? <span className="transfer-only-chip"><Truck size={11}/>Tylko przekazanie</span>
-                          : <><span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span><span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleString('pl-PL') : 'Brak terminu'}</span></>}
+                          : <><span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span><span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL') : 'Brak terminu'}</span></>}
                         <span><MapPin size={11}/>Macierzysty: {order.homePointName || order.pointName}</span>
                         <span><Truck size={11}/>Lokalizacja: {order.currentLocationLabel || order.currentPointName || order.pointName}</span>
                         {canEditCosts && order.handlingMode !== 'TRANSFER_ONLY' && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
@@ -984,7 +1024,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="service-details-grid">
                             <label><span>IMEI</span><input disabled={!canEditIntakeHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
                             <label><span>Numer seryjny</span><input disabled={!canEditIntakeHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
-                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditStatus && <label><span>Przewidywany termin</span><input disabled={!canEditOrderHere} type="datetime-local" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditStatus && <label><span>Przewidywany termin</span><input disabled={!canEditOrderHere} type="date" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditOrderHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}

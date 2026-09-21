@@ -1452,22 +1452,27 @@ const pdfToBuffer = (definition) => new Promise((resolve,reject)=>{
 
 const loadServiceCardContext = async (orderId) => {
   const row=(await q(
-    "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.received_at,s.estimated_completion_at,s.point_id,s.home_point_id,s.current_point_id,c.id AS customer_id,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,p.name AS point_name,p.city AS point_city FROM service_orders s JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id WHERE s.id=$1 LIMIT 1",
+    "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.received_at,s.estimated_completion_at,s.estimated_cost,s.currency,s.point_id,s.home_point_id,s.current_point_id,c.id AS customer_id,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,p.name AS point_name,p.city AS point_city FROM service_orders s JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id WHERE s.id=$1 LIMIT 1",
     [orderId]
   )).rows[0];
   if(!row)throw Object.assign(new Error('Nie znaleziono zlecenia.'),{status:404,code:'NOT_FOUND'});
   const [portal,card]=await Promise.all([ensureCustomerPortalCode(row.customer_id),ensureServiceCardIdentity(orderId)]);
   const customerUrl=customerPortalAutoUrl(portal.code,orderId);
   const staffUrl=staffServiceScanUrl(card.staffScanToken);
+  const receivedAt=new Date(row.received_at);
+  const serviceCardNumber='KS-'+(Number.isNaN(receivedAt.getTime())?'0000':receivedAt.getFullYear())+'-'+String(Number(row.order_number)).padStart(6,'0');
   return {
     orderId:row.id,
     orderNumber:Number(row.order_number),
+    serviceCardNumber,
     orderType:row.order_type,
     handlingMode:row.handling_mode||'STANDARD',
     issueDescription:row.issue_description,
     status:row.status,
     receivedAt:row.received_at,
     estimatedCompletionAt:row.estimated_completion_at||null,
+    estimatedCost:row.estimated_cost==null?null:Number(row.estimated_cost),
+    currency:String(row.currency||'PLN').trim()||'PLN',
     pointId:row.point_id,
     pointName:row.point_name,
     pointCity:row.point_city||'',
@@ -1480,6 +1485,7 @@ const loadServiceCardContext = async (orderId) => {
     serialNumber:row.serial_number||'',
     deviceNotes:row.device_notes||'',
     customerPortalCode:portal.code,
+    customerPortalBaseUrl:PUBLIC_PORTAL_URL+'/klient.html',
     customerPortalUrl:customerUrl,
     staffScanCode:card.staffScanCode,
     staffScanUrl:staffUrl,
@@ -1488,23 +1494,39 @@ const loadServiceCardContext = async (orderId) => {
   };
 };
 
+const formatServiceCardDate = (value) => {
+  if(!value)return '—';
+  const date=new Date(value);
+  return Number.isNaN(date.getTime())?'—':date.toLocaleDateString('pl-PL',{timeZone:'Europe/Warsaw'});
+};
+
+const formatServiceCardMoney = (value,currency='PLN') =>
+  value==null?'Nie określono':new Intl.NumberFormat('pl-PL',{style:'currency',currency}).format(Number(value));
+
 const serviceCardHeader = (context,title,subtitle) => ({
   stack:[
     {columns:[
-      {text:[{text:'LockOn',bold:true,color:'#ff7048'},{text:'  ServiceOS',color:'#3f4650'}],fontSize:16},
-      {text:'#'+context.orderNumber,alignment:'right',fontSize:16,bold:true,color:'#111827'}
+      {stack:[
+        {text:[{text:'LockOn',bold:true,color:'#ff7048'},{text:'  ServiceOS',color:'#475467'}],fontSize:15},
+        {text:title,fontSize:18,bold:true,margin:[0,8,0,2],color:'#101828'},
+        {text:subtitle,fontSize:7.5,color:'#667085'}
+      ],width:'*'},
+      {stack:[
+        {text:'NUMER KARTY',fontSize:6.5,bold:true,color:'#98a2b3',alignment:'right'},
+        {text:context.serviceCardNumber,fontSize:11.5,bold:true,color:'#101828',alignment:'right',margin:[0,2,0,4]},
+        {text:'Zlecenie #'+context.orderNumber,fontSize:7.5,color:'#667085',alignment:'right'}
+      ],width:132}
     ]},
-    {text:title,fontSize:19,bold:true,margin:[0,12,0,2],color:'#111827'},
-    {text:subtitle,fontSize:9,color:'#667085',margin:[0,0,0,12]}
+    {canvas:[{type:'line',x1:0,y1:0,x2:515,y2:0,lineWidth:1,lineColor:'#eaecf0'}],margin:[0,10,0,10]}
   ]
 });
 
 const serviceCardInfoTable = (rows) => ({
   table:{
-    widths:[92,'*'],
+    widths:[94,'*'],
     body:rows.map(([label,value])=>[
-      {text:String(label),fontSize:8,bold:true,color:'#667085',margin:[0,3,0,3]},
-      {text:String(value||'—'),fontSize:9,color:'#101828',margin:[0,3,0,3]}
+      {text:String(label),fontSize:7,bold:true,color:'#667085',margin:[0,2.5,0,2.5]},
+      {text:String(value||'—'),fontSize:8,color:'#101828',margin:[0,2.5,0,2.5]}
     ])
   },
   layout:{
@@ -1514,52 +1536,77 @@ const serviceCardInfoTable = (rows) => ({
   }
 });
 
+const serviceCardTerms = [
+  'Klient oświadcza, że jest właścicielem urządzenia albo jest uprawniony do zlecenia jego serwisu.',
+  'Urządzenie wydawane jest na podstawie karty serwisowej albo po potwierdzeniu uprawnienia do odbioru w panelu klienta lub na podstawie danych zlecenia.',
+  'Przed oddaniem sprzętu należy wykonać kopię zapasową. Serwis nie gwarantuje zachowania danych, gdy ich utrata jest skutkiem usterki lub niezbędnych czynności diagnostycznych albo naprawczych; nie ogranicza to odpowiedzialności wynikającej z bezwzględnie obowiązujących przepisów.',
+  'Cena orientacyjna jest szacunkiem. Wady ukryte lub dodatkowe uszkodzenia mogą wymagać zmiany zakresu i kosztu. Przed pracami wykraczającymi poza zaakceptowaną wycenę klient otrzyma informację do akceptacji.',
+  'Urządzenie należy odebrać w ciągu 90 dni od powiadomienia o gotowości. Po tym terminie serwis może wezwać do odbioru i naliczyć uzasadnione koszty przechowania, jeżeli przewiduje je zaakceptowany regulamin lub cennik. Brak odbioru nie oznacza automatycznego przeniesienia własności urządzenia.'
+];
+
+const serviceCardTermsBlock = () => ({
+  stack:[
+    {text:'Warunki przyjęcia i odbioru',fontSize:8,bold:true,color:'#344054',margin:[0,8,0,4]},
+    {
+      ul:serviceCardTerms.map((text)=>({text,fontSize:5.8,color:'#475467',lineHeight:1.12,margin:[0,0,0,2]})),
+      margin:[8,0,0,0]
+    }
+  ]
+});
+
 const deviceServiceCardContent = (context) => ({
   stack:[
-    serviceCardHeader(context,'Karta urządzenia','Identyfikator pozostaje z telefonem przez cały proces serwisowy.'),
+    serviceCardHeader(context,'Karta urządzenia','Identyfikator pozostaje z urządzeniem przez cały proces serwisowy.'),
     serviceCardInfoTable([
       ['Punkt macierzysty',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
       ['Klient',context.customerName],
       ['Urządzenie',context.device],
-      ['IMEI',context.imei||'—'],
-      ['Numer seryjny',context.serialNumber||'—'],
+      ['IMEI',context.imei||'Nie podano'],
+      ['Numer seryjny',context.serialNumber||'Nie podano'],
       ['Typ',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
+      ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
+      ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
       ['Opis usterki',context.issueDescription],
       ['Uwagi',context.deviceNotes||'—'],
-      ['Przyjęto',new Date(context.receivedAt).toLocaleString('pl-PL',{timeZone:'Europe/Warsaw'})]
+      ['Przyjęto',formatServiceCardDate(context.receivedAt)]
     ]),
     {columns:[
       {stack:[
-        {text:'Kod pracownika',fontSize:8,bold:true,color:'#667085',margin:[0,12,0,3]},
-        {text:context.staffScanCode,fontSize:15,bold:true,color:'#101828',characterSpacing:1},
-        {text:'Zeskanuj w mobilnym panelu ServiceOS. Skan nie wykonuje operacji bez zalogowanego pracownika i właściwego punktu.',fontSize:7,color:'#667085',margin:[0,5,8,0]}
+        {text:'Kod pracownika',fontSize:7,bold:true,color:'#667085',margin:[0,9,0,2]},
+        {text:context.staffScanCode,fontSize:13,bold:true,color:'#101828',characterSpacing:1},
+        {text:'Skan wymaga zalogowanego pracownika i właściwego punktu.',fontSize:6.2,color:'#667085',margin:[0,4,8,0]}
       ],width:'*'},
-      {qr:context.staffScanUrl,fit:92,alignment:'right',width:100}
-    ],margin:[0,4,0,0]},
-    {text:'NIE USUWAĆ — karta identyfikuje urządzenie w logistyce ServiceOS.',fontSize:8,bold:true,color:'#b42318',margin:[0,10,0,0]}
+      {qr:context.staffScanUrl,fit:78,alignment:'right',width:84}
+    ],margin:[0,2,0,0]},
+    {text:'NIE USUWAĆ — karta identyfikuje urządzenie w logistyce ServiceOS.',fontSize:7,bold:true,color:'#b42318',margin:[0,7,0,0]}
   ]
 });
 
 const customerServiceCardContent = (context) => ({
   stack:[
-    serviceCardHeader(context,'Karta dla klienta','Potwierdzenie przyjęcia i bezpośredni dostęp do bieżącego zlecenia.'),
+    serviceCardHeader(context,'Karta serwisowa','Potwierdzenie przyjęcia urządzenia i dane dostępu do panelu klienta.'),
     serviceCardInfoTable([
       ['Klient',context.customerName],
       ['Urządzenie',context.device],
       ['Punkt',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
       ['Typ',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
+      ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
+      ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
       ['Opis usterki',context.issueDescription],
-      ['Przyjęto',new Date(context.receivedAt).toLocaleString('pl-PL',{timeZone:'Europe/Warsaw'})]
+      ['Przyjęto',formatServiceCardDate(context.receivedAt)]
     ]),
     {columns:[
       {stack:[
-        {text:'Twój kod klienta',fontSize:8,bold:true,color:'#667085',margin:[0,12,0,3]},
-        {text:context.customerPortalCode,fontSize:13,bold:true,color:'#101828',characterSpacing:.5},
-        {text:'Zeskanuj QR — kod zostanie przekazany do portalu automatycznie, bez ręcznego przepisywania.',fontSize:7,color:'#667085',margin:[0,5,8,0]},
-        {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:8,bold:true,color:'#ff7048',margin:[0,9,0,0]}
+        {text:'Panel klienta',fontSize:7,bold:true,color:'#667085',margin:[0,8,0,2]},
+        {text:context.customerPortalBaseUrl,fontSize:7.2,bold:true,color:'#175cd3'},
+        {text:'Kod klienta',fontSize:6.5,bold:true,color:'#667085',margin:[0,6,0,2]},
+        {text:context.customerPortalCode,fontSize:12,bold:true,color:'#101828',characterSpacing:.5},
+        {text:'QR otwiera bezpośrednio to zlecenie i przekazuje kod automatycznie.',fontSize:6.2,color:'#667085',margin:[0,4,8,0]}
       ],width:'*'},
-      {qr:context.customerPortalUrl,fit:92,alignment:'right',width:100}
-    ],margin:[0,4,0,0]}
+      {qr:context.customerPortalUrl,fit:80,alignment:'right',width:88}
+    ],margin:[0,1,0,0]},
+    serviceCardTermsBlock(),
+    {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:7,bold:true,color:'#ff7048',margin:[0,6,0,0]}
   ]
 });
 
@@ -1567,30 +1614,30 @@ const renderServiceCardPdf = async (orderId,variant='CUSTOMER') => {
   const normalized=SERVICE_CARD_VARIANTS.has(String(variant).toUpperCase())?String(variant).toUpperCase():'CUSTOMER';
   const context=await loadServiceCardContext(orderId);
   const common={
-    defaultStyle:{font:'Roboto',fontSize:9},
-    info:{title:'LockOn ServiceOS · zlecenie #'+context.orderNumber,author:'LockOn ServiceOS',subject:'Karta serwisowa'},
+    defaultStyle:{font:'Roboto',fontSize:8},
+    info:{title:'LockOn ServiceOS · '+context.serviceCardNumber,author:'LockOn ServiceOS',subject:'Karta serwisowa'},
     compress:true
   };
   let definition;
   if(normalized==='PHYSICAL'){
     definition={
       ...common,
-      pageSize:'A4',pageOrientation:'landscape',pageMargins:[24,24,24,24],
+      pageSize:'A4',pageOrientation:'landscape',pageMargins:[20,20,20,20],
       content:[
         {columns:[
           {width:'48%',...deviceServiceCardContent(context)},
           {width:'4%',stack:[
-            {text:'PRZETNIJ TUTAJ',fontSize:6,bold:true,color:'#98a2b3',alignment:'center',margin:[0,235,0,0]}
+            {text:'PRZETNIJ TUTAJ',fontSize:5.5,bold:true,color:'#98a2b3',alignment:'center',margin:[0,235,0,0]}
           ]},
           {width:'48%',...customerServiceCardContent(context)}
         ],columnGap:7},
-        {canvas:[{type:'line',x1:0,y1:0,x2:0,y2:535,lineWidth:.8,lineColor:'#98a2b3',dash:{length:5,space:4}}],absolutePosition:{x:421,y:30}}
+        {canvas:[{type:'line',x1:0,y1:0,x2:0,y2:545,lineWidth:.8,lineColor:'#98a2b3',dash:{length:5,space:4}}],absolutePosition:{x:421,y:24}}
       ]
     };
   }else{
     definition={
       ...common,
-      pageSize:'A5',pageOrientation:'landscape',pageMargins:[24,24,24,24],
+      pageSize:'A5',pageOrientation:'landscape',pageMargins:[18,18,18,18],
       content:[normalized==='DEVICE'?deviceServiceCardContent(context):customerServiceCardContent(context)]
     };
   }
@@ -1598,7 +1645,7 @@ const renderServiceCardPdf = async (orderId,variant='CUSTOMER') => {
   return {
     context,
     variant:normalized,
-    fileName:(normalized==='CUSTOMER'?'Karta-klienta-':normalized==='DEVICE'?'Karta-urzadzenia-':'Karta-serwisowa-A4-')+'zlecenie-'+context.orderNumber+'.pdf',
+    fileName:(normalized==='CUSTOMER'?'Karta-klienta-':normalized==='DEVICE'?'Karta-urzadzenia-':'Karta-serwisowa-A4-')+context.serviceCardNumber+'.pdf',
     buffer
   };
 };
@@ -4271,26 +4318,21 @@ const route = async (request) => {
       if(Number.isNaN(eta.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
       estimatedCompletionAt=eta;
     }
-    const canManage=SERVICE_MANAGE_ROLES.has(u.role_code);
-    let assignedTechnicianId=u.role_code==='TECHNICIAN'?u.id:(canManage?(cleanText(body.assignedTechnicianId,80)||null):null);
+    const assignedTechnicianId=u.role_code==='TECHNICIAN'?u.id:null;
     let estimatedCost=null;
     if(!SERVICE_EDIT_ROLES.has(u.role_code)&&body.estimatedCost!==undefined&&body.estimatedCost!=='')throw Object.assign(new Error('Brak uprawnień do danych kosztowych zlecenia.'),{status:403});
     if(SERVICE_EDIT_ROLES.has(u.role_code)&&body.estimatedCost!==undefined&&body.estimatedCost!==''){
       estimatedCost=Number(body.estimatedCost);
       if(!Number.isFinite(estimatedCost)||estimatedCost<0)return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
     }
-    if(!canManage&&body.assignedTechnicianId&&String(body.assignedTechnicianId)!==u.id){
-      throw Object.assign(new Error('Nie możesz przypisać zlecenia do innego technika.'),{status:403});
+    if(body.assignedTechnicianId){
+      return json(request,{error:'TECHNICIAN_AT_INTAKE',message:'Technika przypisuje się po utworzeniu zlecenia.'},400);
     }
-    if(!firstName||!lastName||!brand||!model||!imei||!serialNumber||!deviceNotes||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij wszystkie wymagane dane klienta i urządzenia, w tym IMEI, numer seryjny, uwagi oraz opis usterki.'},400);
+    if(!firstName||!lastName||!brand||!model||!deviceNotes||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij wymagane dane klienta i urządzenia: markę, model, uwagi oraz opis usterki.'},400);
     if(!email||!phoneNorm)return json(request,{error:'CONTACT_REQUIRED',message:'Podaj adres e-mail i numer telefonu klienta. Karta serwisowa jest zawsze wysyłana e-mailem.'},400);
     if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json(request,{error:'EMAIL',message:'Adres e-mail klienta jest nieprawidłowy.'},400);
     if(phone&&phoneNorm.length<7)return json(request,{error:'PHONE',message:'Numer telefonu klienta jest zbyt krótki.'},400);
     if(imei&&!/^\d{14,16}$/.test(imei))return json(request,{error:'IMEI',message:'IMEI powinien zawierać 14–16 cyfr.'},400);
-    if(assignedTechnicianId&&u.role_code!=='TECHNICIAN'){
-      const tech=(await q("SELECT usr.id FROM users usr JOIN user_point_access a ON a.user_id=usr.id WHERE usr.id=$1 AND usr.role_code='TECHNICIAN' AND usr.status='ACTIVE' AND a.point_id=$2 LIMIT 1",[assignedTechnicianId,pointId])).rows[0];
-      if(!tech)return json(request,{error:'TECHNICIAN',message:'Wybrany technik nie ma dostępu do tego punktu.'},400);
-    }
     const client=await pool.connect();let reused=false,reusedDevice=false;try{
       await client.query('BEGIN');
       let customer=(await client.query("SELECT * FROM customers WHERE ($1<>'' AND lower(email)=lower($1)) OR ($2<>'' AND phone_normalized=$2) ORDER BY updated_at DESC LIMIT 1",[email,phoneNorm])).rows[0];
