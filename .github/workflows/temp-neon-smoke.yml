@@ -78,17 +78,18 @@ jobs:
         run: |
           set -euo pipefail
           target_branch="tmp/v021-service-finance-smoke"
-          base64 -w0 temp-neon-lockonapi.zip | fold -w 180000 > bundle-parts.txt
+          base64 -w0 temp-neon-lockonapi.zip > bundle-full.b64
+          split -b 120000 -d -a 2 bundle-full.b64 bundle-part-
           part_count=0
-          while IFS= read -r chunk; do
+          for part_file in bundle-part-*; do
             suffix="$(printf '%02d' "$part_count")"
             target_path=".temp/temp-neon-lockonapi.part${suffix}"
             current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
-            TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" CHUNK="$chunk" node - <<'NODE'
+            TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" PART_FILE="$part_file" node - <<'NODE'
           const fs=require('fs');
           const payload={
             message:'ci: stage exact temp Neon bundle part',
-            content:Buffer.from(process.env.CHUNK,'utf8').toString('base64'),
+            content:fs.readFileSync(process.env.PART_FILE).toString('base64'),
             branch:process.env.TARGET_BRANCH
           };
           if(process.env.CURRENT_SHA) payload.sha=process.env.CURRENT_SHA;
@@ -96,10 +97,10 @@ jobs:
           NODE
             gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${target_path}" --input bundle-upload.json >/dev/null
             part_count=$((part_count + 1))
-          done < bundle-parts.txt
+          done
 
           bundle_sha="$(sha256sum temp-neon-lockonapi.zip | awk '{print $1}')"
-          printf '{"partCount":%d,"chunkSize":180000,"sha256":"%s"}\n' "$part_count" "$bundle_sha" > bundle-manifest.json
+          printf '{"partCount":%d,"chunkSize":120000,"sha256":"%s"}\n' "$part_count" "$bundle_sha" > bundle-manifest.json
           target_path=".temp/temp-neon-lockonapi.manifest.json"
           current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
           TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" node - <<'NODE'
