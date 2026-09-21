@@ -140,6 +140,11 @@ jobs:
             if (-not $api.Contains($_)) { throw "Missing auth API timeout contract: $_" }
           }
 
+          $central = Get-Content functions/lockon-api.mjs -Raw
+          @("AbortSignal.timeout(15_000)","GOOGLE_UPSTREAM_TIMEOUT","status: 504") | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing central Google OAuth timeout contract: $_" }
+          }
+
           $login = Get-Content src/pages/LoginScreen.tsx -Raw
           if (-not $login.Contains("ServiceOS poczeka na Ciebie")) {
             throw "Login screen must explain that the app keeps waiting for browser completion."
