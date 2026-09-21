@@ -117,6 +117,35 @@ jobs:
             if (-not $settings.Contains($_)) { throw "Missing settings action guard: $_" }
           }
 
+      - name: Verify Start and browser polish contracts
+        shell: pwsh
+        run: |
+          $dashboard = Get-Content src/pages/Dashboard.tsx -Raw
+          @("start-clock","start-weather-card","data.getWeather","weatherCity") | ForEach-Object {
+            if (-not $dashboard.Contains($_)) { throw "Missing Start dashboard contract: $_" }
+          }
+          if ($dashboard.Contains("Pulpit wykorzystuje całe dostępne miejsce")) {
+            throw "Technical dashboard copy must not be visible to users."
+          }
+
+          $app = Get-Content src/App.tsx -Raw
+          @("auth.requestedPoint?.city","auth.point?.city","weatherCity={weatherCity}") | ForEach-Object {
+            if (-not $app.Contains($_)) { throw "Missing account-city weather contract: $_" }
+          }
+
+          $preload = Get-Content electron/preload.ts -Raw
+          if (-not $preload.Contains("data:getWeather")) { throw "Weather IPC is not exposed." }
+
+          $electron = Get-Content electron/main.ts -Raw
+          @("fetchStartWeather","geocoding-api.open-meteo.com","api.open-meteo.com/v1/forecast","AbortSignal.timeout(8_000)") | ForEach-Object {
+            if (-not $electron.Contains($_)) { throw "Missing weather safety contract: $_" }
+          }
+
+          $browser = Get-Content electron/browser.ts -Raw
+          @("setBorderRadius(14)","setBorderRadius(Math.max(10","setBackgroundColor('#0b0f14')") | ForEach-Object {
+            if (-not $browser.Contains($_)) { throw "Missing embedded browser clipping contract: $_" }
+          }
+
       - name: Verify service finance UI contracts
         shell: pwsh
         run: |
