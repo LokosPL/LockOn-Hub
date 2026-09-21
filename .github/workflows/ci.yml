@@ -17,6 +17,8 @@ on:
       - "vite.config.ts"
       - ".github/workflows/ci.yml"
       - ".github/workflows/neon-api-verify.yml"
+      - ".github/workflows/central-api-bundle.yml"
+      - ".github/workflows/temp-neon-smoke.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/prod-smoke.yml"
   pull_request:
@@ -36,6 +38,8 @@ on:
       - "vite.config.ts"
       - ".github/workflows/ci.yml"
       - ".github/workflows/neon-api-verify.yml"
+      - ".github/workflows/central-api-bundle.yml"
+      - ".github/workflows/temp-neon-smoke.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/prod-smoke.yml"
   workflow_dispatch:
@@ -268,7 +272,15 @@ jobs:
             "customerPortalBaseUrl:PUBLIC_PORTAL_URL+'/klient.html'",
             "Cena orientacyjna",
             "Warunki przyjęcia i odbioru",
-            "Brak odbioru nie oznacza automatycznego przeniesienia własności urządzenia."
+            "Brak odbioru nie oznacza automatycznego przeniesienia własności urządzenia.",
+            "Zeskanuj kod QR w ServiceOS, aby otworzyć zlecenie i obsłużyć urządzenie.",
+            "Kod ręczny — użyj, gdy nie możesz zeskanować QR.",
+            "customerServiceCardLandscapeContent",
+            "if(normalized==='CUSTOMER')",
+            "pageSize:'A4',pageOrientation:'landscape',pageMargins:[28,24,28,24]",
+            "renderServiceCardPdf(item.service_order_id,'CUSTOMER')",
+            "OWNER_OPERATIONAL_NAME = 'System LockOn'",
+            "OWNER_SUPPORT_NAME = 'Właściciel aplikacji'"
           ) | ForEach-Object {
             if (-not $api.Contains($_)) { throw "Missing intake/card regression contract: $_" }
           }

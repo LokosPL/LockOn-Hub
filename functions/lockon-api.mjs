@@ -1503,7 +1503,7 @@ const formatServiceCardDate = (value) => {
 const formatServiceCardMoney = (value,currency='PLN') =>
   value==null?'Nie określono':new Intl.NumberFormat('pl-PL',{style:'currency',currency}).format(Number(value));
 
-const serviceCardHeader = (context,title,subtitle) => ({
+const serviceCardHeader = (context,title,subtitle,lineWidth=515) => ({
   stack:[
     {columns:[
       {stack:[
@@ -1517,16 +1517,16 @@ const serviceCardHeader = (context,title,subtitle) => ({
         {text:'Zlecenie #'+context.orderNumber,fontSize:7.5,color:'#667085',alignment:'right'}
       ],width:132}
     ]},
-    {canvas:[{type:'line',x1:0,y1:0,x2:515,y2:0,lineWidth:1,lineColor:'#eaecf0'}],margin:[0,10,0,10]}
+    {canvas:[{type:'line',x1:0,y1:0,x2:lineWidth,y2:0,lineWidth:1,lineColor:'#eaecf0'}],margin:[0,10,0,10]}
   ]
 });
 
-const serviceCardInfoTable = (rows) => ({
+const serviceCardInfoTable = (rows,{labelWidth=94,labelFontSize=7,valueFontSize=8,rowMargin=2.5}={}) => ({
   table:{
-    widths:[94,'*'],
+    widths:[labelWidth,'*'],
     body:rows.map(([label,value])=>[
-      {text:String(label),fontSize:7,bold:true,color:'#667085',margin:[0,2.5,0,2.5]},
-      {text:String(value||'—'),fontSize:8,color:'#101828',margin:[0,2.5,0,2.5]}
+      {text:String(label),fontSize:labelFontSize,bold:true,color:'#667085',margin:[0,rowMargin,0,rowMargin]},
+      {text:String(value===null||value===undefined||value===''?'—':value),fontSize:valueFontSize,color:'#101828',margin:[0,rowMargin,0,rowMargin]}
     ])
   },
   layout:{
@@ -1544,19 +1544,19 @@ const serviceCardTerms = [
   'Urządzenie należy odebrać w ciągu 90 dni od powiadomienia o gotowości. Po tym terminie serwis może wezwać do odbioru i naliczyć uzasadnione koszty przechowania, jeżeli przewiduje je zaakceptowany regulamin lub cennik. Brak odbioru nie oznacza automatycznego przeniesienia własności urządzenia.'
 ];
 
-const serviceCardTermsBlock = () => ({
+const serviceCardTermsBlock = ({titleFontSize=8,fontSize=5.8,marginTop=8}={}) => ({
   stack:[
-    {text:'Warunki przyjęcia i odbioru',fontSize:8,bold:true,color:'#344054',margin:[0,8,0,4]},
+    {text:'Warunki przyjęcia i odbioru',fontSize:titleFontSize,bold:true,color:'#344054',margin:[0,marginTop,0,4]},
     {
-      ul:serviceCardTerms.map((text)=>({text,fontSize:5.8,color:'#475467',lineHeight:1.12,margin:[0,0,0,2]})),
+      ul:serviceCardTerms.map((text)=>({text,fontSize,color:'#475467',lineHeight:1.14,margin:[0,0,0,2]})),
       margin:[8,0,0,0]
     }
   ]
 });
 
-const deviceServiceCardContent = (context) => ({
+const deviceServiceCardContent = (context,{compact=false}={}) => ({
   stack:[
-    serviceCardHeader(context,'Karta urządzenia','Identyfikator pozostaje z urządzeniem przez cały proces serwisowy.'),
+    serviceCardHeader(context,'Karta urządzenia','Identyfikator pozostaje z urządzeniem przez cały proces serwisowy.',compact?350:515),
     serviceCardInfoTable([
       ['Punkt macierzysty',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
       ['Klient',context.customerName],
@@ -1569,32 +1569,39 @@ const deviceServiceCardContent = (context) => ({
       ['Opis usterki',context.issueDescription],
       ['Uwagi',context.deviceNotes||'—'],
       ['Przyjęto',formatServiceCardDate(context.receivedAt)]
-    ]),
+    ],compact?{labelWidth:82,labelFontSize:6.5,valueFontSize:7.3,rowMargin:2}:{labelWidth:94}),
     {columns:[
       {stack:[
-        {text:'Kod pracownika',fontSize:7,bold:true,color:'#667085',margin:[0,9,0,2]},
+        {text:'Kod ręczny',fontSize:7,bold:true,color:'#667085',margin:[0,9,0,2]},
         {text:context.staffScanCode,fontSize:13,bold:true,color:'#101828',characterSpacing:1},
-        {text:'Skan wymaga zalogowanego pracownika i właściwego punktu.',fontSize:6.2,color:'#667085',margin:[0,4,8,0]}
+        {text:'Kod ręczny — użyj, gdy nie możesz zeskanować QR.',fontSize:compact?5.7:6.4,color:'#667085',margin:[0,4,8,0]},
+        {text:'Skan wymaga zalogowanego pracownika i właściwego punktu.',fontSize:compact?5.5:6.1,color:'#667085',margin:[0,3,8,0]}
       ],width:'*'},
-      {qr:context.staffScanUrl,fit:78,alignment:'right',width:84}
-    ],margin:[0,2,0,0]},
+      {stack:[
+        {text:'Kod QR ServiceOS',fontSize:6.5,bold:true,color:'#667085',alignment:'center',margin:[0,6,0,2]},
+        {qr:context.staffScanUrl,fit:compact?68:84,alignment:'center',margin:[0,2,0,4]},
+        {text:'Zeskanuj kod QR w ServiceOS, aby otworzyć zlecenie i obsłużyć urządzenie.',fontSize:compact?5.4:6.2,color:'#475467',alignment:'center',lineHeight:1.1}
+      ],width:compact?116:150}
+    ],columnGap:compact?8:14,margin:[0,2,0,0]},
     {text:'NIE USUWAĆ — karta identyfikuje urządzenie w logistyce ServiceOS.',fontSize:7,bold:true,color:'#b42318',margin:[0,7,0,0]}
   ]
 });
 
-const customerServiceCardContent = (context) => ({
+const customerServiceCardContent = (context,{compact=false}={}) => ({
   stack:[
-    serviceCardHeader(context,'Karta serwisowa','Potwierdzenie przyjęcia urządzenia i dane dostępu do panelu klienta.'),
+    serviceCardHeader(context,'Karta serwisowa','Potwierdzenie przyjęcia urządzenia i dane dostępu do panelu klienta.',compact?350:515),
     serviceCardInfoTable([
       ['Klient',context.customerName],
       ['Urządzenie',context.device],
+      ['IMEI',context.imei||'Nie podano'],
+      ['Numer seryjny',context.serialNumber||'Nie podano'],
       ['Punkt',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
       ['Typ',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
       ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
       ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
       ['Opis usterki',context.issueDescription],
       ['Przyjęto',formatServiceCardDate(context.receivedAt)]
-    ]),
+    ],compact?{labelWidth:82,labelFontSize:6.5,valueFontSize:7.2,rowMargin:2}:{labelWidth:94}),
     {columns:[
       {stack:[
         {text:'Panel klienta',fontSize:7,bold:true,color:'#667085',margin:[0,8,0,2]},
@@ -1603,10 +1610,66 @@ const customerServiceCardContent = (context) => ({
         {text:context.customerPortalCode,fontSize:12,bold:true,color:'#101828',characterSpacing:.5},
         {text:'QR otwiera bezpośrednio to zlecenie i przekazuje kod automatycznie.',fontSize:6.2,color:'#667085',margin:[0,4,8,0]}
       ],width:'*'},
-      {qr:context.customerPortalUrl,fit:80,alignment:'right',width:88}
+      {qr:context.customerPortalUrl,fit:compact?72:80,alignment:'right',width:compact?80:88}
     ],margin:[0,1,0,0]},
-    serviceCardTermsBlock(),
+    serviceCardTermsBlock(compact?{titleFontSize:7.4,fontSize:5.25,marginTop:6}:{}),
     {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:7,bold:true,color:'#ff7048',margin:[0,6,0,0]}
+  ]
+});
+
+const customerServiceCardLandscapeContent = (context) => ({
+  stack:[
+    serviceCardHeader(context,'Karta serwisowa','Pełna karta klienta — potwierdzenie przyjęcia urządzenia i dostęp do bieżącego zlecenia.',760),
+    {columns:[
+      {
+        width:'61%',
+        stack:[
+          {text:'Dane zlecenia i urządzenia',fontSize:10,bold:true,color:'#344054',margin:[0,0,0,6]},
+          serviceCardInfoTable([
+            ['Klient',context.customerName],
+            ['Urządzenie',context.device],
+            ['IMEI',context.imei||'Nie podano'],
+            ['Numer seryjny',context.serialNumber||'Nie podano'],
+            ['Punkt przyjęcia',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
+            ['Typ zlecenia',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
+            ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
+            ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
+            ['Opis usterki',context.issueDescription],
+            ['Uwagi',context.deviceNotes||'—'],
+            ['Przyjęto',formatServiceCardDate(context.receivedAt)]
+          ],{labelWidth:116,labelFontSize:7.8,valueFontSize:8.8,rowMargin:3.2})
+        ]
+      },
+      {
+        width:'39%',
+        table:{
+          widths:['*'],
+          body:[[
+            {
+              fillColor:'#f8fafc',
+              margin:[14,12,14,12],
+              stack:[
+                {text:'PANEL KLIENTA',fontSize:8,bold:true,color:'#667085',characterSpacing:.7,alignment:'center'},
+                {qr:context.customerPortalUrl,fit:124,alignment:'center',margin:[0,8,0,7]},
+                {text:'Zeskanuj QR, aby otworzyć bezpośrednio to zlecenie w panelu klienta.',fontSize:7.5,color:'#475467',alignment:'center',lineHeight:1.2,margin:[0,0,0,11]},
+                {text:'Adres WWW',fontSize:7,bold:true,color:'#667085',margin:[0,0,0,3]},
+                {text:context.customerPortalBaseUrl,fontSize:9,bold:true,color:'#175cd3',margin:[0,0,0,10]},
+                {text:'Kod klienta',fontSize:7,bold:true,color:'#667085',margin:[0,0,0,3]},
+                {text:context.customerPortalCode,fontSize:18,bold:true,color:'#101828',characterSpacing:.8,margin:[0,0,0,8]},
+                {text:'Kod klienta możesz wpisać ręcznie, jeśli nie korzystasz z QR.',fontSize:7,color:'#667085',lineHeight:1.2}
+              ]
+            }
+          ]]
+        },
+        layout:{
+          hLineWidth:()=>0.8,vLineWidth:()=>0.8,
+          hLineColor:()=> '#d0d5dd',vLineColor:()=> '#d0d5dd',
+          paddingLeft:()=>0,paddingRight:()=>0,paddingTop:()=>0,paddingBottom:()=>0
+        }
+      }
+    ],columnGap:18},
+    serviceCardTermsBlock({titleFontSize:9.2,fontSize:6.35,marginTop:11}),
+    {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:8,bold:true,color:'#ff7048',margin:[0,7,0,0]}
   ]
 });
 
@@ -1625,20 +1688,26 @@ const renderServiceCardPdf = async (orderId,variant='CUSTOMER') => {
       pageSize:'A4',pageOrientation:'landscape',pageMargins:[20,20,20,20],
       content:[
         {columns:[
-          {width:'48%',...deviceServiceCardContent(context)},
+          {width:'48%',...deviceServiceCardContent(context,{compact:true})},
           {width:'4%',stack:[
             {text:'PRZETNIJ TUTAJ',fontSize:5.5,bold:true,color:'#98a2b3',alignment:'center',margin:[0,235,0,0]}
           ]},
-          {width:'48%',...customerServiceCardContent(context)}
+          {width:'48%',...customerServiceCardContent(context,{compact:true})}
         ],columnGap:7},
         {canvas:[{type:'line',x1:0,y1:0,x2:0,y2:545,lineWidth:.8,lineColor:'#98a2b3',dash:{length:5,space:4}}],absolutePosition:{x:421,y:24}}
       ]
+    };
+  }else if(normalized==='CUSTOMER'){
+    definition={
+      ...common,
+      pageSize:'A4',pageOrientation:'landscape',pageMargins:[28,24,28,24],
+      content:[customerServiceCardLandscapeContent(context)]
     };
   }else{
     definition={
       ...common,
       pageSize:'A5',pageOrientation:'landscape',pageMargins:[18,18,18,18],
-      content:[normalized==='DEVICE'?deviceServiceCardContent(context):customerServiceCardContent(context)]
+      content:[deviceServiceCardContent(context)]
     };
   }
   const buffer=await pdfToBuffer(definition);

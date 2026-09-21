@@ -7,12 +7,16 @@ on:
       - "database/migrations/**"
       - "database/schema.sql"
       - ".github/workflows/neon-api-verify.yml"
+      - ".github/workflows/central-api-bundle.yml"
+      - ".github/workflows/temp-neon-smoke.yml"
   pull_request:
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
       - "database/schema.sql"
       - ".github/workflows/neon-api-verify.yml"
+      - ".github/workflows/central-api-bundle.yml"
+      - ".github/workflows/temp-neon-smoke.yml"
   workflow_dispatch:
 
 permissions:
@@ -98,6 +102,14 @@ jobs:
           grep -Fq "serviceCardNumber='KS-'" functions/lockon-api.mjs
           grep -Fq 'customerPortalBaseUrl' functions/lockon-api.mjs
           grep -Fq 'Warunki przyjęcia i odbioru' functions/lockon-api.mjs
+          grep -Fq 'Zeskanuj kod QR w ServiceOS, aby otworzyć zlecenie i obsłużyć urządzenie.' functions/lockon-api.mjs
+          grep -Fq 'Kod ręczny — użyj, gdy nie możesz zeskanować QR.' functions/lockon-api.mjs
+          grep -Fq 'const customerServiceCardLandscapeContent' functions/lockon-api.mjs
+          grep -Fq "if(normalized==='CUSTOMER')" functions/lockon-api.mjs
+          grep -Fq "pageSize:'A4',pageOrientation:'landscape',pageMargins:[28,24,28,24]" functions/lockon-api.mjs
+          grep -Fq "renderServiceCardPdf(item.service_order_id,'CUSTOMER')" functions/lockon-api.mjs
+          grep -Fq "const OWNER_OPERATIONAL_NAME = 'System LockOn'" functions/lockon-api.mjs
+          grep -Fq "const OWNER_SUPPORT_NAME = 'Właściciel aplikacji'" functions/lockon-api.mjs
           grep -Fq '!firstName||!lastName||!brand||!model||!deviceNotes||!issue' functions/lockon-api.mjs
           grep -Fq 'SELECT id FROM service_orders WHERE id=$1 FOR UPDATE' functions/lockon-api.mjs
       - name: Bundle for Neon Functions
