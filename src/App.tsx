@@ -116,6 +116,10 @@ export default function App() {
   const pointName = effectiveRole && ROLE_DEFINITIONS[effectiveRole].scope === 'GLOBAL'
     ? 'Wszystkie punkty'
     : auth.point?.name ?? 'Punkt nieprzypisany';
+  const weatherCity = auth.requestedPoint?.city?.trim()
+    || auth.point?.city?.trim()
+    || auth.points.find((point) => point.city?.trim())?.city?.trim()
+    || '';
 
   return (
     <div className="app-shell">
@@ -148,6 +152,7 @@ export default function App() {
               pointName={pointName}
               role={effectiveRole!}
               userName={auth.user?.name ?? 'Użytkownik'}
+              weatherCity={weatherCity}
             />
           )}
           {active === 'administration' && <AdministrationPage focusUserId={focusUserId} />}
