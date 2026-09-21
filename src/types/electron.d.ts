@@ -53,6 +53,7 @@ export interface FinancePointBreakdown { pointId:string; pointName:string; point
 export interface FinancePayload { entries: RevenueEntry[]; points: FinancePointBreakdown[]; summary: { approvedRevenue:number; technicianShare:number; bossShare:number; pendingRevenue:number; }; }
 export interface TechnicianSettlementSettings { configured:boolean; technicianPercent:number|null; bossPercent:number|null; }
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
+export interface WeatherData { city:string; region?:string|null; country?:string|null; temperature:number; apparentTemperature:number; minTemperature:number; maxTemperature:number; windSpeed:number; weatherCode:number; condition:string; fetchedAt:string; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; handlingMode:'STANDARD'|'COMPLAINT_FLOW'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
 export interface ServiceWorkflow {
@@ -204,7 +205,7 @@ declare global {
         submit: (payload:{amount:number;pointId:string;workDate:string;note?:string}) => Promise<RevenueEntry>;
         review: (revenueId:string, action:'APPROVE'|'REJECT') => Promise<RevenueEntry>;
       };
-      data: { getDashboard: () => Promise<DashboardData>; };
+      data: { getDashboard: () => Promise<DashboardData>; getWeather: (city:string) => Promise<WeatherData>; };
       service: {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
         getCustomer: (customerId:string) => Promise<ServiceCustomerDetail>;
