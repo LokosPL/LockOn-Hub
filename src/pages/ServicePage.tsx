@@ -137,6 +137,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
   const canEditStatus = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
   const canCreateService = canEditStatus || effectiveRole === 'USER';
+  const canSetIntakeEstimate = canCreateService;
   const canEditIntake = canCreateService;
   const canTransferService = canCreateService;
   const canCancelService = canCreateService;
@@ -412,7 +413,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         ...form,
         imei: cleanImei,
         pointId,
-        estimatedCost: canEditCosts && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
+        estimatedCost: canSetIntakeEstimate && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
         estimatedCompletionAt: form.estimatedCompletionAt ? (toApiDateTime(form.estimatedCompletionAt) ?? undefined) : undefined
       });
       setResult(created);
@@ -857,8 +858,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       {tab === 'TECH_NOTES' && isActualTechnician && <TechnicianNotesRoom/>}
 
       {tab === 'NEW' && (
-        <div className="service-grid">
-          <section className="panel-card service-card">
+        <div className="service-grid service-intake-layout">
+          <section className="panel-card service-card service-intake-panel service-intake-customer">
             <div className="panel-heading"><div><span className="eyebrow"><Search size={13}/> KLIENT</span><h2>Wyszukaj istniejącego</h2></div></div>
             <div className="service-search-row">
               <input value={query} onChange={(e)=>setQuery(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') void search(); }} placeholder="Nazwisko, email lub telefon"/>
@@ -877,8 +878,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             </div>
           </section>
 
-          <section className="panel-card service-card">
-            <div className="panel-heading"><div><span className="eyebrow"><Smartphone size={13}/> URZĄDZENIE</span><h2>Telefon i usterka</h2></div></div>
+          <section className="panel-card service-card service-intake-panel service-intake-device">
+            <div className="panel-heading"><div><span className="eyebrow"><Smartphone size={13}/> URZĄDZENIE I ZLECENIE</span><h2>Telefon, usterka i ustalenia</h2><p>Najważniejsze dane naprawy w jednym miejscu — bez ukrywania wyceny przy przyjęciu.</p></div></div>
             <div className="service-form-grid service-intake-grid">
               <label className="service-brand-field">
                 <span>Marka</span>
@@ -919,8 +920,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                   </button>
                 </div>
               </div>
+              {canSetIntakeEstimate && <label className="service-estimate-field"><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="Np. 349,00"/><small>Wstępna kwota dla klienta — można ją później doprecyzować.</small></label>}
               {canEditStatus && <label><span>Przewidywany termin</span><input type="date" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>}
-              {canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="0,00"/></label>}
               <label className="full"><span>Uwagi do urządzenia</span><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Stan obudowy, akcesoria, ślady uszkodzeń, dodatkowe informacje…"/></label>
               <label className="full"><span>Opis usterki</span><textarea rows={6} value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder="Opisz objawy i problem zgłoszony przez klienta."/></label>
             </div>
