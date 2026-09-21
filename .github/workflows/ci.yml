@@ -179,15 +179,37 @@ jobs:
             if (-not $browser.Contains($_)) { throw "Missing embedded browser clipping contract: $_" }
           }
 
-      - name: Verify Gmail OAuth reliability contracts
+      - name: Verify unified Google and Gmail OAuth contracts
         shell: pwsh
         run: |
           $login = Get-Content src/pages/LoginScreen.tsx -Raw
           if ($login.Contains("window.lockOn.gmail.connect")) {
-            throw "ServiceOS login must not auto-start Gmail OAuth."
+            throw "Login screen must not start a second Gmail OAuth flow."
           }
-          @("Zalogowano. Otwieram ServiceOS","Gmail możesz połączyć później") | ForEach-Object {
-            if (-not $login.Contains($_)) { throw "Missing decoupled login contract: $_" }
+          @("Zalogowano. Otwieram ServiceOS","Jedno logowanie obejmuje wysyłkę Gmail","gmail.send") | ForEach-Object {
+            if (-not $login.Contains($_)) { throw "Missing unified login UX contract: $_" }
+          }
+
+          $auth = Get-Content electron/googleAuth.ts -Raw
+          @(
+            "https://www.googleapis.com/auth/gmail.send",
+            "access_type: 'offline'",
+            "include_granted_scopes: 'true'",
+            "prompt: 'consent select_account'"
+          ) | ForEach-Object {
+            if (-not $auth.Contains($_)) { throw "Missing primary OAuth Gmail contract: $_" }
+          }
+
+          $central = Get-Content functions/lockon-api.mjs -Raw
+          @(
+            "autoConnectGmailFromPrimaryLogin",
+            "GMAIL_CONNECTED_AT_LOGIN",
+            "PRIMARY_GOOGLE_OAUTH",
+            "OWNER_PRIVACY",
+            "GMAIL_SCOPE_NOT_GRANTED",
+            "REFRESH_TOKEN_MISSING"
+          ) | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing central unified Gmail contract: $_" }
           }
 
           $gmail = Get-Content electron/gmailAuth.ts -Raw
@@ -199,7 +221,7 @@ jobs:
             "AbortSignal.timeout(GMAIL_OAUTH_EXCHANGE_TIMEOUT_MS)",
             "gmailConnectInFlight"
           ) | ForEach-Object {
-            if (-not $gmail.Contains($_)) { throw "Missing Gmail OAuth reliability contract: $_" }
+            if (-not $gmail.Contains($_)) { throw "Missing manual Gmail recovery contract: $_" }
           }
 
       - name: Verify service finance UI contracts
