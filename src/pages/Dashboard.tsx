@@ -3,18 +3,27 @@ import {
   ArrowRight,
   BadgeDollarSign,
   Building2,
+  CalendarDays,
   CheckCircle2,
+  Cloud,
   CloudDownload,
+  CloudLightning,
+  CloudRain,
+  CloudSnow,
+  CloudSun,
   Globe2,
   Headphones,
+  MapPin,
   RefreshCw,
   Settings2,
-  ShieldCheck,
-  UsersRound
+  Sun,
+  ThermometerSun,
+  UsersRound,
+  Wind
 } from 'lucide-react';
 import { StatusBadge } from '../components/StatusBadge';
 import type { NavigationKey } from '../components/Sidebar';
-import type { AppInfo, DashboardData, UpdateState } from '../types/electron';
+import type { AppInfo, DashboardData, UpdateState, WeatherData } from '../types/electron';
 import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
 
 interface DashboardProps {
@@ -23,6 +32,7 @@ interface DashboardProps {
   pointName: string;
   role: UserRole;
   userName: string;
+  weatherCity: string;
 }
 
 const initialUpdate: UpdateState = {
@@ -40,12 +50,35 @@ const greeting = () => {
   return 'Dobry wieczór';
 };
 
-export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }: DashboardProps) {
+const formatDate = (date: Date) => {
+  const value = new Intl.DateTimeFormat('pl-PL', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  }).format(date);
+  return value.charAt(0).toUpperCase() + value.slice(1);
+};
+
+function WeatherIcon({ code }: { code: number }) {
+  if (code === 0 || code === 1) return <Sun size={48} strokeWidth={1.6} />;
+  if (code === 2) return <CloudSun size={48} strokeWidth={1.6} />;
+  if (code === 3 || code === 45 || code === 48) return <Cloud size={48} strokeWidth={1.6} />;
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return <CloudSnow size={48} strokeWidth={1.6} />;
+  if ([95, 96, 99].includes(code)) return <CloudLightning size={48} strokeWidth={1.6} />;
+  return <CloudRain size={48} strokeWidth={1.6} />;
+}
+
+export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, weatherCity }: DashboardProps) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [update, setUpdate] = useState<UpdateState>(initialUpdate);
   const [updateActionBusy, setUpdateActionBusy] = useState(false);
   const [updateActionError, setUpdateActionError] = useState('');
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [clock, setClock] = useState(() => new Date());
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState('');
 
   useEffect(() => {
     void window.lockOn.app.getInfo().then(setAppInfo);
@@ -53,6 +86,45 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }:
     void window.lockOn.data.getDashboard().then(setDashboardData).catch(() => undefined);
     return window.lockOn.updater.onStatus(setUpdate);
   }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(new Date()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const city = weatherCity.trim();
+    if (!city) {
+      setWeather(null);
+      setWeatherError('');
+      return;
+    }
+
+    let cancelled = false;
+    let refreshTimer = 0;
+
+    const loadWeather = async () => {
+      setWeatherLoading(true);
+      try {
+        const next = await window.lockOn.data.getWeather(city);
+        if (cancelled) return;
+        setWeather(next);
+        setWeatherError('');
+      } catch (error) {
+        if (cancelled) return;
+        setWeatherError(error instanceof Error ? error.message : 'Pogoda jest chwilowo niedostępna.');
+      } finally {
+        if (!cancelled) setWeatherLoading(false);
+      }
+    };
+
+    void loadWeather();
+    refreshTimer = window.setInterval(() => void loadWeather(), 15 * 60 * 1_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshTimer);
+    };
+  }, [weatherCity]);
 
   const updateTone = useMemo(() => {
     if (update.status === 'error') return 'danger' as const;
@@ -74,56 +146,62 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }:
       setUpdateActionBusy(false);
     }
   };
+
   const roleDefinition = ROLE_DEFINITIONS[role];
   const firstName = userName.split(' ').filter(Boolean)[0] ?? userName;
+  const timeText = clock.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+  const dateText = formatDate(clock);
 
   const shortcuts = [
     {
       key: 'browser',
       title: 'Przeglądarka',
-      description: 'Otwórz strony i narzędzia bez wychodzenia z ServiceOS.',
+      description: 'Internet bez wychodzenia z LockOn.',
       icon: Globe2,
       action: () => onNavigate('browser')
     },
     ...(roleDefinition.navigation.includes('earnings') ? [{
       key: 'earnings',
       title: 'Rozliczenia',
-      description: role === 'TECHNICIAN' ? 'Zgłoś przychód i sprawdź historię.' : 'Sprawdź przychody i weryfikację.',
+      description: role === 'TECHNICIAN' ? 'Twoje przychody, podział i historia.' : 'Przychody, podziały i rozliczenia w jednym miejscu.',
       icon: BadgeDollarSign,
       action: () => onNavigate('earnings')
     }] : []),
     ...(roleDefinition.navigation.includes('administration') ? [{
       key: 'administration',
       title: 'Administracja',
-      description: 'Konta, zgłoszenia dostępu i punkty w jednym miejscu.',
+      description: 'Pracownicy, punkty i dostępy.',
       icon: UsersRound,
       action: () => onNavigate('administration')
     }] : []),
     {
       key: 'help',
       title: 'Pomoc',
-      description: 'Otwórz kompaktowy panel pomocy z prawej strony.',
+      description: 'Porozmawiaj z pomocą lub szybko znajdź odpowiedź.',
       icon: Headphones,
       action: onOpenHelp
     },
     {
       key: 'settings',
       title: 'Ustawienia',
-      description: 'Motyw, skala interfejsu i informacje o Twoim dostępie.',
+      description: 'Wygląd aplikacji i ustawienia Twojego konta.',
       icon: Settings2,
       action: () => onNavigate('settings')
     }
   ];
 
   return (
-    <div className="dashboard page-enter">
-      <section className="hero-panel">
+    <div className="dashboard dashboard-start page-enter">
+      <section className="hero-panel start-hero">
         <div className="hero-orb hero-orb-one" />
         <div className="hero-orb hero-orb-two" />
-        <div className="hero-content">
+
+        <div className="hero-content start-hero-copy">
           <div className="eyebrow light"><span className="live-dot" /> {pointName}</div>
-          <h1>{greeting()}, {firstName}.<br /><span>Wszystko jest gotowe.</span></h1>
-          <p>Najważniejsze rzeczy masz pod ręką. Pulpit wykorzystuje całe dostępne miejsce i dopasowuje się do Full HD, QHD oraz 4K.</p>
+          <div className="start-greeting">{greeting()}, {firstName}.</div>
+          <h1 className="start-clock">{timeText}</h1>
+          <div className="start-date"><CalendarDays size={18} /> {dateText}</div>
+          <p className="start-intro">Tu zaczynasz dzień. Sprawdzisz najważniejsze informacje i jednym kliknięciem przejdziesz do pracy.</p>
           <div className="hero-actions">
             <button className="button primary" onClick={() => onNavigate('browser')}>
               <Globe2 size={17} /> Otwórz przeglądarkę <ArrowRight size={16} />
@@ -134,31 +212,54 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }:
           </div>
         </div>
 
-        <div className="hero-system-card">
-          <div className="system-icon"><ShieldCheck size={25} /></div>
-          <div>
-            <span>ServiceOS</span>
-            <strong>v{appInfo?.version ?? '—'}</strong>
-            <small>{update.status === 'available' || update.status === 'downloaded' ? update.message : 'System połączony i gotowy'}</small>
+        <aside className="start-weather-card" aria-live="polite">
+          <div className="weather-card-heading">
+            <div>
+              <span>Pogoda teraz</span>
+              <strong><MapPin size={14} /> {weather?.city || weatherCity || 'Twoje miasto'}</strong>
+            </div>
+            <div className="weather-ready"><CheckCircle2 size={13} /> LockOn gotowy</div>
           </div>
-          <StatusBadge tone={updateTone}>
-            {update.status === 'available' || update.status === 'downloaded' ? 'UPDATE' : <><CheckCircle2 size={12} /> ONLINE</>}
-          </StatusBadge>
-        </div>
+
+          {weatherLoading && !weather ? (
+            <div className="weather-loading"><RefreshCw className="spin" size={22} /><span>Sprawdzam pogodę…</span></div>
+          ) : weather ? (
+            <>
+              <div className="weather-main">
+                <div className="weather-icon"><WeatherIcon code={weather.weatherCode} /></div>
+                <div>
+                  <strong>{Math.round(weather.temperature)}°</strong>
+                  <span>{weather.condition}</span>
+                </div>
+              </div>
+              <div className="weather-details">
+                <div><ThermometerSun size={16} /><span>Odczuwalna</span><strong>{Math.round(weather.apparentTemperature)}°</strong></div>
+                <div><Sun size={16} /><span>Dzisiaj</span><strong>{Math.round(weather.minTemperature)}° / {Math.round(weather.maxTemperature)}°</strong></div>
+                <div><Wind size={16} /><span>Wiatr</span><strong>{Math.round(weather.windSpeed)} km/h</strong></div>
+              </div>
+            </>
+          ) : (
+            <div className="weather-empty">
+              <CloudSun size={38} />
+              <strong>{weatherError ? 'Pogoda chwilowo niedostępna' : 'Brak miasta do pogody'}</strong>
+              <span>{weatherError || 'Miasto ustawisz przy pierwszej konfiguracji konta.'}</span>
+            </div>
+          )}
+        </aside>
       </section>
 
       {role !== 'USER' && (
-        <section className="stats-grid compact-stats">
+        <section className="stats-grid compact-stats start-stats">
           <article className="stat-card">
             <div className="stat-icon orange"><Building2 size={19} /></div>
             <div><span>Punkty w zasięgu</span><strong>{dashboardData?.pointCount ?? 0}</strong></div>
-            <small>{roleDefinition.scope === 'GLOBAL' ? 'Widok wszystkich punktów' : 'Zakres przypisany do konta'}</small>
+            <small>{roleDefinition.scope === 'GLOBAL' ? 'Wszystkie miejsca, którymi możesz zarządzać' : 'Miejsca przypisane do Twojego konta'}</small>
           </article>
 
           <article className="stat-card">
             <div className="stat-icon"><UsersRound size={19} /></div>
             <div><span>Aktywne konta</span><strong>{dashboardData?.activeUsers ?? 0}</strong></div>
-            <small>{role === 'OWNER' ? String(dashboardData?.pendingUsers ?? 0) + ' czeka na akceptację' : 'W Twoim zakresie dostępu'}</small>
+            <small>{role === 'OWNER' ? String(dashboardData?.pendingUsers ?? 0) + ' oczekuje na decyzję' : 'Osoby dostępne w Twoim zakresie'}</small>
           </article>
 
           <article className="stat-card">
@@ -167,12 +268,12 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }:
               <span>{role === 'TECHNICIAN' ? 'Moja zatwierdzona część' : 'Zatwierdzony przychód'}</span>
               <strong>{money(role === 'TECHNICIAN' ? (dashboardData?.technicianShare ?? 0) : (dashboardData?.approvedRevenue ?? 0))}</strong>
             </div>
-            <small>Tylko zatwierdzone wpisy</small>
+            <small>Podsumowanie zaakceptowanych rozliczeń</small>
           </article>
         </section>
       )}
 
-      <section className="shortcut-grid">
+      <section className="shortcut-grid start-shortcuts">
         {shortcuts.map(({ key, title, description, icon: Icon, action }) => (
           <button className="shortcut-card" key={key} onClick={action}>
             <div className="shortcut-icon"><Icon size={21} /></div>
@@ -187,8 +288,8 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName }:
           <div className="panel-heading">
             <div>
               <span className="eyebrow">AKTUALIZACJE</span>
-              <h2>LockOn aktualizuje się z GitHuba</h2>
-              <p>Sprawdź nową wersję i zainstaluj ją bez szukania plików ręcznie.</p>
+              <h2>Nowa wersja LockOn</h2>
+              <p>Sprawdź dostępność aktualizacji i zainstaluj ją bez szukania plików.</p>
             </div>
             <div className="github-icon"><Settings2 size={22} /></div>
           </div>
