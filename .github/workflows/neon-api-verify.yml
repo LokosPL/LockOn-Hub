@@ -107,6 +107,9 @@ jobs:
           grep -Fq 'const customerServiceCardLandscapeContent' functions/lockon-api.mjs
           grep -Fq "if(normalized==='CUSTOMER')" functions/lockon-api.mjs
           grep -Fq "pageSize:'A4',pageOrientation:'landscape',pageMargins:[28,24,28,24]" functions/lockon-api.mjs
+          grep -Fq 'formatServiceCardDateTime(context.receivedAt)' functions/lockon-api.mjs
+          grep -Fq 'Przyjęcie i urządzenie' functions/lockon-api.mjs
+          grep -Fq 'Obsługa serwisowa' functions/lockon-api.mjs
           grep -Fq "renderServiceCardPdf(item.service_order_id,'CUSTOMER')" functions/lockon-api.mjs
           grep -Fq "const OWNER_OPERATIONAL_NAME = 'System LockOn'" functions/lockon-api.mjs
           grep -Fq "const OWNER_SUPPORT_NAME = 'Właściciel aplikacji'" functions/lockon-api.mjs
