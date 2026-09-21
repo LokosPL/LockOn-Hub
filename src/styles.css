@@ -2296,3 +2296,212 @@ input,textarea,select{line-height:1.45}
   .start-update-strip{grid-template-columns:34px minmax(0,1fr)}
   .start-update-strip>.status-badge,.start-update-actions{grid-column:2}
 }
+
+
+/* ServiceOS 1.0.0.9 — service workspace polish */
+.service-page{
+  max-width:1480px;
+  padding:30px clamp(20px,2.4vw,38px) 42px;
+}
+.service-heading{
+  gap:24px;
+  margin-bottom:20px;
+}
+.service-heading>div:first-child{min-width:min(100%,390px)}
+.service-heading h1{font-size:36px;line-height:1.08}
+.service-heading p{max-width:720px}
+.service-tabs{
+  max-width:900px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  align-items:center;
+  background:rgba(15,18,22,.9);
+}
+.service-tabs button{
+  flex:0 0 auto;
+  white-space:nowrap;
+  min-height:36px;
+  padding:0 12px;
+}
+.service-card,.service-orders-card,.service-quotes-card{
+  border-radius:16px;
+}
+.service-intake-layout{
+  grid-template-columns:minmax(360px,.82fr) minmax(540px,1.18fr);
+  gap:16px;
+  align-items:start;
+}
+.service-intake-panel{
+  align-self:start;
+  padding:22px;
+  overflow:visible;
+}
+.service-intake-panel .panel-heading{
+  margin-bottom:2px;
+  padding-bottom:4px;
+}
+.service-intake-panel .panel-heading h2{
+  margin-top:6px;
+  font-size:24px;
+  letter-spacing:-.025em;
+}
+.service-intake-panel .panel-heading p{
+  margin:6px 0 0;
+  max-width:640px;
+  color:#75808b;
+  font-size:11px;
+  line-height:1.5;
+}
+.service-intake-panel .service-search-row{margin-top:14px}
+.service-intake-panel .service-form-grid{
+  gap:12px;
+  margin-top:18px;
+}
+.service-intake-panel .service-form-grid label{gap:7px;min-width:0}
+.service-intake-panel .service-form-grid label>span{
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.055em;
+}
+.service-intake-panel .service-form-grid input,
+.service-intake-panel .service-form-grid select{
+  width:100%;
+  height:44px;
+  padding:0 12px;
+  border-radius:10px;
+}
+.service-intake-panel .service-form-grid textarea{
+  width:100%;
+  min-height:104px;
+  padding:12px;
+  border-radius:10px;
+  resize:vertical;
+  line-height:1.5;
+}
+.service-intake-device .service-form-grid label.full:last-of-type textarea{
+  min-height:148px;
+}
+.service-intake-device .service-order-type-picker{gap:10px}
+.service-intake-device .service-order-type-picker button{
+  min-height:90px;
+  padding:14px;
+}
+.service-intake-device .service-order-type-picker strong{font-size:14px}
+.service-intake-device .service-order-type-picker small{
+  font-size:10px;
+  line-height:1.5;
+}
+.service-estimate-field{
+  padding:11px;
+  border:1px solid rgba(255,126,68,.22);
+  border-radius:12px;
+  background:linear-gradient(145deg,rgba(255,126,68,.075),rgba(255,255,255,.015));
+}
+.service-estimate-field>span{color:#d99a7d!important}
+.service-estimate-field input{
+  border-color:rgba(255,126,68,.25)!important;
+  background:#0b0f14!important;
+  font-weight:750;
+}
+.service-estimate-field small{
+  color:#7c8792;
+  font-size:9px;
+  line-height:1.4;
+}
+.service-submit{
+  min-height:46px;
+  border-radius:11px;
+  font-size:13px;
+}
+.service-intake-email-note{
+  margin-top:12px;
+  padding:10px 12px;
+  border:1px solid rgba(255,255,255,.055);
+  border-radius:10px;
+  background:rgba(255,255,255,.018);
+}
+.service-orders-card,.service-transfers-board,.service-quotes-card{overflow:hidden}
+.service-orders-list{gap:9px}
+.service-order-row{
+  grid-template-columns:88px minmax(0,1fr) minmax(190px,230px);
+  gap:15px;
+  padding:15px 16px;
+}
+.service-order-main{overflow:hidden}
+.service-order-main strong,.service-order-main span,.service-order-main small{max-width:100%}
+.service-order-main small{line-height:1.45}
+.service-order-actions{min-width:0}
+.service-order-actions select,.service-order-actions button{max-width:100%}
+.service-order-workspace{
+  grid-template-columns:minmax(0,1.08fr) minmax(320px,.92fr);
+  gap:12px;
+  padding:14px;
+}
+.service-workspace-card{padding:16px;border-radius:13px}
+.service-workflow-filters{
+  padding:2px 0 6px;
+  margin-bottom:10px;
+}
+.service-workflow-filters button{min-height:38px}
+.transfer-board-row{
+  grid-template-columns:42px minmax(0,1fr) minmax(140px,.3fr) minmax(150px,auto);
+  gap:14px;
+  padding:14px 15px;
+}
+.transfer-board-main strong{font-size:12px}
+.transfer-board-main span,.transfer-board-main small,.transfer-board-main p{
+  overflow-wrap:anywhere;
+}
+.transfer-board-actions .button{white-space:nowrap}
+.desktop-quote-card{padding:18px}
+.desktop-quote-price-form{
+  grid-template-columns:minmax(130px,170px) minmax(220px,1fr) auto;
+}
+.notification-layout{gap:16px}
+
+@media(max-width:1240px){
+  .service-intake-layout{grid-template-columns:1fr}
+  .service-intake-customer,.service-intake-device{width:100%}
+  .service-order-workspace{grid-template-columns:1fr}
+  .service-workspace-history{grid-column:auto}
+}
+@media(max-width:1120px){
+  .service-heading{flex-direction:column}
+  .service-tabs{width:100%;max-width:none;justify-content:flex-start}
+  .service-order-row{grid-template-columns:72px minmax(0,1fr)}
+  .service-order-actions{
+    grid-column:1/-1;
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+  }
+  .transfer-board-row{grid-template-columns:42px minmax(0,1fr) auto}
+  .transfer-board-status{grid-column:3}
+  .transfer-board-actions{grid-column:2/-1}
+}
+@media(max-width:760px){
+  .service-page{padding:18px 14px 30px}
+  .service-heading h1{font-size:31px}
+  .service-tabs{
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    justify-content:flex-start;
+    padding-bottom:7px;
+  }
+  .service-tabs button{flex:0 0 auto}
+  .service-intake-panel{padding:17px}
+  .service-form-grid,.service-intake-panel .service-form-grid{grid-template-columns:1fr}
+  .service-form-grid label.full,.service-intake-panel .service-form-grid label.full{grid-column:auto}
+  .service-order-type-picker{grid-template-columns:1fr}
+  .service-order-row{grid-template-columns:58px minmax(0,1fr);gap:10px;padding:12px}
+  .service-order-actions{grid-template-columns:1fr}
+  .service-order-actions .service-order-status{grid-column:auto}
+  .service-workflow-filters{overflow-x:auto;flex-wrap:nowrap}
+  .service-workflow-filters button{white-space:nowrap}
+  .transfer-board-row{grid-template-columns:36px minmax(0,1fr)}
+  .transfer-board-status,.transfer-board-actions{
+    grid-column:2;
+    align-items:flex-start;
+    justify-content:flex-start;
+  }
+  .desktop-quote-price-form,.desktop-quote-reply-form{grid-template-columns:1fr}
+}

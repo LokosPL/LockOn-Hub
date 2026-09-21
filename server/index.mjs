@@ -888,9 +888,9 @@ const handle = async (req, res) => {
     let assignedTechnicianId = user.role === 'TECHNICIAN'
       ? user.id
       : (canManage ? (cleanText(body.assignedTechnicianId, 80) || null) : null);
+    const canSetIntakeEstimate = SERVICE_CREATE_ROLES.has(user.role);
     let estimatedCost = null;
-    if (!SERVICE_EDIT_ROLES.has(user.role) && body.estimatedCost !== undefined && body.estimatedCost !== '') return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do danych kosztowych zlecenia.' });
-    if (SERVICE_EDIT_ROLES.has(user.role) && body.estimatedCost !== undefined && body.estimatedCost !== '') {
+    if (canSetIntakeEstimate && body.estimatedCost !== undefined && body.estimatedCost !== '') {
       estimatedCost = Number(body.estimatedCost);
       if (!Number.isFinite(estimatedCost) || estimatedCost < 0) return json(res, 400, { error: 'ESTIMATED_COST', message: 'Nieprawidłowy koszt szacowany.' });
     }
