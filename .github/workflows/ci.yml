@@ -200,6 +200,19 @@ jobs:
             if (-not $api.Contains($_)) { throw "Missing v1 service safety regression contract: $_" }
           }
 
+      - name: Verify release installer retry contract
+        shell: pwsh
+        run: |
+          $release = Get-Content .github/workflows/release.yml -Raw
+          @(
+            'for ($attempt = 1; $attempt -le 4; $attempt++)',
+            'electron-builder attempt $attempt/4',
+            'Start-Sleep -Seconds $delaySeconds',
+            'Remove-Item -Recurse -Force release'
+          ) | ForEach-Object {
+            if (-not $release.Contains($_)) { throw "Missing resilient release build contract: $_" }
+          }
+
       - name: Typecheck renderer
         run: npm run typecheck
 
