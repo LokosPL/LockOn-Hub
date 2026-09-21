@@ -1631,62 +1631,66 @@ const customerServiceCardContent = (context,{compact=false}={}) => ({
   ]
 });
 
-const customerServiceCardLandscapeContent = (context) => ({
+const customerServiceCardPortraitContent = (context) => ({
   stack:[
-    serviceCardHeader(context,'Karta serwisowa','Pełna karta klienta — potwierdzenie przyjęcia urządzenia i dostęp do bieżącego zlecenia.',760),
-    {columns:[
-      {
-        width:'61%',
-        stack:[
-          {text:'Przyjęcie i urządzenie',fontSize:10,bold:true,color:'#344054',margin:[0,0,0,6]},
-          serviceCardInfoTable([
-            ['Klient',context.customerName],
-            ['Urządzenie',context.device],
-            ['IMEI',context.imei||'Nie podano'],
-            ['Numer seryjny',context.serialNumber||'Nie podano'],
-            ['Punkt przyjęcia',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
-            ['Typ zlecenia',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
-            ['Przyjęto',formatServiceCardDateTime(context.receivedAt)]
-          ],{labelWidth:116,labelFontSize:7.8,valueFontSize:8.8,rowMargin:3.2}),
-          {text:'Obsługa serwisowa',fontSize:10,bold:true,color:'#344054',margin:[0,10,0,6]},
-          serviceCardInfoTable([
-            ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
-            ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
-            ['Opis usterki',context.issueDescription],
-            ['Uwagi',context.deviceNotes||'—']
-          ],{labelWidth:116,labelFontSize:7.8,valueFontSize:8.8,rowMargin:3.2})
-        ]
+    serviceCardHeader(context,'Karta serwisowa','Potwierdzenie przyjęcia urządzenia oraz bezpieczny dostęp do bieżącego zlecenia.',515),
+    {text:'Przyjęcie i urządzenie',fontSize:10,bold:true,color:'#344054',margin:[0,0,0,6]},
+    serviceCardInfoTable([
+      ['Klient',context.customerName],
+      ['Urządzenie',context.device],
+      ['IMEI',context.imei||'Nie podano'],
+      ['Numer seryjny',context.serialNumber||'Nie podano'],
+      ['Punkt przyjęcia',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
+      ['Typ zlecenia',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
+      ['Przyjęto',formatServiceCardDateTime(context.receivedAt)]
+    ],{labelWidth:112,labelFontSize:7.3,valueFontSize:8.2,rowMargin:2.5}),
+    {text:'Obsługa serwisowa',fontSize:10,bold:true,color:'#344054',margin:[0,9,0,6]},
+    serviceCardInfoTable([
+      ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
+      ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
+      ['Opis usterki',context.issueDescription],
+      ['Uwagi',context.deviceNotes||'—']
+    ],{labelWidth:112,labelFontSize:7.3,valueFontSize:8.2,rowMargin:2.5}),
+    {
+      table:{
+        widths:['*'],
+        body:[[
+          {
+            fillColor:'#f8fafc',
+            margin:[12,10,12,10],
+            columns:[
+              {
+                width:'*',
+                stack:[
+                  {text:'PANEL KLIENTA',fontSize:8,bold:true,color:'#667085',characterSpacing:.7},
+                  {text:'Skan QR otwiera bezpośrednio to zlecenie. Kod możesz też wpisać ręcznie.',fontSize:7.2,color:'#475467',lineHeight:1.2,margin:[0,4,12,8]},
+                  {text:'Adres WWW',fontSize:6.7,bold:true,color:'#667085',margin:[0,0,0,2]},
+                  {text:context.customerPortalBaseUrl,fontSize:8.3,bold:true,color:'#175cd3',margin:[0,0,0,7]},
+                  {text:'Kod klienta',fontSize:6.7,bold:true,color:'#667085',margin:[0,0,0,2]},
+                  {text:context.customerPortalCode,fontSize:16,bold:true,color:'#101828',characterSpacing:.8}
+                ]
+              },
+              {
+                width:118,
+                stack:[
+                  {qr:context.customerPortalUrl,fit:100,alignment:'center'},
+                  {text:'Zeskanuj QR',fontSize:6.7,bold:true,color:'#667085',alignment:'center',margin:[0,5,0,0]}
+                ]
+              }
+            ],
+            columnGap:12
+          }
+        ]]
       },
-      {
-        width:'39%',
-        table:{
-          widths:['*'],
-          body:[[
-            {
-              fillColor:'#f8fafc',
-              margin:[14,12,14,12],
-              stack:[
-                {text:'PANEL KLIENTA',fontSize:8,bold:true,color:'#667085',characterSpacing:.7,alignment:'center'},
-                {qr:context.customerPortalUrl,fit:124,alignment:'center',margin:[0,8,0,7]},
-                {text:'Zeskanuj QR, aby otworzyć bezpośrednio to zlecenie w panelu klienta.',fontSize:7.5,color:'#475467',alignment:'center',lineHeight:1.2,margin:[0,0,0,11]},
-                {text:'Adres WWW',fontSize:7,bold:true,color:'#667085',margin:[0,0,0,3]},
-                {text:context.customerPortalBaseUrl,fontSize:9,bold:true,color:'#175cd3',margin:[0,0,0,10]},
-                {text:'Kod klienta',fontSize:7,bold:true,color:'#667085',margin:[0,0,0,3]},
-                {text:context.customerPortalCode,fontSize:18,bold:true,color:'#101828',characterSpacing:.8,margin:[0,0,0,8]},
-                {text:'Kod klienta możesz wpisać ręcznie, jeśli nie korzystasz z QR.',fontSize:7,color:'#667085',lineHeight:1.2}
-              ]
-            }
-          ]]
-        },
-        layout:{
-          hLineWidth:()=>0.8,vLineWidth:()=>0.8,
-          hLineColor:()=> '#d0d5dd',vLineColor:()=> '#d0d5dd',
-          paddingLeft:()=>0,paddingRight:()=>0,paddingTop:()=>0,paddingBottom:()=>0
-        }
-      }
-    ],columnGap:18},
-    serviceCardTermsBlock({titleFontSize:9.2,fontSize:6.35,marginTop:11}),
-    {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:8,bold:true,color:'#ff7048',margin:[0,7,0,0]}
+      layout:{
+        hLineWidth:()=>0.8,vLineWidth:()=>0.8,
+        hLineColor:()=> '#d0d5dd',vLineColor:()=> '#d0d5dd',
+        paddingLeft:()=>0,paddingRight:()=>0,paddingTop:()=>0,paddingBottom:()=>0
+      },
+      margin:[0,10,0,0]
+    },
+    serviceCardTermsBlock({titleFontSize:8.5,fontSize:5.55,marginTop:8}),
+    {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:7.4,bold:true,color:'#ff7048',margin:[0,6,0,0]}
   ]
 });
 
@@ -1717,8 +1721,8 @@ const renderServiceCardPdf = async (orderId,variant='CUSTOMER') => {
   }else if(normalized==='CUSTOMER'){
     definition={
       ...common,
-      pageSize:'A4',pageOrientation:'landscape',pageMargins:[28,24,28,24],
-      content:[customerServiceCardLandscapeContent(context)]
+      pageSize:'A4',pageOrientation:'portrait',pageMargins:[32,28,32,28],
+      content:[customerServiceCardPortraitContent(context)]
     };
   }else{
     definition={
@@ -4405,9 +4409,9 @@ const route = async (request) => {
       estimatedCompletionAt=eta;
     }
     const assignedTechnicianId=u.role_code==='TECHNICIAN'?u.id:null;
+    const canSetIntakeEstimate=SERVICE_CREATE_ROLES.has(u.role_code);
     let estimatedCost=null;
-    if(!SERVICE_EDIT_ROLES.has(u.role_code)&&body.estimatedCost!==undefined&&body.estimatedCost!=='')throw Object.assign(new Error('Brak uprawnień do danych kosztowych zlecenia.'),{status:403});
-    if(SERVICE_EDIT_ROLES.has(u.role_code)&&body.estimatedCost!==undefined&&body.estimatedCost!==''){
+    if(canSetIntakeEstimate&&body.estimatedCost!==undefined&&body.estimatedCost!==''){
       estimatedCost=Number(body.estimatedCost);
       if(!Number.isFinite(estimatedCost)||estimatedCost<0)return json(request,{error:'ESTIMATED_COST',message:'Nieprawidłowy koszt szacowany.'},400);
     }
@@ -4479,7 +4483,7 @@ const route = async (request) => {
       }catch(auditError){
         console.error('[service order audit]',auditError);
       }
-      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,handlingMode,issueDescription:issue,status:'RECEIVED',assignedTechnicianId,estimatedCost:SERVICE_EDIT_ROLES.has(u.role_code)?estimatedCost:null,estimatedCompletionAt:order.estimated_completion_at||null,receivedAt:order.received_at},reusedCustomer:reused,reusedDevice,notification,serviceCard:{required:true,printMode:null,customerEmailRequired:Boolean(customer.email)}},201);
+      return json(request,{customer:customerView(customer),order:{id:order.id,orderNumber:Number(order.order_number),pointId,customerId:customer.id,deviceId:did,orderType,handlingMode,issueDescription:issue,status:'RECEIVED',assignedTechnicianId,estimatedCost:estimatedCost,estimatedCompletionAt:order.estimated_completion_at||null,receivedAt:order.received_at},reusedCustomer:reused,reusedDevice,notification,serviceCard:{required:true,printMode:null,customerEmailRequired:Boolean(customer.email)}},201);
     }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
   }
 
