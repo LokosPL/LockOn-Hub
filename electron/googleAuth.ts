@@ -60,7 +60,11 @@ interface StoredSession {
 }
 
 const SESSION_FILE = 'auth-session.json';
+const GOOGLE_OAUTH_USER_WAIT_MS = 10 * 60_000;
+const GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS = 45_000;
 const sessionPath = () => path.join(app.getPath('userData'), SESSION_FILE);
+
+let googleLoginInFlight: Promise<AuthState> | null = null;
 
 const writeStoredSession = (session: StoredSession) => {
   fs.mkdirSync(path.dirname(sessionPath()), { recursive: true });
@@ -227,7 +231,7 @@ export const loginLocalStarter = async (development: boolean): Promise<AuthState
   return toAuthState(payload, development);
 };
 
-export const loginWithGoogle = async (development: boolean): Promise<AuthState> => {
+const performGoogleLogin = async (development: boolean): Promise<AuthState> => {
   if (!hasGoogleClientId()) return emptyState(development, 'Najpierw skonfiguruj Google OAuth Client ID.');
 
   const { verifier, challenge } = createPkce();
@@ -235,9 +239,19 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
 
   return new Promise<AuthState>((resolve, reject) => {
     let settled = false;
+    let callbackAccepted = false;
+    let userWaitTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearUserWaitTimer = () => {
+      if (!userWaitTimer) return;
+      clearTimeout(userWaitTimer);
+      userWaitTimer = null;
+    };
+
     const finish = (callback: () => void) => {
       if (settled) return;
       settled = true;
+      clearUserWaitTimer();
       callback();
     };
 
@@ -262,6 +276,15 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         }
         if (returnedState !== stateToken) throw new Error('Nieprawidłowy stan sesji logowania.');
         if (!code) throw new Error('Google nie zwrócił kodu autoryzacji.');
+        if (callbackAccepted) {
+          response.writeHead(409, oauthHtmlHeaders()).end('Logowanie jest już finalizowane.');
+          return;
+        }
+
+        callbackAccepted = true;
+        // Od tego momentu użytkownik zakończył pracę w Google. Nie wolno już
+        // pozwolić, aby timer oczekiwania na przeglądarkę przerwał wymianę kodu.
+        clearUserWaitTimer();
 
         const address = server.address();
         if (!address || typeof address === 'string') throw new Error('Błąd lokalnego callbacku OAuth.');
@@ -273,7 +296,7 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
             code,
             codeVerifier: verifier,
             redirectUri
-          });
+          }, AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS));
         } catch (serverError) {
           const typed = serverError as Error & { code?: string; status?: number };
           const canFallback = typed.code === 'SERVER_OAUTH_NOT_CONFIGURED' || typed.code === 'NOT_FOUND' || typed.status === 404;
@@ -288,6 +311,7 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             redirect: 'error',
+            signal: AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS),
             body: new URLSearchParams({
               client_id: APP_CONFIG.auth.googleClientId,
               client_secret: clientSecret,
@@ -313,7 +337,7 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
 
           const tokens = (await tokenResponse.json()) as { id_token?: string };
           if (!tokens.id_token) throw new Error('Google nie zwrócił tokena tożsamości.');
-          payload = await backendGoogleLogin(tokens.id_token);
+          payload = await backendGoogleLogin(tokens.id_token, AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS));
         }
 
         writeStoredSession({ apiToken: payload.token, provider: 'google', savedAt: new Date().toISOString() });
@@ -355,7 +379,12 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
           resolve(state);
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Logowanie nie powiodło się.';
+        const errorName = error instanceof Error ? error.name : '';
+        const message = errorName === 'AbortError' || errorName === 'TimeoutError'
+          ? 'Google lub serwer logowania odpowiadał zbyt długo. Spróbuj ponownie.'
+          : error instanceof Error
+            ? error.message
+            : 'Logowanie nie powiodło się.';
         const pageNonce = base64Url(crypto.randomBytes(18));
         const returnToAppUrl = 'lockon-serviceos://login-complete';
         response.writeHead(400, oauthHtmlHeaders(pageNonce));
@@ -409,14 +438,32 @@ export const loginWithGoogle = async (development: boolean): Promise<AuthState> 
         code_challenge_method: 'S256',
         prompt: 'select_account'
       }).toString();
-      await shell.openExternal(authUrl.toString());
+      try {
+        await shell.openExternal(authUrl.toString());
+      } catch {
+        finish(() => {
+          server.close();
+          reject(new Error('Nie udało się otworzyć bezpiecznego logowania Google w przeglądarce.'));
+        });
+      }
     });
 
-    setTimeout(() => {
+    userWaitTimer = setTimeout(() => {
       finish(() => {
         server.close();
-        reject(new Error('Przekroczono czas oczekiwania na logowanie Google.'));
+        reject(new Error('Okno logowania Google było otwarte zbyt długo. Uruchom logowanie ponownie.'));
       });
-    }, 180_000);
+    }, GOOGLE_OAUTH_USER_WAIT_MS);
   });
+};
+
+export const loginWithGoogle = (development: boolean): Promise<AuthState> => {
+  if (googleLoginInFlight) return googleLoginInFlight;
+
+  const attempt = performGoogleLogin(development);
+  const tracked = attempt.finally(() => {
+    if (googleLoginInFlight === tracked) googleLoginInFlight = null;
+  });
+  googleLoginInFlight = tracked;
+  return tracked;
 };
