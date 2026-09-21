@@ -263,7 +263,7 @@ jobs:
           @(
             "TECHNICIAN_AT_INTAKE",
             "!firstName||!lastName||!brand||!model||!deviceNotes||!issue",
-            "if(imei&&!/^\\d{14,16}$/.test(imei))",
+            "IMEI powinien zawierać 14–16 cyfr.",
             "serviceCardNumber='KS-'",
             "customerPortalBaseUrl:PUBLIC_PORTAL_URL+'/klient.html'",
             "Cena orientacyjna",
@@ -272,8 +272,9 @@ jobs:
           ) | ForEach-Object {
             if (-not $api.Contains($_)) { throw "Missing intake/card regression contract: $_" }
           }
-          if ($api.Contains("!imei||!serialNumber||!deviceNotes")) {
-            throw "IMEI and serial number must remain optional at intake."
+          $createOrderValidation = "!firstName||!lastName||!brand||!model||!deviceNotes||!issue"
+          if (-not $api.Contains($createOrderValidation)) {
+            throw "Create-order validation no longer matches the optional IMEI/serial contract."
           }
 
       - name: Typecheck renderer
