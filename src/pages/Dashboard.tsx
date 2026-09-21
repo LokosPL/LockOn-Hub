@@ -4,7 +4,6 @@ import {
   BadgeDollarSign,
   Building2,
   CalendarDays,
-  CheckCircle2,
   Cloud,
   CloudDownload,
   CloudLightning,
@@ -13,13 +12,10 @@ import {
   CloudSun,
   Globe2,
   Headphones,
-  KeyRound,
-  Lightbulb,
   MapPin,
   RefreshCw,
   Settings2,
   Sun,
-  UserRound,
   UsersRound,
   Wrench
 } from 'lucide-react';
@@ -308,35 +304,6 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, w
           </article>
         </section>
       )}
-
-      <section className="start-bottom-grid">
-        <article className="start-tip-card">
-          <div className="start-tip-icon"><Lightbulb size={22} /></div>
-          <div>
-            <span>Wskazówka na dziś</span>
-            <strong>Wykorzystuj skróty, aby pracować szybciej.</strong>
-            <p>Najczęściej używane funkcje masz zawsze pod ręką na ekranie startowym.</p>
-          </div>
-        </article>
-
-        <article className="start-account-card">
-          <div className="start-account-avatar"><UserRound size={21} /></div>
-          <div className="start-account-main">
-            <div className="start-account-kicker">
-              <span>Twoje konto</span>
-              <b><CheckCircle2 size={12} /> Konto aktywne</b>
-            </div>
-            <strong>{roleDefinition.label}</strong>
-            <small>{pointName}</small>
-          </div>
-          <div className="start-account-points">
-            <KeyRound size={21} />
-            <strong>{dashboardData?.pointCount ?? 0}</strong>
-            <span>{(dashboardData?.pointCount ?? 0) === 1 ? 'punkt' : 'punkty'}</span>
-          </div>
-          <ArrowRight size={18} className="start-account-arrow" />
-        </article>
-      </section>
 
       {showUpdateCard && (
         <section className="start-update-strip">
