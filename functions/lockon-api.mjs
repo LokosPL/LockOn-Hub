@@ -1229,6 +1229,80 @@ const recoverNoSenderNotifications = async (pointId) => {
   return { recovered: rows.length, sent };
 };
 
+
+const autoConnectGmailFromPrimaryLogin = async (loginPayload, profile, tokens) => {
+  const role = cleanText(loginPayload?.user?.role, 40).toUpperCase();
+  const pointId = cleanText(loginPayload?.activePointId, 80);
+  const userId = cleanText(loginPayload?.user?.id, 120);
+  const status = cleanText(loginPayload?.user?.status, 40).toUpperCase();
+
+  // OWNER musi pozostać anonimowy operacyjnie. Użycie jego prywatnej skrzynki
+  // jako nadawcy ujawniłoby adres odbiorcom wiadomości.
+  if (role === 'OWNER') {
+    return { connected:false, skipped:true, reason:'OWNER_PRIVACY', pointId:pointId || null };
+  }
+  if (!GMAIL_MANAGE_ROLES.has(role) || status !== 'ACTIVE' || !pointId || !userId) {
+    return { connected:false, skipped:true, reason:'ROLE_OR_POINT', pointId:pointId || null };
+  }
+
+  const refreshToken = cleanText(tokens?.refresh_token, 4096);
+  const grantedScopes = String(tokens?.scope || '').split(/\s+/).filter(Boolean);
+  if (!grantedScopes.includes('https://www.googleapis.com/auth/gmail.send')) {
+    return { connected:false, skipped:false, reason:'GMAIL_SCOPE_NOT_GRANTED', pointId };
+  }
+  if (!refreshToken) {
+    return { connected:false, skipped:false, reason:'REFRESH_TOKEN_MISSING', pointId };
+  }
+
+  try {
+    await refreshGmailAccess(refreshToken, '');
+    await q(
+      "INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
+      [pointId,userId,profile.email,encryptSecret(refreshToken)]
+    );
+    await q(
+      "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,updated_by_user_id,updated_at) VALUES($1,true,$2::text[],'LockOn ServiceOS',$3,now()) ON CONFLICT(point_id) DO NOTHING",
+      [pointId,[...DEFAULT_NOTIFY_STATUSES],userId]
+    );
+
+    const recovery = await recoverNoSenderNotifications(pointId);
+    const user = await loadUser(userId);
+    if (user) {
+      await audit(
+        { user, clientType:'DESKTOP' },
+        'GMAIL_CONNECTED_AT_LOGIN',
+        'point',
+        pointId,
+        pointId,
+        {
+          senderEmail: operationalIdentityEmail(profile.email, role),
+          identitySource:'PRIMARY_GOOGLE_OAUTH',
+          credentialLocation:'SERVER',
+          recoveredNotifications:recovery.recovered,
+          recoveredSent:recovery.sent
+        }
+      );
+    }
+    return {
+      connected:true,
+      skipped:false,
+      pointId,
+      email:operationalIdentityEmail(profile.email, role),
+      status:'ACTIVE',
+      recoveredNotifications:recovery.recovered,
+      recoveredSent:recovery.sent
+    };
+  } catch (error) {
+    console.error('[gmail auto-connect at login]', error);
+    return {
+      connected:false,
+      skipped:false,
+      pointId,
+      reason:'GMAIL_AUTO_CONNECT_FAILED'
+    };
+  }
+};
+
 const mailSettingsForPoint = async (pointId) => {
   const row = (await q(
     "SELECT automatic_email_enabled,notify_statuses,sender_display_name,footer_text FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
@@ -2754,7 +2828,9 @@ const route = async (request) => {
       const tokens = await exchangeDesktopAuthorizationCode(body, '/oauth2/callback');
       if (!tokens?.id_token) return json(request, { error:'GOOGLE_ID_TOKEN', message:'Google nie zwrócił tokena tożsamości.' }, 400);
       const profile = await verifyGoogle(String(tokens.id_token), GOOGLE_DESKTOP_CLIENT_ID);
-      return json(request, await loginProfile(profile, 'DESKTOP', true));
+      const login = await loginProfile(profile, 'DESKTOP', true);
+      const gmail = await autoConnectGmailFromPrimaryLogin(login, profile, tokens);
+      return json(request, { ...login, gmail });
     } catch (error) {
       if (error?.status) throw error;
       throw Object.assign(new Error('Google nie zakończył logowania.'), { status:401, code:'GOOGLE_AUTH_FAILED' });
