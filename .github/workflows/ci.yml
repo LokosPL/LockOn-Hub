@@ -207,7 +207,10 @@ jobs:
             "PRIMARY_GOOGLE_OAUTH",
             "OWNER_PRIVACY",
             "GMAIL_SCOPE_NOT_GRANTED",
-            "REFRESH_TOKEN_MISSING"
+            "REFRESH_TOKEN_MISSING",
+            "GMAIL_REUSED_AT_LOGIN",
+            "EXISTING_SERVER_REFRESH_TOKEN",
+            "EXISTING_SENDER_REUSED"
           ) | ForEach-Object {
             if (-not $central.Contains($_)) { throw "Missing central unified Gmail contract: $_" }
           }
