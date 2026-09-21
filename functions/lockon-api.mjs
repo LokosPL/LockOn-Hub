@@ -4308,7 +4308,7 @@ const route = async (request) => {
     const body=await readJson(request);
     const imei=cleanText(body.imei,32).replace(/\s+/g,'');
     const serialNumber=cleanText(body.serialNumber,120);
-    const deviceNotes=cleanText(body.deviceNotes,1000);
+    const deviceNotes=cleanText(body.deviceNotes,1000)||'Brak uwag';
     if(imei&&!/^\d{14,16}$/.test(imei))return json(request,{error:'IMEI',message:'IMEI powinien zawierać 14–16 cyfr.'},400);
 
     if(imei){
@@ -4316,22 +4316,21 @@ const route = async (request) => {
       if(conflict)return json(request,{error:'IMEI_CONFLICT',message:'Ten IMEI jest już przypisany do innego urządzenia.'},409);
     }
 
-    const canEditWorkflow=SERVICE_EDIT_ROLES.has(u.role_code);
-    const etaText=canEditWorkflow&&found.handling_mode!=='TRANSFER_ONLY'?cleanText(body.estimatedCompletionAt,64):'';
-    let estimatedCompletionAt=canEditWorkflow
-      ? (found.handling_mode==='TRANSFER_ONLY'?found.estimated_completion_at:null)
-      : found.estimated_completion_at;
-    if(etaText){
-      const date=new Date(etaText);
-      if(Number.isNaN(date.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
-      estimatedCompletionAt=date;
+    const canEditEta=SERVICE_INTAKE_EDIT_ROLES.has(u.role_code);
+    let estimatedCompletionAt=found.estimated_completion_at;
+    if(canEditEta&&found.handling_mode!=='TRANSFER_ONLY'&&('estimatedCompletionAt' in body)){
+      const etaText=cleanText(body.estimatedCompletionAt,64);
+      if(!etaText){
+        estimatedCompletionAt=null;
+      }else{
+        const date=new Date(etaText);
+        if(Number.isNaN(date.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
+        estimatedCompletionAt=date;
+      }
     }
 
     const canManageAssignment=SERVICE_MANAGE_ROLES.has(u.role_code);
     const canEditCosts=SERVICE_EDIT_ROLES.has(u.role_code);
-    if(!canEditWorkflow&&('estimatedCompletionAt' in body)&&body.estimatedCompletionAt){
-      throw Object.assign(new Error('Rola USER nie może zmieniać terminu realizacji.'),{status:403});
-    }
     if(found.handling_mode==='TRANSFER_ONLY'&&('assignedTechnicianId' in body||'estimatedCost' in body||'finalCost' in body)){
       return json(request,{error:'TRANSFER_ONLY_DETAILS_LOCKED',message:'W trybie „Tylko przekazanie” nie ustawia się serwisanta ani cen naprawy.'},409);
     }
@@ -4371,7 +4370,7 @@ const route = async (request) => {
     const client=await pool.connect();
     try{
       await client.query('BEGIN');
-      await client.query('UPDATE devices SET imei=NULLIF($1,\'\'),serial_number=NULLIF($2,\'\'),notes=NULLIF($3,\'\'),updated_at=now() WHERE id=$4',[imei,serialNumber,deviceNotes,found.device_id]);
+      await client.query('UPDATE devices SET imei=NULLIF($1,\'\'),serial_number=NULLIF($2,\'\'),notes=$3,updated_at=now() WHERE id=$4',[imei,serialNumber,deviceNotes,found.device_id]);
       await client.query('UPDATE service_orders SET assigned_technician_id=$1,estimated_cost=$2,final_cost=$3,estimated_completion_at=$4,updated_at=now() WHERE id=$5',[assignedTechnicianId,estimatedCost,finalCost,estimatedCompletionAt,found.id]);
       await client.query('COMMIT');
     }catch(error){
@@ -4397,13 +4396,17 @@ const route = async (request) => {
     const pointId=session.activePointId;
     if(!pointId)return json(request,{error:'ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt przed przyjęciem urządzenia.'},400);
     await requirePoint(u,pointId);
-    const firstName=cleanText(body.firstName,80),lastName=cleanText(body.lastName,100),email=normalizeEmail(cleanText(body.email,180)),phone=cleanText(body.phone,50),phoneNorm=normalizePhone(phone),brand=cleanText(body.brand,80),model=cleanText(body.model,120),issue=cleanText(body.issueDescription,2000),orderType=String(body.orderType||'REPAIR').toUpperCase();
+    const firstName=cleanText(body.firstName,80),lastName=cleanText(body.lastName,100),email=normalizeEmail(cleanText(body.email,180)),phone=cleanText(body.phone,50),phoneNorm=normalizePhone(phone),brandInput=cleanText(body.brand,80),modelInput=cleanText(body.model,120),issue=cleanText(body.issueDescription,2000),orderType=String(body.orderType||'REPAIR').toUpperCase();
+    const brand=brandInput||'Nie podano',model=modelInput||'Nie podano';
     const handlingMode=orderType==='COMPLAINT'?'COMPLAINT_FLOW':'STANDARD';
-    const imei=cleanText(body.imei,32).replace(/\s+/g,''),serialNumber=cleanText(body.serialNumber,120),deviceNotes=cleanText(body.deviceNotes,1000);
-    const canSetIntakeEta=SERVICE_EDIT_ROLES.has(u.role_code);
+    const imei=cleanText(body.imei,32).replace(/\s+/g,''),serialNumber=cleanText(body.serialNumber,120),deviceNotes=cleanText(body.deviceNotes,1000)||'Brak uwag';
+    const canSetIntakeEta=SERVICE_CREATE_ROLES.has(u.role_code);
+    const etaProvided=Object.prototype.hasOwnProperty.call(body,'estimatedCompletionAt');
     const etaText=canSetIntakeEta?cleanText(body.estimatedCompletionAt,64):'';
     let estimatedCompletionAt=null;
-    if(etaText){
+    if(canSetIntakeEta&&!etaProvided){
+      estimatedCompletionAt=new Date(Date.now()+3*24*60*60*1000);
+    }else if(etaText){
       const eta=new Date(etaText);
       if(Number.isNaN(eta.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
       estimatedCompletionAt=eta;
@@ -4418,7 +4421,7 @@ const route = async (request) => {
     if(body.assignedTechnicianId){
       return json(request,{error:'TECHNICIAN_AT_INTAKE',message:'Technika przypisuje się po utworzeniu zlecenia.'},400);
     }
-    if(!firstName||!lastName||!brand||!model||!deviceNotes||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij wymagane dane klienta i urządzenia: markę, model, uwagi oraz opis usterki.'},400);
+    if(!firstName||!lastName||!issue||!['REPAIR','COMPLAINT'].includes(orderType))return json(request,{error:'VALIDATION',message:'Uzupełnij imię, nazwisko i opis usterki. Marka, model oraz uwagi są opcjonalne.'},400);
     if(!email||!phoneNorm)return json(request,{error:'CONTACT_REQUIRED',message:'Podaj adres e-mail i numer telefonu klienta. Karta serwisowa jest zawsze wysyłana e-mailem.'},400);
     if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json(request,{error:'EMAIL',message:'Adres e-mail klienta jest nieprawidłowy.'},400);
     if(phone&&phoneNorm.length<7)return json(request,{error:'PHONE',message:'Numer telefonu klienta jest zbyt krótki.'},400);
@@ -4445,13 +4448,13 @@ const route = async (request) => {
         device=byImei||null;
       }
       if(!device&&serialNumber){
-        device=(await client.query("SELECT * FROM devices WHERE customer_id=$1 AND lower(brand)=lower($2) AND lower(model)=lower($3) AND lower(serial_number)=lower($4) ORDER BY updated_at DESC LIMIT 1",[customer.id,brand,model,serialNumber])).rows[0]||null;
+        device=(await client.query("SELECT * FROM devices WHERE customer_id=$1 AND lower(serial_number)=lower($2) ORDER BY updated_at DESC LIMIT 1",[customer.id,serialNumber])).rows[0]||null;
       }
       let did='';
       if(device){
         reusedDevice=true;
         did=device.id;
-        await client.query("UPDATE devices SET brand=$1,model=$2,imei=COALESCE(NULLIF($3,''),imei),serial_number=COALESCE(NULLIF($4,''),serial_number),notes=COALESCE(NULLIF($5,''),notes),updated_at=now() WHERE id=$6",[brand,model,imei,serialNumber,deviceNotes,did]);
+        await client.query("UPDATE devices SET brand=COALESCE(NULLIF($1,''),brand),model=COALESCE(NULLIF($2,''),model),imei=COALESCE(NULLIF($3,''),imei),serial_number=COALESCE(NULLIF($4,''),serial_number),notes=$5,updated_at=now() WHERE id=$6",[brandInput,modelInput,imei,serialNumber,deviceNotes,did]);
       }else{
         did=makeId('dev');
         await client.query("INSERT INTO devices(id,customer_id,brand,model,imei,serial_number,notes) VALUES($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''))",[did,customer.id,brand,model,imei,serialNumber,deviceNotes]);

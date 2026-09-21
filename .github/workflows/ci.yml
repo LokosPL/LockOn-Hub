@@ -257,7 +257,7 @@ jobs:
             if (-not $brands.Contains($_)) { throw "Missing phone brand suggestion: $_" }
           }
 
-          @("service-brand-suggestions","service-order-type-picker","service-estimate-field","canSetIntakeEstimate",'type="date"',"IMEI <em>opcjonalnie</em>","Numer seryjny <em>opcjonalnie</em>") | ForEach-Object {
+          @("service-brand-suggestions","service-order-type-picker","service-estimate-field","service-intake-eta","service-quick-pills","canSetIntakeEstimate","canSetIntakeEta",'type="date"',"Nie podano","Brak uwag","Marka <em>opcjonalnie</em>","Model <em>opcjonalnie</em>","IMEI <em>opcjonalnie</em>","Numer seryjny <em>opcjonalnie</em>") | ForEach-Object {
             if (-not $service.Contains($_)) { throw "Missing simplified intake UI contract: $_" }
           }
           @("<span>Punkt przyjęcia</span>","<span>Sposób obsługi</span>","form.assignedTechnicianId") | ForEach-Object {
@@ -266,7 +266,7 @@ jobs:
 
           @(
             "TECHNICIAN_AT_INTAKE",
-            "!firstName||!lastName||!brand||!model||!deviceNotes||!issue",
+            "!firstName||!lastName||!issue",
             "IMEI powinien zawierać 14–16 cyfr.",
             "serviceCardNumber='KS-'",
             "customerPortalBaseUrl:PUBLIC_PORTAL_URL+'/klient.html'",
@@ -284,13 +284,16 @@ jobs:
             "renderServiceCardPdf(item.service_order_id,'CUSTOMER')",
             "OWNER_OPERATIONAL_NAME = 'System LockOn'",
             "OWNER_SUPPORT_NAME = 'Właściciel aplikacji'",
-            "canSetIntakeEstimate=SERVICE_CREATE_ROLES.has(u.role_code)"
+            "canSetIntakeEstimate=SERVICE_CREATE_ROLES.has(u.role_code)",
+            "canSetIntakeEta=SERVICE_CREATE_ROLES.has(u.role_code)",
+            "brandInput||'Nie podano'",
+            "deviceNotes=cleanText(body.deviceNotes,1000)||'Brak uwag'"
           ) | ForEach-Object {
             if (-not $api.Contains($_)) { throw "Missing intake/card regression contract: $_" }
           }
-          $createOrderValidation = "!firstName||!lastName||!brand||!model||!deviceNotes||!issue"
+          $createOrderValidation = "!firstName||!lastName||!issue"
           if (-not $api.Contains($createOrderValidation)) {
-            throw "Create-order validation no longer matches the optional IMEI/serial contract."
+            throw "Create-order validation must keep only customer identity and issue description mandatory."
           }
 
       - name: Typecheck renderer

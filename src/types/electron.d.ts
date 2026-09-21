@@ -214,7 +214,7 @@ declare global {
         listTransfers: (incoming?:boolean,status?:string) => Promise<ServiceTransfer[]>;
         transferOrder: (orderId:string,payload:{toPointId?:string;note?:string;kind?:ServiceTransfer['kind']}) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
         updateTransferStatus: (transferId:string,status:ServiceTransfer['status'],note?:string) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
-        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand:string;model:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string}) => Promise<ServiceCreateOrderResult>;
+        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand?:string;model?:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string|null}) => Promise<ServiceCreateOrderResult>;
         openServiceCard: (orderId:string,printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY') => Promise<ServiceCardOpenResult>;
         scanServiceCard: (payload:{actingPointId:string;token?:string;code?:string}) => Promise<ServiceScanResult>;
         listOrders: () => Promise<ServiceOrderSummary[]>;
