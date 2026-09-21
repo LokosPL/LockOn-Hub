@@ -5,6 +5,7 @@ on:
     paths:
       - "functions/lockon-api.mjs"
       - ".github/workflows/central-api-bundle.yml"
+      - ".github/workflows/temp-neon-smoke.yml"
   workflow_dispatch:
 
 permissions:
