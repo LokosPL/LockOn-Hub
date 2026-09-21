@@ -1,0 +1,48 @@
+name: Temp export Neon function bundle
+
+on:
+  push:
+    branches:
+      - "tmp/unified-oauth-prod-deploy"
+    paths:
+      - ".github/workflows/temp-export-neon-b64.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+
+      - name: Build exact Neon bundle
+        shell: bash
+        run: |
+          npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 pdfmake@0.2.20 esbuild@0.25.12
+          mkdir -p central-api-dist .temp
+          npx esbuild functions/lockon-api.mjs \
+            --bundle \
+            --platform=node \
+            --target=node24 \
+            --format=esm \
+            --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" \
+            --outfile=central-api-dist/index.mjs
+          (cd central-api-dist && zip -9 ../lockonapi.zip index.mjs)
+          base64 -w0 lockonapi.zip > .temp/prod-neon-lockonapi.b64
+
+      - name: Commit exported bundle
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .temp/prod-neon-lockonapi.b64
+          git commit -m "temp: export unified OAuth Neon bundle" || exit 0
+          git push origin HEAD:tmp/unified-oauth-prod-deploy
