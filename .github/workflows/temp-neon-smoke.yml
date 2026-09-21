@@ -287,10 +287,7 @@ jobs:
             lastName:'Smoke '+suffix,
             email:'serviceos-ci-'+suffix+'@invalid.test',
             phone:'+48123456789',
-            brand:'Samsung',
-            model:'CI Smoke',
-            deviceNotes:'Automatyczny test temp Neon bez IMEI i numeru seryjnego.',
-            issueDescription:'Automatyczny test intake, PDF i logistyki.',
+            issueDescription:'Automatyczny test intake bez marki, modelu, uwag, IMEI i numeru seryjnego.',
             orderType:'REPAIR'
           }));
           NODE
@@ -308,6 +305,17 @@ jobs:
           NODE
 
           order_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.id)")"
+          api GET /service/orders > orders-after-intake.json
+          node - <<'NODE' "$order_id"
+          const orders=require('./orders-after-intake.json');
+          const order=orders.find((item)=>item.id===process.argv[2]);
+          if(!order)throw new Error('Created order missing from list');
+          if(order.brand!=='Nie podano'||order.model!=='Nie podano')throw new Error('Optional brand/model fallback is missing');
+          if(order.deviceNotes!=='Brak uwag')throw new Error('Automatic no-notes fallback is missing');
+          if(!order.estimatedCompletionAt)throw new Error('Automatic +3 day ETA is missing');
+          const delta=new Date(order.estimatedCompletionAt).getTime()-Date.now();
+          if(delta<2.5*24*60*60*1000||delta>3.1*24*60*60*1000)throw new Error('Automatic ETA is not approximately 3 days');
+          NODE
           owner_id="$(node -e "const d=require('./me.json');process.stdout.write(d.user.id)")"
 
           note_marker="OWNER-NOTE-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
