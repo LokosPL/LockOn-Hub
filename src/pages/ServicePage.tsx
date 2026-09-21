@@ -34,11 +34,35 @@ interface ServicePageProps {
   focusOrderId?: string | null;
 }
 
-const emptyForm = {
+const dateInputAfterDays = (days: number) => {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return shifted.toISOString().slice(0, 10);
+};
+
+const makeEmptyForm = () => ({
   firstName: '', lastName: '', email: '', phone: '',
-  brand: '', model: '', imei: '', serialNumber: '', deviceNotes: '',
+  brand: '', model: '', imei: '', serialNumber: '', deviceNotes: 'Brak uwag',
   issueDescription: '', orderType: 'REPAIR' as 'REPAIR' | 'COMPLAINT',
-  estimatedCost: '', estimatedCompletionAt: ''
+  estimatedCost: '', estimatedCompletionAt: dateInputAfterDays(3)
+});
+
+type ServiceIntakeForm = ReturnType<typeof makeEmptyForm>;
+
+const DEVICE_NOTE_PRESETS = [
+  'Brak uwag',
+  'Rysy / ślady użytkowania',
+  'Pęknięty ekran',
+  'Uszkodzona obudowa',
+  'Urządzenie w etui',
+  'Akcesoria w zestawie'
+] as const;
+
+const formatDeviceLabel = (brand?: string | null, model?: string | null) => {
+  const parts = [brand, model].filter((value) => value && value !== 'Nie podano');
+  return parts.length ? parts.join(' ') : 'Telefon — marka/model nie podane';
 };
 
 const toLocalDateInput = (value?: string | null) => {
@@ -92,7 +116,7 @@ type ServiceTab = 'CALENDAR' | 'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAI
 export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
   const isActualTechnician = auth.role === 'TECHNICIAN';
   const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'NEW');
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState<ServiceIntakeForm>(() => makeEmptyForm());
   const [brandOpen, setBrandOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [orderFilter, setOrderFilter] = useState('ALL');
@@ -138,6 +162,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const canEditStatus = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
   const canCreateService = canEditStatus || effectiveRole === 'USER';
   const canSetIntakeEstimate = canCreateService;
+  const canSetIntakeEta = canCreateService;
   const canEditIntake = canCreateService;
   const canTransferService = canCreateService;
   const canCancelService = canCreateService;
@@ -384,8 +409,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     if (submitBusyRef.current) return;
     const cleanEmail = form.email.trim();
     const cleanPhone = form.phone.replace(/\D/g, '');
-    if (!form.firstName.trim() || !form.lastName.trim() || !form.brand.trim() || !form.model.trim() || !form.deviceNotes.trim() || !form.issueDescription.trim()) {
-      setError('Uzupełnij wymagane dane klienta i urządzenia: markę, model, uwagi oraz opis usterki.');
+    if (!form.firstName.trim() || !form.lastName.trim() || !form.issueDescription.trim()) {
+      setError('Uzupełnij imię, nazwisko i opis usterki. Marka, model oraz uwagi mogą pozostać niepodane.');
       return;
     }
     if (!cleanEmail || !cleanPhone) {
@@ -411,10 +436,15 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     try {
       const created = await window.lockOn.service.createOrder({
         ...form,
+        brand: form.brand.trim(),
+        model: form.model.trim(),
+        deviceNotes: form.deviceNotes.trim() || 'Brak uwag',
         imei: cleanImei,
         pointId,
         estimatedCost: canSetIntakeEstimate && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
-        estimatedCompletionAt: form.estimatedCompletionAt ? (toApiDateTime(form.estimatedCompletionAt) ?? undefined) : undefined
+        estimatedCompletionAt: canSetIntakeEta
+          ? (form.estimatedCompletionAt ? toApiDateTime(form.estimatedCompletionAt) : null)
+          : undefined
       });
       setResult(created);
       if(created.serviceCard?.required && created.order.orderNumber != null){
@@ -432,7 +462,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       } else if (created.notification?.reason === 'NO_SENDER') {
         setNotice('Zlecenie utworzone, ale nie znaleziono aktywnego firmowego nadawcy Gmail.');
       }
-      setForm(emptyForm);
+      setForm(makeEmptyForm());
       setMatches([]);
       setQuery('');
       await loadOrders();
@@ -879,17 +909,17 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           </section>
 
           <section className="panel-card service-card service-intake-panel service-intake-device">
-            <div className="panel-heading"><div><span className="eyebrow"><Smartphone size={13}/> URZĄDZENIE I ZLECENIE</span><h2>Telefon, usterka i ustalenia</h2><p>Najważniejsze dane naprawy w jednym miejscu — bez ukrywania wyceny przy przyjęciu.</p></div></div>
+            <div className="panel-heading"><div><span className="eyebrow"><Smartphone size={13}/> URZĄDZENIE I ZLECENIE</span><h2>Telefon, usterka i ustalenia</h2><p>Wpisz tylko to, co wiesz. Marka, model i numery są opcjonalne — opis usterki jest najważniejszy.</p></div></div>
             <div className="service-form-grid service-intake-grid">
               <label className="service-brand-field">
-                <span>Marka</span>
+                <span>Marka <em>opcjonalnie</em></span>
                 <div className="service-brand-combobox">
                   <input
                     value={form.brand}
                     onFocus={()=>setBrandOpen(true)}
                     onBlur={()=>window.setTimeout(()=>setBrandOpen(false),120)}
                     onChange={(e)=>{update('brand',e.target.value);setBrandOpen(true);}}
-                    placeholder="Zacznij wpisywać, np. Samsung"
+                    placeholder="Jeśli znasz, np. Samsung"
                     autoComplete="off"
                     role="combobox"
                     aria-autocomplete="list"
@@ -906,7 +936,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                   </div>}
                 </div>
               </label>
-              <label><span>Model</span><input value={form.model} onChange={(e)=>update('model',e.target.value)} placeholder="Np. Galaxy S24"/></label>
+              <label><span>Model <em>opcjonalnie</em></span><input value={form.model} onChange={(e)=>update('model',e.target.value)} placeholder="Jeśli znasz, np. Galaxy S24"/></label>
               <label><span>IMEI <em>opcjonalnie</em></span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr, jeśli dostępny"/></label>
               <label><span>Numer seryjny <em>opcjonalnie</em></span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Jeśli dostępny"/></label>
               <div className="service-order-type-field full">
@@ -921,9 +951,32 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                 </div>
               </div>
               {canSetIntakeEstimate && <label className="service-estimate-field"><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="Np. 349,00"/><small>Wstępna kwota dla klienta — można ją później doprecyzować.</small></label>}
-              {canEditStatus && <label><span>Przewidywany termin</span><input type="date" value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} /></label>}
-              <label className="full"><span>Uwagi do urządzenia</span><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Stan obudowy, akcesoria, ślady uszkodzeń, dodatkowe informacje…"/></label>
-              <label className="full"><span>Opis usterki</span><textarea rows={6} value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder="Opisz objawy i problem zgłoszony przez klienta."/></label>
+              {canSetIntakeEta && <div className="service-intake-eta full">
+                <div className="service-field-heading"><span>Przewidywany termin</span><small>Domyślnie: do 3 dni</small></div>
+                <div className="service-quick-pills service-eta-pills" role="group" aria-label="Szybki wybór przewidywanego terminu">
+                  <button type="button" className={!form.estimatedCompletionAt?'active':''} onClick={()=>update('estimatedCompletionAt','')}>Nie podano</button>
+                  {[1,2,3].map((days)=><button
+                    type="button"
+                    key={days}
+                    className={form.estimatedCompletionAt===dateInputAfterDays(days)?'active':''}
+                    onClick={()=>update('estimatedCompletionAt',dateInputAfterDays(days))}
+                  >{days===1?'Jutro':`+${days} dni`}</button>)}
+                  <label className="service-custom-date">
+                    <span>Inna data</span>
+                    <input type="date" min={dateInputAfterDays(0)} value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} />
+                  </label>
+                </div>
+                <small className="service-field-help">ServiceOS ustawia 3 dni automatycznie. Pracownik może wybrać krótszy termin, inną datę albo „Nie podano”.</small>
+              </div>}
+              <div className="service-device-notes full">
+                <div className="service-field-heading"><span>Uwagi do urządzenia</span><small>opcjonalnie</small></div>
+                <div className="service-quick-pills service-note-presets" role="group" aria-label="Szybkie uwagi do urządzenia">
+                  {DEVICE_NOTE_PRESETS.map((note)=><button type="button" key={note} className={form.deviceNotes===note?'active':''} onClick={()=>update('deviceNotes',note)}>{note}</button>)}
+                </div>
+                <textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Kliknij gotową opcję albo wpisz własną uwagę…"/>
+                <small className="service-field-help">Jeżeli nic szczególnego nie ma do zapisania, zostaw „Brak uwag”.</small>
+              </div>
+              <label className="full"><span>Opis usterki <em>wymagane</em></span><textarea rows={6} required value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder="Np. ekran nie wyświetla obrazu, telefon dzwoni i reaguje na dotyk."/></label>
             </div>
             <button className="button primary wide service-submit" disabled={busy || !pointId} onClick={()=>void submit()}>{busy ? 'Zapisywanie…' : 'Utwórz zlecenie'}</button>
             <small className="service-intake-email-note">Po przyjęciu klient zawsze otrzymuje e-mail z kartą serwisową PDF i bezpośrednim QR do swojego panelu.</small>
@@ -963,7 +1016,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                     <div className="service-order-number"><strong>#{order.orderNumber}</strong><span>{new Date(order.receivedAt).toLocaleString('pl-PL')}</span></div>
                     <div className="service-order-main">
                       <strong>{order.customerName}</strong>
-                      <span>{order.brand} {order.model} · {order.pointName}</span>
+                      <span>{formatDeviceLabel(order.brand, order.model)} · {order.pointName}</span>
                       <small>{order.handlingMode === 'TRANSFER_ONLY' ? 'Tylko przekazanie' : (order.orderType === 'COMPLAINT' ? 'Reklamacja' : 'Naprawa')} · {order.customerEmail || order.customerPhone || 'brak kontaktu'}</small>
                       {order.workflow && <div className="service-workflow-summary">
                         <div className="service-workflow-stage">
@@ -1025,7 +1078,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="service-details-grid">
                             <label><span>IMEI</span><input disabled={!canEditIntakeHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
                             <label><span>Numer seryjny</span><input disabled={!canEditIntakeHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
-                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditStatus && <label><span>Przewidywany termin</span><input disabled={!canEditOrderHere} type="date" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/></label>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditIntakeHere && <div className="service-detail-date-field"><span>Przewidywany termin</span><div><input disabled={!canEditIntakeHere} type="date" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/><button type="button" className="button tiny secondary" disabled={!canEditIntakeHere} onClick={()=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:''}}))}>Nie podano</button></div></div>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditOrderHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
