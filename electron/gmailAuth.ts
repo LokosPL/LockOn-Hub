@@ -5,6 +5,9 @@ import { APP_CONFIG } from './appConfig';
 import { backendRequest } from './backendApi';
 import { getStoredApiToken } from './googleAuth';
 
+const GMAIL_OAUTH_USER_WAIT_MS = 10 * 60_000;
+const GMAIL_OAUTH_EXCHANGE_TIMEOUT_MS = 60_000;
+
 const base64Url = (input: Buffer) =>
   input.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 
@@ -91,7 +94,7 @@ export const disconnectGmailSender = async (pointId: string) => {
   );
 };
 
-export const connectGmailSender = async (pointId: string): Promise<GmailConnectionStatus> => {
+const performGmailConnect = async (pointId: string): Promise<GmailConnectionStatus> => {
   const apiToken = getStoredApiToken();
   if (!apiToken) throw new Error('Brak aktywnej sesji LockOn.');
 
@@ -108,9 +111,19 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
 
   return new Promise<GmailConnectionStatus>((resolve, reject) => {
     let settled = false;
+    let callbackAccepted = false;
+    let userWaitTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearUserWaitTimer = () => {
+      if (!userWaitTimer) return;
+      clearTimeout(userWaitTimer);
+      userWaitTimer = null;
+    };
+
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
+      clearUserWaitTimer();
       fn();
     };
 
@@ -128,6 +141,13 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
         if (error) throw new Error(friendlyGoogleOAuthError(error, errorDescription));
         if (returnedState !== stateToken) throw new Error('Nieprawidłowy state OAuth.');
         if (!code) throw new Error('Google nie zwrócił kodu autoryzacji.');
+        if (callbackAccepted) {
+          response.writeHead(409, headers).end('Połączenie Gmail jest już finalizowane.');
+          return;
+        }
+
+        callbackAccepted = true;
+        clearUserWaitTimer();
 
         const address = server.address();
         if (!address || typeof address === 'string') throw new Error('Błąd callbacku Gmail OAuth.');
@@ -139,6 +159,7 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
             '/integrations/gmail/connect-code',
             {
               method: 'POST',
+              signal: AbortSignal.timeout(GMAIL_OAUTH_EXCHANGE_TIMEOUT_MS),
               body: JSON.stringify({
                 pointId,
                 code,
@@ -162,6 +183,7 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             redirect: 'error',
+            signal: AbortSignal.timeout(GMAIL_OAUTH_EXCHANGE_TIMEOUT_MS),
             body: new URLSearchParams({
               client_id: APP_CONFIG.auth.googleClientId,
               client_secret: clientSecret,
@@ -186,6 +208,7 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
             '/integrations/gmail/connect',
             {
               method: 'POST',
+              signal: AbortSignal.timeout(GMAIL_OAUTH_EXCHANGE_TIMEOUT_MS),
               body: JSON.stringify({
                 pointId,
                 refreshToken: tokenPayload.refresh_token,
@@ -243,14 +266,40 @@ export const connectGmailSender = async (pointId: string): Promise<GmailConnecti
       });
       if (preferredEmail) params.set('login_hint', preferredEmail);
       authUrl.search = params.toString();
-      await shell.openExternal(authUrl.toString());
+      try {
+        await shell.openExternal(authUrl.toString());
+      } catch {
+        finish(() => {
+          server.close();
+          reject(new Error('Nie udało się otworzyć autoryzacji Gmail w przeglądarce.'));
+        });
+      }
     });
 
-    setTimeout(() => {
+    userWaitTimer = setTimeout(() => {
       finish(() => {
         server.close();
-        reject(new Error('Przekroczono czas oczekiwania na połączenie Gmail.'));
+        reject(new Error('Autoryzacja Gmail nie została zakończona. Uruchom połączenie ponownie.'));
       });
-    }, 180_000);
+    }, GMAIL_OAUTH_USER_WAIT_MS);
   });
+};
+
+const gmailConnectInFlight = new Map<string, Promise<GmailConnectionStatus>>();
+
+export const connectGmailSender = (pointId: string): Promise<GmailConnectionStatus> => {
+  const safePointId = String(pointId ?? '').trim().slice(0, 80);
+  if (!safePointId) return Promise.reject(new Error('Brak punktu dla integracji Gmail.'));
+
+  const existing = gmailConnectInFlight.get(safePointId);
+  if (existing) return existing;
+
+  const attempt = performGmailConnect(safePointId);
+  const tracked = attempt.finally(() => {
+    if (gmailConnectInFlight.get(safePointId) === tracked) {
+      gmailConnectInFlight.delete(safePointId);
+    }
+  });
+  gmailConnectInFlight.set(safePointId, tracked);
+  return tracked;
 };
