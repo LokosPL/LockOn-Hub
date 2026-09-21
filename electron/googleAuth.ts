@@ -9,6 +9,7 @@ import {
   backendGoogleCodeLogin,
   backendGoogleLogin,
   backendLogout,
+  backendRequest,
   backendMe,
   type BackendAuthPayload,
   type BackendLoginPayload,
@@ -43,6 +44,8 @@ export interface AuthState {
   supportEnabled?: boolean;
   status: AccountStatus | null;
   requestedPoint?: BackendRequestedPoint | null;
+  gmailConnected?: boolean;
+  gmailStatus?: string | null;
   message?: string;
 }
 
@@ -149,6 +152,8 @@ const toAuthState = (
     supportEnabled: payload.user.supportEnabled === true || payload.user.role === 'SUPPORT' || payload.user.role === 'OWNER',
     status: payload.user.status,
     requestedPoint: payload.user.requestedPoint ?? null,
+    gmailConnected: payload.gmail?.connected === true,
+    gmailStatus: payload.gmail?.reason ?? payload.gmail?.status ?? null,
     message
   };
 };
@@ -335,9 +340,41 @@ const performGoogleLogin = async (development: boolean): Promise<AuthState> => {
             );
           }
 
-          const tokens = (await tokenResponse.json()) as { id_token?: string };
+          const tokens = (await tokenResponse.json()) as {
+            id_token?: string;
+            refresh_token?: string;
+            scope?: string;
+          };
           if (!tokens.id_token) throw new Error('Google nie zwrócił tokena tożsamości.');
           payload = await backendGoogleLogin(tokens.id_token, AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS));
+
+          const role = String(payload.user.role ?? '').toUpperCase();
+          const pointId = String(payload.activePointId ?? '').trim();
+          const canAutoConnectGmail =
+            role !== 'OWNER' &&
+            ['BOSS', 'COORDINATOR'].includes(role) &&
+            payload.user.status === 'ACTIVE' &&
+            Boolean(pointId) &&
+            Boolean(tokens.refresh_token) &&
+            String(tokens.scope ?? '').split(/\s+/).includes('https://www.googleapis.com/auth/gmail.send');
+
+          if (canAutoConnectGmail) {
+            try {
+              await backendRequest('/integrations/gmail/connect', {
+                method: 'POST',
+                signal: AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS),
+                body: JSON.stringify({
+                  pointId,
+                  refreshToken: tokens.refresh_token,
+                  idToken: tokens.id_token,
+                  clientSecret
+                })
+              }, payload.token);
+              payload.gmail = { connected:true, pointId, status:'ACTIVE' };
+            } catch {
+              payload.gmail = { connected:false, pointId, reason:'GMAIL_AUTO_CONNECT_FAILED' };
+            }
+          }
         }
 
         writeStoredSession({ apiToken: payload.token, provider: 'google', savedAt: new Date().toISOString() });
