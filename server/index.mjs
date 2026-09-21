@@ -868,18 +868,23 @@ const handle = async (req, res) => {
     const email = normalizeEmail(cleanText(body.email, 180));
     const phone = cleanText(body.phone, 50);
     const phoneNormalized = normalizePhone(phone);
-    const brand = cleanText(body.brand, 80);
-    const model = cleanText(body.model, 120);
+    const brandInput = cleanText(body.brand, 80);
+    const modelInput = cleanText(body.model, 120);
+    const brand = brandInput || 'Nie podano';
+    const model = modelInput || 'Nie podano';
     const imei = cleanText(body.imei, 32).replace(/\s+/g, '');
     const serialNumber = cleanText(body.serialNumber, 120);
-    const deviceNotes = cleanText(body.deviceNotes, 1000);
+    const deviceNotes = cleanText(body.deviceNotes, 1000) || 'Brak uwag';
     const issueDescription = cleanText(body.issueDescription, 2000);
     const orderType = String(body.orderType || 'REPAIR').toUpperCase();
     const handlingMode = orderType === 'COMPLAINT' ? 'COMPLAINT_FLOW' : 'STANDARD';
-    const canEditWorkflow = SERVICE_EDIT_ROLES.has(user.role);
-    const etaText = canEditWorkflow ? cleanText(body.estimatedCompletionAt, 64) : '';
+    const canSetIntakeEta = SERVICE_CREATE_ROLES.has(user.role);
+    const etaProvided = Object.prototype.hasOwnProperty.call(body, 'estimatedCompletionAt');
+    const etaText = canSetIntakeEta ? cleanText(body.estimatedCompletionAt, 64) : '';
     let estimatedCompletionAt = null;
-    if (etaText) {
+    if (canSetIntakeEta && !etaProvided) {
+      estimatedCompletionAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+    } else if (etaText) {
       const eta = new Date(etaText);
       if (Number.isNaN(eta.getTime())) return json(res, 400, { error: 'ETA', message: 'Nieprawidłowy przewidywany termin.' });
       estimatedCompletionAt = eta.toISOString();
@@ -895,8 +900,8 @@ const handle = async (req, res) => {
       if (!Number.isFinite(estimatedCost) || estimatedCost < 0) return json(res, 400, { error: 'ESTIMATED_COST', message: 'Nieprawidłowy koszt szacowany.' });
     }
 
-    if (!firstName || !lastName || !brand || !model || !issueDescription) {
-      return json(res, 400, { error: 'VALIDATION', message: 'Uzupełnij klienta, markę, model i opis usterki.' });
+    if (!firstName || !lastName || !issueDescription) {
+      return json(res, 400, { error: 'VALIDATION', message: 'Uzupełnij imię, nazwisko i opis usterki. Marka, model oraz uwagi są opcjonalne.' });
     }
     if (!email || !phoneNormalized) {
       return json(res, 400, { error: 'CONTACT_REQUIRED', message: 'Podaj adres e-mail i numer telefonu klienta.' });
@@ -962,8 +967,6 @@ const handle = async (req, res) => {
     if (!device && serialNumber) {
       device = db.devices.find((candidate) =>
         candidate.customerId === customer.id &&
-        String(candidate.brand || '').toLowerCase() === brand.toLowerCase() &&
-        String(candidate.model || '').toLowerCase() === model.toLowerCase() &&
         String(candidate.serialNumber || '').toLowerCase() === serialNumber.toLowerCase()
       ) || null;
     }
@@ -982,11 +985,11 @@ const handle = async (req, res) => {
       };
       db.devices.push(device);
     } else {
-      device.brand = brand;
-      device.model = model;
+      if (brandInput) device.brand = brandInput;
+      if (modelInput) device.model = modelInput;
       if (imei) device.imei = imei;
       if (serialNumber) device.serialNumber = serialNumber;
-      if (deviceNotes) device.notes = deviceNotes;
+      device.notes = deviceNotes;
       device.updatedAt = nowIso();
     }
 
@@ -1243,23 +1246,26 @@ const handle = async (req, res) => {
     const body = await readBody(req);
     const imei = cleanText(body.imei, 32).replace(/\s+/g, '');
     const serialNumber = cleanText(body.serialNumber, 120);
-    const deviceNotes = cleanText(body.deviceNotes, 1000);
+    const deviceNotes = cleanText(body.deviceNotes, 1000) || 'Brak uwag';
     if (imei && !/^\d{14,16}$/.test(imei)) return json(res, 400, { error: 'IMEI', message: 'IMEI powinien zawierać 14–16 cyfr.' });
     const otherDevice = imei ? db.devices.find((item) => item.imei === imei && item.id !== device.id) : null;
     if (otherDevice) return json(res, 409, { error: 'IMEI_CONFLICT', message: 'Ten IMEI jest już przypisany do innego urządzenia.' });
 
-    const etaText = SERVICE_EDIT_ROLES.has(user.role) ? cleanText(body.estimatedCompletionAt, 64) : '';
-    let estimatedCompletionAt = null;
-    if (etaText) {
-      const eta = new Date(etaText);
-      if (Number.isNaN(eta.getTime())) return json(res, 400, { error: 'ETA', message: 'Nieprawidłowy przewidywany termin.' });
-      estimatedCompletionAt = eta.toISOString();
+    const canEditEta = SERVICE_INTAKE_EDIT_ROLES.has(user.role);
+    let estimatedCompletionAt = order.estimatedCompletionAt || null;
+    if (canEditEta && order.handlingMode !== 'TRANSFER_ONLY' && 'estimatedCompletionAt' in body) {
+      const etaText = cleanText(body.estimatedCompletionAt, 64);
+      if (!etaText) {
+        estimatedCompletionAt = null;
+      } else {
+        const eta = new Date(etaText);
+        if (Number.isNaN(eta.getTime())) return json(res, 400, { error: 'ETA', message: 'Nieprawidłowy przewidywany termin.' });
+        estimatedCompletionAt = eta.toISOString();
+      }
     }
 
     const canManageAssignment = SERVICE_MANAGE_ROLES.has(user.role);
-    const canEditWorkflow = SERVICE_EDIT_ROLES.has(user.role);
     const canEditCosts = SERVICE_EDIT_ROLES.has(user.role);
-    if (!canEditWorkflow && 'estimatedCompletionAt' in body && body.estimatedCompletionAt) return json(res, 403, { error:'FORBIDDEN', message:'Rola USER nie może zmieniać terminu realizacji.' });
     if (!canEditCosts && ('estimatedCost' in body || 'finalCost' in body)) return json(res, 403, { error:'FORBIDDEN', message:'Brak uprawnień do danych kosztowych zlecenia.' });
     if (!canManageAssignment && 'assignedTechnicianId' in body) {
       return json(res, 403, { error: 'FORBIDDEN', message: 'Tylko kierownictwo punktu może zmieniać przypisanego technika.' });
@@ -1291,7 +1297,7 @@ const handle = async (req, res) => {
 
     device.imei = imei || null;
     device.serialNumber = serialNumber || null;
-    device.notes = deviceNotes || null;
+    device.notes = deviceNotes;
     device.updatedAt = nowIso();
     order.estimatedCompletionAt = estimatedCompletionAt;
     order.updatedAt = nowIso();
