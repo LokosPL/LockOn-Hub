@@ -99,7 +99,7 @@ jobs:
           mkdir -p central-api-dist
           npx esbuild functions/lockon-api.mjs --bundle --platform=node --target=node24 --format=esm --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" --outfile=central-api-dist/index.mjs
       - name: Upload verified Neon bundle
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lockon-central-api
           path: central-api-dist/index.mjs
