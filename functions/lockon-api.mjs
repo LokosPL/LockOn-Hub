@@ -1251,6 +1251,42 @@ const autoConnectGmailFromPrimaryLogin = async (loginPayload, profile, tokens) =
     return { connected:false, skipped:false, reason:'GMAIL_SCOPE_NOT_GRANTED', pointId };
   }
   if (!refreshToken) {
+    const existing = (await q(
+      "SELECT sender_email,refresh_token_ciphertext,status FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND lower(sender_email)=lower($2) AND refresh_token_ciphertext IS NOT NULL LIMIT 1",
+      [pointId,profile.email]
+    )).rows[0];
+
+    if (existing?.refresh_token_ciphertext) {
+      try {
+        await refreshGmailAccess(decryptSecret(existing.refresh_token_ciphertext), '');
+        const user = await loadUser(userId);
+        if (user) {
+          await audit(
+            { user, clientType:'DESKTOP' },
+            'GMAIL_REUSED_AT_LOGIN',
+            'point',
+            pointId,
+            pointId,
+            {
+              senderEmail: operationalIdentityEmail(existing.sender_email, role),
+              identitySource:'EXISTING_SERVER_REFRESH_TOKEN',
+              credentialLocation:'SERVER'
+            }
+          );
+        }
+        return {
+          connected:true,
+          skipped:false,
+          pointId,
+          email:operationalIdentityEmail(existing.sender_email, role),
+          status:'ACTIVE',
+          reason:'EXISTING_SENDER_REUSED'
+        };
+      } catch (error) {
+        console.error('[gmail reuse at login]', error);
+      }
+    }
+
     return { connected:false, skipped:false, reason:'REFRESH_TOKEN_MISSING', pointId };
   }
 
