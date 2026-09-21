@@ -116,7 +116,8 @@ const ensureView = (window: BrowserWindow) => {
     }
   });
 
-  view.setBackgroundColor('#ffffff');
+  view.setBackgroundColor('#0b0f14');
+  view.setBorderRadius(14);
   window.contentView.addChildView(view);
 
   const webContents = view.webContents;
@@ -175,6 +176,7 @@ export const setBrowserBounds = (window: BrowserWindow, bounds: BrowserBounds) =
   };
   lastBounds = safe;
   const browserView = ensureView(window);
+  browserView.setBorderRadius(Math.max(10, Math.round(14 * zoom)));
   if (visible) browserView.setBounds(safe);
 };
 
