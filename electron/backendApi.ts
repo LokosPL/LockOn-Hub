@@ -36,6 +36,14 @@ export interface BackendAuthPayload {
   user: BackendUser;
   points: BackendPoint[];
   activePointId?: string | null;
+  gmail?: {
+    connected: boolean;
+    skipped?: boolean;
+    reason?: string;
+    pointId?: string | null;
+    email?: string | null;
+    status?: string;
+  };
 }
 
 export interface BackendLoginPayload extends BackendAuthPayload {
