@@ -68,7 +68,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
 
         <div className="login-features">
           <div><ShieldCheck size={17} /><span>Bezpieczne logowanie Google</span></div>
-          <div><CheckCircle2 size={17} /><span>Gmail możesz połączyć później w ustawieniach</span></div>
+          <div><CheckCircle2 size={17} /><span>Jedno logowanie obejmuje wysyłkę Gmail przez ServiceOS</span></div>
           <div><Building2 size={17} /><span>Dostęp i punkty kontrolowane przez ServiceOS</span></div>
         </div>
 
@@ -94,7 +94,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
         {message && <div className="login-message">{message}</div>}
 
         <div className="login-help">
-          Logowanie do ServiceOS działa niezależnie od integracji Gmail. Jeśli Twoja rola tego wymaga, Gmail połączysz osobno po wejściu do aplikacji.
+          Podczas tego samego logowania Google ServiceOS poprosi również o zakres gmail.send. Dla uprawnionych kont nadawca zostanie skonfigurowany automatycznie — bez drugiego okna logowania.
         </div>
       </section>
     </div>
