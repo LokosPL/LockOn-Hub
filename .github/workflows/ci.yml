@@ -179,7 +179,7 @@ jobs:
             if (-not $browser.Contains($_)) { throw "Missing embedded browser clipping contract: $_" }
           }
 
-      - name: Verify Google OAuth reliability contracts
+      - name: Verify Gmail OAuth reliability contracts
         shell: pwsh
         run: |
           $login = Get-Content src/pages/LoginScreen.tsx -Raw
