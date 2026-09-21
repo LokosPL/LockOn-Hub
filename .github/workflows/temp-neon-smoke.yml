@@ -394,7 +394,7 @@ jobs:
           pdfinfo customer-card.pdf > customer-card-pdfinfo.txt
           cat customer-card-pdfinfo.txt
           grep -q '^Pages:[[:space:]]*1' customer-card-pdfinfo.txt || { echo "::error::Customer card is not exactly one page"; exit 1; }
-          grep -Eq '^Page size:[[:space:]]+84[01](\.[0-9]+)? x 59[45](\.[0-9]+)? pts' customer-card-pdfinfo.txt || { echo "::error::Customer card is not full A4 landscape"; exit 1; }
+          grep -Eq '^Page size:[[:space:]]+59[45](\.[0-9]+)? x 84[12](\.[0-9]+)? pts' customer-card-pdfinfo.txt || { echo "::error::Customer card is not full A4 portrait"; exit 1; }
           pdftotext -layout customer-card.pdf customer-card.txt
           echo "--- extracted customer card text ---"
           cat customer-card.txt
