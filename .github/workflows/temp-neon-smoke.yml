@@ -79,7 +79,7 @@ jobs:
           set -euo pipefail
           target_branch="tmp/v021-service-finance-smoke"
           base64 -w0 temp-neon-lockonapi.zip > bundle-full.b64
-          split -b 180000 -d -a 2 bundle-full.b64 bundle-part-
+          split -b 500000 -d -a 2 bundle-full.b64 bundle-part-
           part_count=0
           for part_file in bundle-part-*; do
             suffix="$(printf '%02d' "$part_count")"
@@ -100,7 +100,7 @@ jobs:
           done
 
           bundle_sha="$(sha256sum temp-neon-lockonapi.zip | awk '{print $1}')"
-          printf '{"partCount":%d,"chunkSize":180000,"sha256":"%s"}\n' "$part_count" "$bundle_sha" > bundle-manifest.json
+          printf '{"partCount":%d,"chunkSize":500000,"sha256":"%s"}\n' "$part_count" "$bundle_sha" > bundle-manifest.json
           target_path=".temp/temp-neon-lockonapi.manifest.json"
           current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
           TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" node - <<'NODE'
