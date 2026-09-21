@@ -7,12 +7,16 @@ on:
       - "database/migrations/**"
       - "database/schema.sql"
       - ".github/workflows/neon-api-verify.yml"
+      - ".github/workflows/central-api-bundle.yml"
+      - ".github/workflows/temp-neon-smoke.yml"
   pull_request:
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
       - "database/schema.sql"
       - ".github/workflows/neon-api-verify.yml"
+      - ".github/workflows/central-api-bundle.yml"
+      - ".github/workflows/temp-neon-smoke.yml"
   workflow_dispatch:
 
 permissions:
