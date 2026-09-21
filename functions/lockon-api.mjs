@@ -476,19 +476,31 @@ const exchangeDesktopAuthorizationCode = async (body, expectedPath) => {
     throw Object.assign(new Error('Nieprawidłowe dane PKCE.'), { status: 400, code: 'OAUTH_PKCE' });
   }
 
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    redirect: 'error',
-    body: new URLSearchParams({
-      client_id: GOOGLE_DESKTOP_CLIENT_ID,
-      client_secret: GOOGLE_DESKTOP_CLIENT_SECRET,
-      code,
-      code_verifier: codeVerifier,
-      grant_type: 'authorization_code',
-      redirect_uri: redirectUri
-    })
-  });
+  let response;
+  try {
+    response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      redirect: 'error',
+      signal: AbortSignal.timeout(15_000),
+      body: new URLSearchParams({
+        client_id: GOOGLE_DESKTOP_CLIENT_ID,
+        client_secret: GOOGLE_DESKTOP_CLIENT_SECRET,
+        code,
+        code_verifier: codeVerifier,
+        grant_type: 'authorization_code',
+        redirect_uri: redirectUri
+      })
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
+      throw Object.assign(new Error('Google nie odpowiedział na czas. Spróbuj zalogować się ponownie.'), {
+        status: 504,
+        code: 'GOOGLE_UPSTREAM_TIMEOUT'
+      });
+    }
+    throw error;
+  }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = cleanText(payload?.error_description || payload?.error || 'Google odrzucił wymianę kodu OAuth.', 300);
