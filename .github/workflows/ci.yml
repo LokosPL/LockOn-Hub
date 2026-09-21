@@ -179,6 +179,29 @@ jobs:
             if (-not $browser.Contains($_)) { throw "Missing embedded browser clipping contract: $_" }
           }
 
+      - name: Verify Google OAuth reliability contracts
+        shell: pwsh
+        run: |
+          $login = Get-Content src/pages/LoginScreen.tsx -Raw
+          if ($login.Contains("window.lockOn.gmail.connect")) {
+            throw "ServiceOS login must not auto-start Gmail OAuth."
+          }
+          @("Zalogowano. Otwieram ServiceOS","Gmail możesz połączyć później") | ForEach-Object {
+            if (-not $login.Contains($_)) { throw "Missing decoupled login contract: $_" }
+          }
+
+          $gmail = Get-Content electron/gmailAuth.ts -Raw
+          @(
+            "GMAIL_OAUTH_USER_WAIT_MS = 10 * 60_000",
+            "GMAIL_OAUTH_EXCHANGE_TIMEOUT_MS = 60_000",
+            "callbackAccepted = true",
+            "clearUserWaitTimer()",
+            "AbortSignal.timeout(GMAIL_OAUTH_EXCHANGE_TIMEOUT_MS)",
+            "gmailConnectInFlight"
+          ) | ForEach-Object {
+            if (-not $gmail.Contains($_)) { throw "Missing Gmail OAuth reliability contract: $_" }
+          }
+
       - name: Verify service finance UI contracts
         shell: pwsh
         run: |
