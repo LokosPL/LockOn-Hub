@@ -78,13 +78,35 @@ jobs:
         run: |
           set -euo pipefail
           target_branch="tmp/v021-service-finance-smoke"
-          target_path=".temp/temp-neon-lockonapi.b64"
+          base64 -w0 temp-neon-lockonapi.zip | fold -w 180000 > bundle-parts.txt
+          part_count=0
+          while IFS= read -r chunk; do
+            suffix="$(printf '%02d' "$part_count")"
+            target_path=".temp/temp-neon-lockonapi.part${suffix}"
+            current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
+            TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" CHUNK="$chunk" node - <<'NODE'
+          const fs=require('fs');
+          const payload={
+            message:'ci: stage exact temp Neon bundle part',
+            content:Buffer.from(process.env.CHUNK,'utf8').toString('base64'),
+            branch:process.env.TARGET_BRANCH
+          };
+          if(process.env.CURRENT_SHA) payload.sha=process.env.CURRENT_SHA;
+          fs.writeFileSync('bundle-upload.json',JSON.stringify(payload));
+          NODE
+            gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${target_path}" --input bundle-upload.json >/dev/null
+            part_count=$((part_count + 1))
+          done < bundle-parts.txt
+
+          bundle_sha="$(sha256sum temp-neon-lockonapi.zip | awk '{print $1}')"
+          printf '{"partCount":%d,"chunkSize":180000,"sha256":"%s"}\n' "$part_count" "$bundle_sha" > bundle-manifest.json
+          target_path=".temp/temp-neon-lockonapi.manifest.json"
           current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
           TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" node - <<'NODE'
           const fs=require('fs');
           const payload={
-            message:'ci: stage exact temp Neon bundle',
-            content:Buffer.from(fs.readFileSync('temp-neon-lockonapi.zip').toString('base64'),'utf8').toString('base64'),
+            message:'ci: stage exact temp Neon bundle manifest',
+            content:fs.readFileSync('bundle-manifest.json').toString('base64'),
             branch:process.env.TARGET_BRANCH
           };
           if(process.env.CURRENT_SHA) payload.sha=process.env.CURRENT_SHA;
