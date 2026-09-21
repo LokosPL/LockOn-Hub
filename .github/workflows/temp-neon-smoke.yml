@@ -2,7 +2,7 @@ name: Temp Neon integration smoke
 
 on:
   push:
-    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh"]
+    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "fix/service-card-customer-landscape"]
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
@@ -363,6 +363,43 @@ jobs:
           cat service-card.txt
           grep -qi 'PRZETNIJ' service-card.txt || { echo "::error::Cut-line label is missing from rendered PDF text"; exit 1; }
           grep -qi 'LockOn' service-card.txt || { echo "::error::LockOn branding is missing from rendered PDF text"; exit 1; }
+          grep -Fqi 'Karta urządzenia' service-card.txt || { echo "::error::Physical PDF lost the device-card half"; exit 1; }
+          grep -Fqi 'Karta serwisowa' service-card.txt || { echo "::error::Physical PDF lost the customer-card half"; exit 1; }
+          grep -Fqi 'Zeskanuj kod QR w ServiceOS' service-card.txt || { echo "::error::Device QR purpose text is missing from rendered PDF"; exit 1; }
+          grep -Fqi 'Kod ręczny' service-card.txt || { echo "::error::Manual scan-code explanation is missing from rendered PDF"; exit 1; }
+
+          customer_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.customer.id)")"
+          api POST "/customer-accounts/$customer_id/code" '{"rotate":false}' > customer-code.json
+          customer_code="$(node -e "const d=require('./customer-code.json');if(!d.code)throw new Error('Customer portal code missing');process.stdout.write(d.code)")"
+          curl --silent --show-error --fail-with-body \
+            --request POST "$TEMP_API_URL/public/customer-portal/login" \
+            --header "Content-Type: application/json" \
+            --data "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$customer_code")" > customer-login.json
+          customer_token="$(node -e "const d=require('./customer-login.json');if(!d.sessionToken)throw new Error('Customer portal login failed');process.stdout.write(d.sessionToken)")"
+          curl --silent --show-error --fail-with-body \
+            "$TEMP_API_URL/public/customer-portal/orders/$order_id/service-card" \
+            --header "Authorization: Bearer $customer_token" > customer-card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./customer-card.json');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Customer service card is not a real PDF');
+          if(pdf.length<10000)throw new Error('Customer service card PDF is unexpectedly small');
+          fs.writeFileSync('customer-card.pdf',pdf);
+          NODE
+          pdfinfo customer-card.pdf > customer-card-pdfinfo.txt
+          cat customer-card-pdfinfo.txt
+          grep -q '^Pages:[[:space:]]*1' customer-card-pdfinfo.txt || { echo "::error::Customer card is not exactly one page"; exit 1; }
+          grep -Eq '^Page size:[[:space:]]+84[01](\.[0-9]+)? x 59[45](\.[0-9]+)? pts' customer-card-pdfinfo.txt || { echo "::error::Customer card is not full A4 landscape"; exit 1; }
+          pdftotext -layout customer-card.pdf customer-card.txt
+          echo "--- extracted customer card text ---"
+          cat customer-card.txt
+          grep -Fqi 'Panel klienta' customer-card.txt || { echo "::error::Customer panel section missing from PDF"; exit 1; }
+          grep -Fqi 'Kod klienta' customer-card.txt || { echo "::error::Customer code missing from PDF"; exit 1; }
+          grep -Fqi 'Cena orientacyjna' customer-card.txt || { echo "::error::Estimated price missing from customer PDF"; exit 1; }
+          grep -Fqi 'Warunki przyjęcia i odbioru' customer-card.txt || { echo "::error::Terms missing from customer PDF"; exit 1; }
+          grep -Eq 'KS-[0-9]{4}-[0-9]{6}' customer-card.txt || { echo "::error::Service card number missing from customer PDF"; exit 1; }
+          if grep -Fqi 'PRZETNIJ TUTAJ' customer-card.txt; then echo "::error::Customer-only PDF reused the physical two-card cut layout"; exit 1; fi
 
           staff_code="$(cat staff-scan-code.txt)"
           api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > active-original.json
