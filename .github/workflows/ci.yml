@@ -278,6 +278,9 @@ jobs:
             "customerServiceCardLandscapeContent",
             "if(normalized==='CUSTOMER')",
             "pageSize:'A4',pageOrientation:'landscape',pageMargins:[28,24,28,24]",
+            "formatServiceCardDateTime(context.receivedAt)",
+            "Przyjęcie i urządzenie",
+            "Obsługa serwisowa",
             "renderServiceCardPdf(item.service_order_id,'CUSTOMER')",
             "OWNER_OPERATIONAL_NAME = 'System LockOn'",
             "OWNER_SUPPORT_NAME = 'Właściciel aplikacji'"
