@@ -17,6 +17,8 @@ on:
       - "vite.config.ts"
       - ".github/workflows/ci.yml"
       - ".github/workflows/neon-api-verify.yml"
+      - ".github/workflows/central-api-bundle.yml"
+      - ".github/workflows/temp-neon-smoke.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/prod-smoke.yml"
   pull_request:
@@ -36,6 +38,8 @@ on:
       - "vite.config.ts"
       - ".github/workflows/ci.yml"
       - ".github/workflows/neon-api-verify.yml"
+      - ".github/workflows/central-api-bundle.yml"
+      - ".github/workflows/temp-neon-smoke.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/prod-smoke.yml"
   workflow_dispatch:
