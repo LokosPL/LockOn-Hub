@@ -2,7 +2,7 @@ name: Temp Neon integration smoke
 
 on:
   push:
-    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "fix/service-card-customer-landscape"]
+    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "fix/service-card-*"]
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
@@ -370,6 +370,7 @@ jobs:
           grep -Fqi 'Karta serwisowa' service-card.txt || { echo "::error::Physical PDF lost the customer-card half"; exit 1; }
           grep -Fqi 'Zeskanuj kod QR w ServiceOS' service-card.txt || { echo "::error::Device QR purpose text is missing from rendered PDF"; exit 1; }
           grep -Fqi 'Kod ręczny' service-card.txt || { echo "::error::Manual scan-code explanation is missing from rendered PDF"; exit 1; }
+          grep -Eq '[0-9]{2}\.[0-9]{2}\.[0-9]{4}[^0-9]+[0-9]{2}:[0-9]{2}' service-card.txt || { echo "::error::Physical service card is missing intake time"; exit 1; }
 
           customer_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.customer.id)")"
           api POST "/customer-accounts/$customer_id/code" '{"rotate":false}' > customer-code.json
@@ -400,6 +401,9 @@ jobs:
           grep -Fqi 'Panel klienta' customer-card.txt || { echo "::error::Customer panel section missing from PDF"; exit 1; }
           grep -Fqi 'Kod klienta' customer-card.txt || { echo "::error::Customer code missing from PDF"; exit 1; }
           grep -Fqi 'Cena orientacyjna' customer-card.txt || { echo "::error::Estimated price missing from customer PDF"; exit 1; }
+          grep -Fqi 'Przyjęcie i urządzenie' customer-card.txt || { echo "::error::Customer intake section missing from PDF"; exit 1; }
+          grep -Fqi 'Obsługa serwisowa' customer-card.txt || { echo "::error::Customer service section missing from PDF"; exit 1; }
+          grep -Eq '[0-9]{2}\.[0-9]{2}\.[0-9]{4}[^0-9]+[0-9]{2}:[0-9]{2}' customer-card.txt || { echo "::error::Customer card is missing intake time"; exit 1; }
           grep -Fqi 'Warunki przyjęcia i odbioru' customer-card.txt || { echo "::error::Terms missing from customer PDF"; exit 1; }
           grep -Eq 'KS-[0-9]{4}-[0-9]{6}' customer-card.txt || { echo "::error::Service card number missing from customer PDF"; exit 1; }
           if grep -Fqi 'PRZETNIJ TUTAJ' customer-card.txt; then echo "::error::Customer-only PDF reused the physical two-card cut layout"; exit 1; fi
