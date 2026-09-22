@@ -4764,7 +4764,7 @@ const route = async (request) => {
     }
     const changed=Number(found.warranty_months||0)!==months;
     const row=(await q(
-      "UPDATE service_orders SET warranty_months=$2,warranty_started_at=COALESCE(warranty_started_at,now()),warranty_expires_at=COALESCE(warranty_started_at,now()) + ($2::text || ' months')::interval,warranty_card_printed_at=CASE WHEN $3::boolean THEN NULL ELSE warranty_card_printed_at END,updated_at=now() WHERE id=$1 RETURNING warranty_months,warranty_started_at,warranty_expires_at,warranty_card_printed_at,warranty_card_print_count",
+      "UPDATE service_orders SET warranty_months=$2::integer,warranty_started_at=COALESCE(warranty_started_at,now()),warranty_expires_at=COALESCE(warranty_started_at,now()) + ($2::integer::text || ' months')::interval,warranty_card_printed_at=CASE WHEN $3::boolean THEN NULL ELSE warranty_card_printed_at END,updated_at=now() WHERE id=$1 RETURNING warranty_months,warranty_started_at,warranty_expires_at,warranty_card_printed_at,warranty_card_print_count",
       [found.id,months,changed]
     )).rows[0];
     await audit(session,'SERVICE_WARRANTY_SET','service_order',found.id,found.point_id,{months,cardReprintRequired:changed});
