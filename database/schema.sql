@@ -116,11 +116,18 @@ CREATE TABLE IF NOT EXISTS service_orders (
   tracking_created_at timestamptz,
   original_order_id text REFERENCES service_orders(id),
   issue_description text NOT NULL,
-  status text NOT NULL DEFAULT 'RECEIVED' CHECK (status IN ('RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE','READY','COMPLETED','CANCELLED','REJECTED')),
+  status text NOT NULL DEFAULT 'RECEIVED' CHECK (status IN ('RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','TESTING','REPAIR_DONE','READY','COMPLETED','CANCELLED','REJECTED')),
   assigned_technician_id text REFERENCES users(id),
   created_by_user_id text NOT NULL REFERENCES users(id),
   estimated_cost numeric(12,2),
   final_cost numeric(12,2),
+  repair_summary text,
+  warranty_months integer CHECK (warranty_months IS NULL OR (warranty_months >= 1 AND warranty_months <= 120)),
+  warranty_start_at timestamptz,
+  warranty_expires_at timestamptz,
+  warranty_card_number text,
+  warranty_card_generated_at timestamptz,
+  workday_sort_order integer NOT NULL DEFAULT 0,
   currency char(3) NOT NULL DEFAULT 'PLN',
   received_at timestamptz NOT NULL DEFAULT now(),
   completed_at timestamptz,
@@ -129,6 +136,8 @@ CREATE TABLE IF NOT EXISTS service_orders (
 );
 CREATE INDEX IF NOT EXISTS service_orders_point_status_idx ON service_orders (point_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS service_orders_customer_idx ON service_orders (customer_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS service_orders_warranty_card_number_uq ON service_orders(warranty_card_number) WHERE warranty_card_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS service_orders_workday_sort_idx ON service_orders(assigned_technician_id, estimated_completion_at, workday_sort_order, updated_at DESC) WHERE assigned_technician_id IS NOT NULL AND estimated_completion_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS service_order_status_history (
   id text PRIMARY KEY,
