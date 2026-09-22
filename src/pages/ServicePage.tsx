@@ -1077,13 +1077,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const notes = orderNotes[order.id] ?? [];
         const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
         const pointTechnicians = currentServicePointId ? (techniciansByPoint[currentServicePointId] ?? []) : [];
-        const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(currentServicePointId));
+        const operatingPointId = auth.point?.id ?? '';
+        const canOperateCurrentPoint = Boolean(currentServicePointId) && operatingPointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(currentServicePointId));
         const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
         const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
         const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
         const canUseOrderFinance = canEditCosts && (!isActualTechnician || order.assignedTechnicianId === auth.user?.id);
         const physicalPointId = order.currentPointId || order.homePointId || order.pointId;
-        const canManageWarrantyHere = canEditOrderHere && Boolean(pointId) && physicalPointId === pointId;
+        const canManageWarrantyHere = canEditOrderHere && Boolean(operatingPointId) && physicalPointId === operatingPointId;
         const canShowWarranty = order.handlingMode!=='TRANSFER_ONLY' && (
           canManageWarrantyHere ||
           Boolean(order.warrantyMonths) ||
@@ -1150,7 +1151,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                               </select>
                             </label>
                           </details>
-                        </div> : <div className="service-history-empty">Etap może zmienić tylko punkt, w którym fizycznie znajduje się telefon.</div>}
+                        </div> : <div className="service-history-empty">{!operatingPointId?'Wybierz konkretny aktywny punkt zamiast „Wszystkie punkty”, aby obsługiwać ten telefon.':'Etap może zmienić tylko punkt, w którym fizycznie znajduje się telefon.'}</div>}
                       </section>
 
                       {canShowWarranty && (
