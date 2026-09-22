@@ -238,6 +238,16 @@ jobs:
           @("TechnicianCalendar","InvoiceWarehouse","TechnicianNotesRoom","OrderCostingCard") | ForEach-Object {
             if (-not $service.Contains($_)) { throw "Missing v0.21 service workspace contract: $_" }
           }
+          @(
+            "isActualTechnician ? 'CALENDAR' : 'ORDERS'",
+            "Więcej szczegółów zlecenia",
+            "Inny etap",
+            "Najpierw gwarancja",
+            "deviceAtHomePoint",
+            "Gwarancja pojawi się dopiero po fizycznym powrocie urządzenia"
+          ) | ForEach-Object {
+            if (-not $service.Contains($_)) { throw "Missing 1.0.0.15 service UX hotfix contract: $_" }
+          }
           $costing = Get-Content src/components/OrderCostingCard.tsx -Raw
           @("Mam FV zakupu","Kwota za robociznę","Dodaj FV w PDF","Marża informacyjna") | ForEach-Object {
             if (-not $costing.Contains($_)) { throw "Missing costing UI contract: $_" }
@@ -250,6 +260,13 @@ jobs:
           $api = Get-Content functions/lockon-api.mjs -Raw
           @("COALESCE(s.current_point_id,s.home_point_id,s.point_id)","t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')","FOR UPDATE") | ForEach-Object {
             if (-not $api.Contains($_)) { throw "Missing v1 service safety regression contract: $_" }
+          }
+          @(
+            "Gwarancję można wystawić dopiero po fizycznym powrocie urządzenia do punktu macierzystego.",
+            "Gwarancję można wystawić tylko w punkcie, w którym fizycznie znajduje się urządzenie.",
+            "Kartę gwarancyjną przygotuj po fizycznym powrocie urządzenia do punktu macierzystego."
+          ) | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing 1.0.0.15 warranty location safety contract: $_" }
           }
 
           $brands = Get-Content src/config/phoneBrands.ts -Raw
