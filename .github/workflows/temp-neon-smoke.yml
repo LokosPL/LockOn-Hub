@@ -537,6 +537,83 @@ jobs:
           curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $tech_token" > tech-notes-after.json
           node -e "const d=require('./tech-notes-after.json');if(d.some(x=>x.id===process.argv[1]))throw new Error('Private note was not deleted')" "$note_id"
 
+      - name: Temp draggable technician plan E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          tech_token="$(node -e "const d=require('./role-TECHNICIAN.json');process.stdout.write(d.token)")"
+          tech_point="$(node -e "const d=require('./role-TECHNICIAN.json');process.stdout.write(d.activePointId||d.points?.[0]?.id||'')")"
+          [ -n "$tech_point" ]
+
+          plan_api() {
+            local method="$1" path="$2" body="${3:-}"
+            if [ -n "$body" ]; then
+              curl --silent --show-error --fail-with-body \
+                --request "$method" "$TEMP_API_URL$path" \
+                --header "Authorization: Bearer $tech_token" \
+                --header "Content-Type: application/json" \
+                --data "$body"
+            else
+              curl --silent --show-error --fail-with-body \
+                --request "$method" "$TEMP_API_URL$path" \
+                --header "Authorization: Bearer $tech_token"
+            fi
+          }
+
+          suffix="PLAN-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          make_order() {
+            local ordinal="$1"
+            node - <<'NODE' "$suffix" "$ordinal"
+          const [suffix,ordinal]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            firstName:'Plan',
+            lastName:'CI '+suffix+' '+ordinal,
+            email:'serviceos-plan-'+suffix+'-'+ordinal+'@invalid.test',
+            phone:'+48123456789',
+            brand:'CI',
+            model:'Drag '+ordinal,
+            issueDescription:'Test przeciągania i kolejności planu pracy',
+            orderType:'REPAIR'
+          }));
+          NODE
+          }
+
+          plan_api POST /service/orders "$(make_order 1)" > plan-order-1.json
+          plan_api POST /service/orders "$(make_order 2)" > plan-order-2.json
+          order_1="$(node -e "const d=require('./plan-order-1.json');if(!d.order?.id||!d.order?.assignedTechnicianId)throw new Error('Technician intake did not self-assign');process.stdout.write(d.order.id)")"
+          order_2="$(node -e "const d=require('./plan-order-2.json');if(!d.order?.id||!d.order?.assignedTechnicianId)throw new Error('Technician intake did not self-assign');process.stdout.write(d.order.id)")"
+
+          target_day="$(node -e "const d=new Date(Date.now()+5*86400000);d.setUTCHours(12,0,0,0);process.stdout.write(d.toISOString())")"
+          target_key="$(node -e "process.stdout.write(new Date(process.argv[1]).toISOString().slice(0,10))" "$target_day")"
+
+          plan_api POST "/service/orders/$order_1/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-move-1.json
+          node - <<'NODE' "$target_key"
+          const d=require('./plan-move-1.json'),target=process.argv[2];
+          if(!d.order?.estimatedCompletionAt)throw new Error('Plan move did not return ETA');
+          if(new Date(d.order.estimatedCompletionAt).toISOString().slice(0,10)!==target)throw new Error('Plan move returned wrong day');
+          if(Number(d.order.planPosition||0)<=0)throw new Error('Plan position was not persisted');
+          if(!d.notification||typeof d.notification.sent!=='boolean')throw new Error('ETA notification result missing');
+          NODE
+
+          plan_api POST "/service/orders/$order_2/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-move-2.json
+          plan_api POST "/service/orders/$order_1/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-reorder.json
+
+          node - <<'NODE'
+          const d=require('./plan-reorder.json');
+          if(!d.order||Number(d.order.planPosition)!==10)throw new Error('Same-day reorder did not move order to first position');
+          if(d.notification?.queued===true)throw new Error('Same-day reorder unexpectedly queued ETA email');
+          NODE
+
+          plan_api GET /service/technician-workspace > plan-workspace.json
+          node - <<'NODE' "$order_1" "$order_2" "$target_key"
+          const w=require('./plan-workspace.json');
+          const [oneId,twoId,target]=process.argv.slice(2);
+          const one=w.orders?.find(x=>x.id===oneId),two=w.orders?.find(x=>x.id===twoId);
+          if(!one||!two)throw new Error('Moved orders missing from technician workspace');
+          if(new Date(one.estimatedCompletionAt).toISOString().slice(0,10)!==target||new Date(two.estimatedCompletionAt).toISOString().slice(0,10)!==target)throw new Error('Cross-day drag date was not persisted');
+          if(Number(one.planPosition)!==10||Number(two.planPosition)!==20)throw new Error('Daily drag order was not persisted as 1/2');
+          NODE
+
       - name: Temp private invoice signed URL E2E
         shell: bash
         run: |
