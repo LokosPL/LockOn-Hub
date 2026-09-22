@@ -1,3 +1,4 @@
+// Temp integration smoke marker: ServiceOS 1.0.0.12 service UI hotfix.
 import crypto from 'node:crypto';
 import { Pool } from 'pg';
 import { OAuth2Client } from 'google-auth-library';
