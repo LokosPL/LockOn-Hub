@@ -368,7 +368,7 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const runStartupSequence = async () => {
   const startupStartedAt = Date.now();
-  const minimumStartupMs = 6_500;
+  const minimumStartupMs = 8_500;
 
   await delay(120);
   pushSplashProgress(10, 'Uruchamiam bezpieczny silnik ServiceOS…');
@@ -397,7 +397,7 @@ const runStartupSequence = async () => {
   pushSplashProgress(90, 'Synchronizuję uprawnienia i widok startowy…');
 
   await delay(180);
-  pushSplashProgress(95, 'Kończę ładowanie modułów i danych widoku…');
+  pushSplashProgress(95, 'Domykam moduły, sesję i dane pierwszego widoku…');
 
   const remainingStartupMs = minimumStartupMs - (Date.now() - startupStartedAt);
   if (remainingStartupMs > 0) {
