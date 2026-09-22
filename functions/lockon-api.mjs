@@ -4812,6 +4812,7 @@ const route = async (request) => {
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
     const activePointId=found.current_point_id||found.home_point_id||found.point_id;
+    // Warranty is an in-person handoff step: the session must be bound to the phone's physical point.
     if(!session.activePointId){
       return json(request,{error:'WARRANTY_ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt, w którym fizycznie znajduje się telefon, aby wystawić gwarancję.'},409);
     }
