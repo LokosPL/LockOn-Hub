@@ -437,11 +437,20 @@ jobs:
           api POST "/service/orders/$order_id/status" '{"status":"REPAIR_DONE","note":"CI temp smoke"}' > repair-done.json
           node -e "const d=require('./repair-done.json');if(d.order?.status!=='REPAIR_DONE')throw new Error('Could not mark repair done at service point')"
 
+          api POST "/service/orders/$order_id/transfer" '{"kind":"RETURN_HOME","note":"CI temp smoke return before warranty"}' > return-home.json
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
+          api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-return-before-warranty.json
+          node - <<'NODE'
+          const d=require('./scan-return-before-warranty.json');
+          if(d.scanAction!=='RETURN_ACCEPTED_WARRANTY_REQUIRED')throw new Error('Return-home scan did not keep REPAIR_DONE pending warranty');
+          if(d.order?.status!=='REPAIR_DONE')throw new Error('Returned repaired order changed status before warranty');
+          NODE
+
           set +e
           ready_without_warranty_http="$(curl --silent --show-error --output ready-without-warranty.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_id/status"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data '{"status":"READY","note":"CI must be blocked before warranty"}')"
           set -e
           [ "$ready_without_warranty_http" = "409" ] || { echo "::error::READY was not blocked before warranty: HTTP $ready_without_warranty_http"; cat ready-without-warranty.json; exit 1; }
-          node -e "const d=require('./ready-without-warranty.json');if(d.error!=='WARRANTY_REQUIRED')throw new Error('READY rejection did not use WARRANTY_REQUIRED')"
+          node -e "const d=require('./ready-without-warranty.json');if(d.error!=='WARRANTY_REQUIRED')throw new Error('READY rejection did not use WARRANTY_REQUIRED: '+JSON.stringify(d))"
 
           api POST "/service/orders/$order_id/warranty" '{"months":6,"repairSummary":"Wymiana modułu wyświetlacza i test funkcjonalny CI"}' > warranty.json
           node - <<'NODE'
@@ -493,14 +502,8 @@ jobs:
           fs.writeFileSync('customer-warranty-card.pdf',pdf);
           NODE
 
-          api POST "/service/orders/$order_id/transfer" '{"kind":"RETURN_HOME","note":"CI temp smoke return"}' > return-home.json
-          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
-          api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-return.json
-          node - <<'NODE'
-          const d=require('./scan-return.json');
-          if(d.scanAction!=='RETURN_ACCEPTED_READY')throw new Error('Return-home scan did not auto-ready the repaired order');
-          if(d.order?.status!=='READY')throw new Error('Returned repaired order is not READY');
-          NODE
+          api POST "/service/orders/$order_id/status" '{"status":"READY","note":"CI warranty gate passed"}' > ready-after-warranty.json
+          node -e "const d=require('./ready-after-warranty.json');if(d.order?.status!=='READY')throw new Error('READY did not succeed after warranty card generation')"
 
           api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
 
