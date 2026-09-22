@@ -82,7 +82,8 @@ export function TechnicianCalendar({onOpenOrder}:Props){
 
   const moveOrder=async(orderId:string,target:string|null,targetIndex=999)=>{
     if(moving)return;
-    const current=data?.orders.find((item)=>item.id===orderId); if(!current)return;
+    const previous=data;
+    const current=previous?.orders.find((item)=>item.id===orderId); if(!current)return;
     const oldDay=current.estimatedCompletionAt?dayKey(new Date(current.estimatedCompletionAt)):null;
     if(!canDropOn(target,current)){
       setError(oldDay
@@ -97,11 +98,29 @@ export function TechnicianCalendar({onOpenOrder}:Props){
       const sourceIndex=(byDay.get(target)??[]).findIndex((item)=>item.id===orderId);
       if(sourceIndex>=0&&sourceIndex<effectiveIndex)effectiveIndex-=1;
     }
+    effectiveIndex=Math.max(0,effectiveIndex);
+    const targetIso=target?apiDate(target):null;
+
+    if(previous){
+      const remaining=previous.orders.filter((item)=>item.id!==orderId);
+      const updatedCurrent={...current,estimatedCompletionAt:targetIso};
+      if(target){
+        const peers=remaining
+          .filter((item)=>item.estimatedCompletionAt&&dayKey(new Date(item.estimatedCompletionAt))===target)
+          .sort((a,b)=>(Number(a.planPosition||0)||999999)-(Number(b.planPosition||0)||999999));
+        peers.splice(Math.min(effectiveIndex,peers.length),0,updatedCurrent);
+        const positions=new Map(peers.map((item,index)=>[item.id,(index+1)*10]));
+        setData({...previous,orders:[...remaining.map((item)=>positions.has(item.id)?{...item,planPosition:positions.get(item.id)}:item),{...updatedCurrent,planPosition:positions.get(orderId)||10}]});
+      }else{
+        setData({...previous,orders:[...remaining,{...updatedCurrent,planPosition:0}]});
+      }
+    }
+
     setMoving(orderId);setError('');setNotice('');
     try{
       const result=await window.lockOn.service.updatePlan(orderId,{
-        estimatedCompletionAt:target?apiDate(target):null,
-        targetIndex:Math.max(0,effectiveIndex)
+        estimatedCompletionAt:targetIso,
+        targetIndex:effectiveIndex
       });
       const refreshed=await window.lockOn.service.getTechnicianWorkspace();
       setData(refreshed);
@@ -123,7 +142,10 @@ export function TechnicianCalendar({onOpenOrder}:Props){
       }else{
         setNotice(`Kolejność na ${dateLabel} została zapisana.`);
       }
-    }catch(reason){setError(reason instanceof Error?reason.message:'Nie udało się zmienić planu pracy.');}
+    }catch(reason){
+      if(previous)setData(previous);
+      setError(reason instanceof Error?reason.message:'Nie udało się zmienić planu pracy. Zmiana została cofnięta.');
+    }
     finally{setMoving('');setDragging('');setDropTarget('');setDropIndex(null);}
   };
 
