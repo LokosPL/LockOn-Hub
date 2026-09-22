@@ -1118,16 +1118,30 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       {error && <div className="service-error">{error}</div>}
 
       {tab === 'CALENDAR' && isActualTechnician && <TechnicianCalendar onOpenOrder={openOrderFromWorkspace}/>}
-      {tab === 'INVOICES' && canEditCosts && <InvoiceWarehouse pointId={pointId} pointName={pointOptions.find((point)=>point.id===pointId)?.name ?? auth.point?.name ?? 'Punkt'}/>} 
+      {tab === 'INVOICES' && canEditCosts && <InvoiceWarehouse
+        pointId={pointId}
+        pointName={pointOptions.find((point)=>point.id===pointId)?.name ?? auth.point?.name ?? 'Punkt'}
+        points={pointOptions}
+        onPointChange={setPointId}
+      />} 
       {tab === 'TECH_NOTES' && isActualTechnician && <TechnicianNotesRoom/>}
 
       {tab === 'NEW' && (
-        <div className="service-intake-hotfix">
+        <div className="service-intake-hotfix service-intake-v2">
+          <div className="service-intake-steps" aria-label="Etapy nowego zlecenia">
+            <span className="active"><b>1</b> Typ</span>
+            <i>→</i>
+            <span><b>2</b> Klient</span>
+            <i>→</i>
+            <span><b>3</b> Urządzenie</span>
+            <i>→</i>
+            <span><b>4</b> Powiadomienia</span>
+          </div>
           <section className="service-intake-type-top">
             <div>
-              <span className="eyebrow"><ClipboardPlus size={13}/> KROK 1 · TYP ZLECENIA</span>
-              <h2>Co przyjmujesz?</h2>
-              <p>Najpierw wybierz typ. Potem wypełnij klienta i urządzenie tak samo prosto jak w szczegółach zlecenia.</p>
+              <span className="eyebrow"><ClipboardPlus size={13}/> NOWE ZLECENIE · KROK 1</span>
+              <h2>Najpierw wybierz typ.</h2>
+              <p>Bez wybierania typu przy telefonie. Najpierw określasz naprawę albo reklamację, później uzupełniasz dane w jednym prostym formularzu.</p>
             </div>
             <div className="service-order-type-picker service-order-type-picker-top" role="group" aria-label="Typ zlecenia">
               <button type="button" className={form.orderType==='REPAIR'?'active':''} onClick={()=>update('orderType','REPAIR')}>
@@ -1140,7 +1154,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           </section>
           <div className="service-grid service-intake-layout service-intake-workspace-hotfix">
           <section className="panel-card service-card service-intake-panel service-intake-customer">
-            <div className="panel-heading"><div><span className="eyebrow"><Search size={13}/> KROK 2 · KLIENT</span><h2>Klient</h2><p>Wyszukaj istniejącego albo wpisz dane nowego klienta.</p></div></div>
+            <div className="panel-heading"><div><span className="eyebrow"><Search size={13}/> KROK 2 · KLIENT</span><h2>Dane klienta</h2><p>Wyszukaj istniejącego klienta albo wpisz dane nowej osoby.</p></div></div>
             <div className="service-search-row">
               <input value={query} onChange={(e)=>setQuery(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') void search(); }} placeholder="Nazwisko, email lub telefon"/>
               <button className="button secondary" disabled={searchBusy||query.trim().length<2} onClick={()=>void search()}><Search className={searchBusy?'spin':''} size={14}/>{searchBusy?' Szukam…':' Szukaj'}</button>
@@ -1159,7 +1173,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           </section>
 
           <section className="panel-card service-card service-intake-panel service-intake-device">
-            <div className="panel-heading"><div><span className="eyebrow"><Smartphone size={13}/> KROK 3 · URZĄDZENIE</span><h2>Telefon, usterka i ustalenia</h2><p>Wpisz tylko to, co wiesz. Marka, model i numery są opcjonalne — opis usterki jest najważniejszy.</p></div></div>
+            <div className="panel-heading"><div><span className="eyebrow"><Smartphone size={13}/> KROK 3 · URZĄDZENIE</span><h2>Urządzenie i przyjęcie</h2><p>Tak jak w szczegółach zlecenia: tylko potrzebne pola, termin, cena orientacyjna i opis problemu.</p></div></div>
             <div className="service-form-grid service-intake-grid">
               <label className="service-brand-field">
                 <span>Marka <em>opcjonalnie</em></span>
@@ -1217,7 +1231,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               </div>
               <label className="full"><span>Opis usterki <em>wymagane</em></span><textarea rows={6} required value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder="Np. ekran nie wyświetla obrazu, telefon dzwoni i reaguje na dotyk."/></label>
             </div>
-            <button className="button primary wide service-submit" disabled={busy || !pointId} onClick={()=>void submit()}>{busy ? 'Zapisywanie…' : 'Utwórz zlecenie'}</button>
+            <button className="button primary wide service-submit service-submit-v2" disabled={busy || !pointId} onClick={()=>void submit()}>{busy ? 'Tworzę zlecenie…' : 'Utwórz zlecenie i wybierz powiadomienia'}</button>
             <small className="service-intake-email-note">Po kliknięciu „Utwórz zlecenie” wybierzesz, jakie dodatkowe powiadomienia klient chce dostawać podczas serwisu.</small>
           </section>
           </div>
