@@ -739,3 +739,5 @@ jobs:
           NODE
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data '{}' > owner-hotline-cleanup.json
+
+# Stage exact ServiceOS 1.0.0.12 central bundle for connector deploy.
