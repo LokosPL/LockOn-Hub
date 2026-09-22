@@ -27,6 +27,7 @@ import type {
 } from '../types/electron';
 import type { UserRole } from '../config/roles';
 import { PHONE_BRANDS } from '../config/phoneBrands';
+import { appConfirm } from '../appDialog';
 
 interface ServicePageProps {
   auth: AuthState;
@@ -120,7 +121,8 @@ type ServiceTab = 'CALENDAR' | 'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAI
 
 export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
   const isActualTechnician = auth.role === 'TECHNICIAN';
-  const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'NEW');
+  const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'ORDERS');
+  const [newOrderOpen,setNewOrderOpen]=useState(false);
   const [form, setForm] = useState<ServiceIntakeForm>(() => makeEmptyForm());
   const [intakeStage, setIntakeStage] = useState<'TYPE'|'DETAILS'>('TYPE');
   const [brandOpen, setBrandOpen] = useState(false);
@@ -477,6 +479,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           : undefined
       });
       setResult(created);
+      setNewOrderOpen(false);
       if(created.order.orderNumber != null){
         let preferences = {serviceUpdates:true,readyForPickup:true,quoteUpdates:true,messages:true};
         try{
@@ -885,7 +888,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         </div>
         <div className="service-tabs">
           {isActualTechnician && <button className={tab === 'CALENDAR' ? 'active' : ''} onClick={() => setTab('CALENDAR')}><CalendarDays size={15}/> Plan pracy</button>}
-          <button className={tab === 'NEW' ? 'active' : ''} onClick={() => setTab('NEW')}><ClipboardPlus size={15}/> Nowe zlecenie</button>
+          <button className={newOrderOpen ? 'active' : ''} onClick={() => {setIntakeStage('TYPE');setNewOrderOpen(true);}}><ClipboardPlus size={15}/> Nowe zlecenie</button>
           <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia{transferredToServiceCount>0&&<b className="service-tab-count" title="Telefony przekazane do serwisu">{transferredToServiceCount}</b>}</button>
           <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
           {canHandleCustomerQuotes && <button className={tab === 'QUOTES' ? 'active' : ''} onClick={() => {setTab('QUOTES');void loadCustomerQuotes(pointId);}}><MessageSquareText size={15}/> Wyceny klientów{customerQuotes.filter((item)=>item.status==='OPEN').length > 0 && <b className="service-tab-count">{customerQuotes.filter((item)=>item.status==='OPEN').length}</b>}</button>}
@@ -1128,8 +1131,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       />} 
       {tab === 'TECH_NOTES' && isActualTechnician && <TechnicianNotesRoom/>}
 
-      {tab === 'NEW' && (
-        <div className="service-intake-hotfix service-intake-v3">
+      {newOrderOpen && (
+        <div className="service-intake-hotfix service-intake-v3 service-intake-modal-shell" role="dialog" aria-modal="true">
+          <button className="service-intake-modal-close" title="Zamknij" onClick={()=>setNewOrderOpen(false)}><XCircle size={20}/></button>
           {intakeStage === 'TYPE' ? (
             <section className="service-intake-type-screen">
               <div className="service-intake-type-copy">
