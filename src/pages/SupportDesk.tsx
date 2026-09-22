@@ -4,6 +4,7 @@ import {
   UserRoundCheck, UsersRound, XCircle
 } from 'lucide-react';
 import type { UserRole } from '../config/roles';
+import { useAppDialog } from '../components/AppDialog';
 import type { SupportPresence, SupportTicket } from '../types/electron';
 
 interface SupportDeskProps {
@@ -29,6 +30,7 @@ const stateLabel = (state: SupportPresence['consultantState']) => ({
 }[state]);
 
 export function SupportDesk({ role, supportEnabled = false, currentUserId = '', onOpenChat }: SupportDeskProps) {
+  const {confirm}=useAppDialog();
   const isConsultant = role === 'OWNER' || role === 'SUPPORT' || supportEnabled;
   const [tickets,setTickets]=useState<SupportTicket[]>([]);
   const [presence,setPresence]=useState<SupportPresence[]>([]);
@@ -111,7 +113,12 @@ export function SupportDesk({ role, supportEnabled = false, currentUserId = '', 
       await load(true);
       return;
     }
-    if(!window.confirm('Zakończyć kanał konsultanta? Historia bota pozostanie zachowana i użytkownik nadal będzie mógł korzystać z bota.'))return;
+    if(!await confirm({
+      title:'Zakończyć kanał konsultanta?',
+      message:'Rozmowa z człowiekiem zostanie zamknięta.',
+      detail:'Historia bota pozostanie zachowana i użytkownik nadal będzie mógł korzystać z automatycznej pomocy.',
+      confirmLabel:'Zakończ kanał',tone:'warning'
+    }))return;
     setBusy(true);setError('');
     try{
       await window.lockOn.support.close(ticket.id);

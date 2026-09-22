@@ -578,6 +578,31 @@ const searchCustomers = async (user, term) => {
   return rows.map(customerView);
 };
 
+const warrantyCardNumberFor = (orderNumber,startedAt=null) => {
+  const date=startedAt?new Date(startedAt):new Date();
+  const year=Number.isNaN(date.getTime())?new Date().getFullYear():date.getFullYear();
+  return 'GW-'+year+'-'+String(Number(orderNumber)||0).padStart(6,'0');
+};
+
+const warrantyPortalView = (row) => {
+  if(!row.warranty_months)return null;
+  const expiresAt=row.warranty_expires_at||null;
+  const expiresMs=expiresAt?new Date(expiresAt).getTime():NaN;
+  const active=Number.isFinite(expiresMs)&&expiresMs>=Date.now();
+  return {
+    months:Number(row.warranty_months),
+    startedAt:row.warranty_started_at||null,
+    expiresAt,
+    cardPrintedAt:row.warranty_card_printed_at||null,
+    cardAvailable:Boolean(row.warranty_card_printed_at),
+    cardNumber:warrantyCardNumberFor(row.order_number,row.warranty_started_at),
+    repairSummary:row.repair_summary||null,
+    status:active?'ACTIVE':'EXPIRED',
+    active,
+    daysRemaining:active?Math.max(0,Math.ceil((expiresMs-Date.now())/86400000)):0
+  };
+};
+
 const orderView = (row) => ({
   id: row.id,
   orderNumber: Number(row.order_number),
@@ -608,6 +633,15 @@ const orderView = (row) => ({
   finalCost: row.final_cost == null ? null : Number(row.final_cost),
   currency: row.currency || 'PLN',
   estimatedCompletionAt: row.estimated_completion_at || null,
+  planPosition: Number(row.plan_position || 0),
+  repairSummary: row.repair_summary || null,
+  warrantyMonths: row.warranty_months == null ? null : Number(row.warranty_months),
+  warrantyStartedAt: row.warranty_started_at || null,
+  warrantyExpiresAt: row.warranty_expires_at || null,
+  warrantyCardPrintedAt: row.warranty_card_printed_at || null,
+  warrantyCardPrintCount: Number(row.warranty_card_print_count || 0),
+  warrantyCardNumber: row.warranty_months ? warrantyCardNumberFor(row.order_number,row.warranty_started_at) : null,
+  warrantyReady: Boolean(row.warranty_months && row.warranty_expires_at && row.warranty_card_printed_at),
   receivedAt: row.received_at,
   completedAt: row.completed_at || null,
   createdAt: row.created_at,
@@ -736,9 +770,13 @@ const deriveOrderWorkflow = (order, transfers, openTransfer, currentPointId, hom
       nextActionCode = 'RETURN_HOME';
       nextAction = 'Odeślij urządzenie do punktu macierzystego.';
       flags.push('ACTION_NOW','WAITING_SERVICE','RETURN_HOME');
+    } else if (!order.warrantyReady) {
+      nextActionCode = 'PREPARE_WARRANTY';
+      nextAction = 'Ustaw okres gwarancji i wydrukuj kartę gwarancyjną przed oznaczeniem urządzenia jako gotowe.';
+      flags.push('ACTION_NOW','WARRANTY_REQUIRED');
     } else {
       nextActionCode = 'MARK_READY';
-      nextAction = 'Oznacz urządzenie jako gotowe do odbioru.';
+      nextAction = 'Gwarancja jest przygotowana. Oznacz urządzenie jako gotowe do odbioru.';
       flags.push('ACTION_NOW');
     }
     attentionCode = 'ACTION_NOW';
@@ -874,7 +912,8 @@ const attachTransfers = async (orders) => {
       (openTransfer && openTransfer.kind === 'RETURN_HOME') ||
       outboundAfterReturn
     );
-    const canMarkReady = !openTransfer && currentPointId === homePointId && !returnRequired;
+    const warrantyReady = Boolean(order.warrantyReady);
+    const canMarkReady = !openTransfer && currentPointId === homePointId && !returnRequired && warrantyReady;
     const currentLocationLabel = openTransfer?.status === 'IN_TRANSIT'
       ? 'W drodze: ' + (openTransfer.fromPointName || openTransfer.fromPointId) + ' → ' + (openTransfer.toPointName || openTransfer.toPointId)
       : (currentPointName || (currentPointId ? currentPointId : 'W drodze'));
@@ -1079,16 +1118,21 @@ const getVisibleOrderByNumber = async (user, number) => {
   return (await attachTransfers([orderViewForUser(rows[0], user)]))[0];
 };
 
-const listVisibleOrders = async (user) => {
+const listVisibleOrders = async (user,paging=null) => {
+  const requestedLimit=Number(paging?.limit);
+  const requestedOffset=Number(paging?.offset);
+  const limit=Number.isFinite(requestedLimit)?Math.max(1,Math.min(Math.trunc(requestedLimit),150)):150;
+  const offset=Number.isFinite(requestedOffset)?Math.max(0,Math.min(Math.trunc(requestedOffset),5000)):0;
   if (GLOBAL_ROLES.has(user.role_code)) {
     const { rows } = await q(
-      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150"
+      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY s.updated_at DESC,s.created_at DESC LIMIT $1 OFFSET $2",
+      [limit,offset]
     );
     return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT 150",
-    [user.id]
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT $2 OFFSET $3",
+    [user.id,limit,offset]
   );
   return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
 };
@@ -1454,7 +1498,7 @@ const pdfToBuffer = (definition) => new Promise((resolve,reject)=>{
 
 const loadServiceCardContext = async (orderId) => {
   const row=(await q(
-    "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.received_at,s.estimated_completion_at,s.estimated_cost,s.currency,s.point_id,s.home_point_id,s.current_point_id,c.id AS customer_id,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,p.name AS point_name,p.city AS point_city FROM service_orders s JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id WHERE s.id=$1 LIMIT 1",
+    "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.repair_summary,s.status,s.received_at,s.estimated_completion_at,s.estimated_cost,s.currency,s.warranty_months,s.warranty_started_at,s.warranty_expires_at,s.warranty_card_printed_at,s.point_id,s.home_point_id,s.current_point_id,c.id AS customer_id,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,p.name AS point_name,p.city AS point_city FROM service_orders s JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id WHERE s.id=$1 LIMIT 1",
     [orderId]
   )).rows[0];
   if(!row)throw Object.assign(new Error('Nie znaleziono zlecenia.'),{status:404,code:'NOT_FOUND'});
@@ -1467,14 +1511,20 @@ const loadServiceCardContext = async (orderId) => {
     orderId:row.id,
     orderNumber:Number(row.order_number),
     serviceCardNumber,
+    warrantyCardNumber:warrantyCardNumberFor(row.order_number,row.warranty_started_at),
     orderType:row.order_type,
     handlingMode:row.handling_mode||'STANDARD',
     issueDescription:row.issue_description,
+    repairSummary:row.repair_summary||'',
     status:row.status,
     receivedAt:row.received_at,
     estimatedCompletionAt:row.estimated_completion_at||null,
     estimatedCost:row.estimated_cost==null?null:Number(row.estimated_cost),
     currency:String(row.currency||'PLN').trim()||'PLN',
+    warrantyMonths:row.warranty_months==null?null:Number(row.warranty_months),
+    warrantyStartedAt:row.warranty_started_at||null,
+    warrantyExpiresAt:row.warranty_expires_at||null,
+    warrantyCardPrintedAt:row.warranty_card_printed_at||null,
     pointId:row.point_id,
     pointName:row.point_name,
     pointCity:row.point_city||'',
@@ -1758,6 +1808,74 @@ const renderServiceCardPdf = async (orderId,variant='CUSTOMER') => {
   };
 };
 
+const renderWarrantyCardPdf = async (orderId) => {
+  const context=await loadServiceCardContext(orderId);
+  if(!context.warrantyMonths || !context.warrantyStartedAt || !context.warrantyExpiresAt){
+    throw Object.assign(new Error('Najpierw ustaw okres gwarancji serwisowej.'),{status:409,code:'WARRANTY_REQUIRED'});
+  }
+  const definition={
+    pageSize:'A4',
+    pageOrientation:'portrait',
+    pageMargins:[46,38,46,38],
+    defaultStyle:{font:'Roboto',fontSize:10,color:'#111827'},
+    info:{title:'LockOn ServiceOS · karta gwarancyjna · '+context.serviceCardNumber,author:'LockOn ServiceOS',subject:'Karta gwarancyjna naprawy'},
+    compress:true,
+    content:[
+      {columns:[
+        {width:'*',stack:[
+          {text:[{text:'LockOn',bold:true,color:'#111827'},{text:'  ServiceOS',color:'#4b5563'}],fontSize:16},
+          {text:'Karta gwarancyjna naprawy',fontSize:22,bold:true,margin:[0,8,0,4],color:'#000000'},
+          {text:'Dokument gwarancji serwisowej dla wykonanego zlecenia.',fontSize:9.5,color:'#374151'}
+        ]},
+        {width:118,stack:[
+          {text:'ZLECENIE',fontSize:8,bold:true,color:'#4b5563',alignment:'right'},
+          {text:'#'+context.orderNumber,fontSize:16,bold:true,color:'#000000',alignment:'right',margin:[0,3,0,0]}
+        ]}
+      ]},
+      {canvas:[{type:'line',x1:0,y1:0,x2:352,y2:0,lineWidth:1.2,lineColor:'#4b5563'}],margin:[0,12,0,14]},
+      serviceCardInfoTable([
+        ['Numer karty',context.warrantyCardNumber],
+        ['Klient',context.customerName],
+        ['Urządzenie',context.device||'Nie podano'],
+        ['IMEI',context.imei||'Nie podano'],
+        ['Numer seryjny',context.serialNumber||'Nie podano'],
+        ['Punkt',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
+        ['Okres gwarancji',context.warrantyMonths+' mies.'],
+        ['Data wykonania naprawy',formatServiceCardDate(context.warrantyStartedAt)],
+        ['Ważna do',formatServiceCardDate(context.warrantyExpiresAt)]
+      ],{labelWidth:105,labelFontSize:9.3,valueFontSize:10.3,rowMargin:3}),
+      {text:'Wykonana naprawa',fontSize:10,bold:true,color:'#000000',margin:[0,12,0,4]},
+      {text:context.repairSummary||'Nie podano opisu wykonanej naprawy.',fontSize:9.5,color:'#111827',lineHeight:1.25,margin:[0,0,0,10]},
+      {
+        table:{widths:['*',110],body:[[
+          {margin:[10,10,10,10],stack:[
+            {text:'PANEL KLIENTA',fontSize:9,bold:true,color:'#000000'},
+            {text:'Status gwarancji, zlecenia i dokumenty sprawdzisz w panelu klienta.',fontSize:9,color:'#374151',lineHeight:1.25,margin:[0,5,0,9]},
+            {text:context.customerPortalBaseUrl,fontSize:8.8,bold:true,color:'#000000',margin:[0,0,0,7]},
+            {text:'Kod klienta',fontSize:8,bold:true,color:'#4b5563'},
+            {text:context.customerPortalCode,fontSize:15,bold:true,color:'#000000',characterSpacing:.7,margin:[0,2,0,0]}
+          ]},
+          {margin:[4,8,4,8],stack:[
+            {qr:context.customerPortalUrl,fit:92,alignment:'center'},
+            {text:'Zeskanuj QR',fontSize:8,bold:true,alignment:'center',margin:[0,4,0,0]}
+          ]}
+        ]]},
+        layout:{hLineWidth:()=>1,vLineWidth:()=>1,hLineColor:()=> '#6b7280',vLineColor:()=> '#6b7280'}
+      },
+      {text:'Zakres gwarancji',fontSize:12,bold:true,color:'#000000',margin:[0,14,0,6]},
+      {ul:[
+        {text:'Gwarancja dotyczy wykonanej usługi serwisowej i elementów objętych naprawą.',fontSize:9,lineHeight:1.25},
+        {text:'Okres gwarancji liczony jest od daty wskazanej powyżej.',fontSize:9,lineHeight:1.25},
+        {text:'Uszkodzenia mechaniczne, zalanie lub ingerencja osób trzecich mogą wymagać osobnej oceny serwisu.',fontSize:9,lineHeight:1.25},
+        {text:'Gwarancja serwisowa nie ogranicza praw klienta wynikających z bezwzględnie obowiązujących przepisów prawa.',fontSize:9,lineHeight:1.25}
+      ],margin:[10,0,0,0]},
+      {text:'Zachowaj kartę razem z urządzeniem. Aktualny status gwarancji jest również widoczny w panelu klienta.',fontSize:9.2,bold:true,color:'#000000',margin:[0,13,0,0]}
+    ]
+  };
+  const buffer=await pdfToBuffer(definition);
+  return {context,fileName:'Karta-gwarancyjna-'+context.warrantyCardNumber+'.pdf',buffer};
+};
+
 const rotateCustomerPortalCode = async (customerId) => {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const code = generateCustomerPortalCode();
@@ -1877,7 +1995,7 @@ const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
   const fullAccess = authMethod === 'GOOGLE' && Boolean(account?.google_sub);
   const [ordersResult,quotesResult,pointsResult] = await Promise.all([
     q(
-      "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_completion_at,s.estimated_cost,s.final_cost,s.currency,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,d.imei,d.serial_number,p.id AS point_id,p.name AS point_name,hp.id AS home_point_id,hp.name AS home_point_name,cp.id AS current_point_id,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.customer_id=$1 ORDER BY s.received_at DESC,s.order_number DESC",
+      "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.repair_summary,s.status,s.estimated_completion_at,s.estimated_cost,s.final_cost,s.currency,s.warranty_months,s.warranty_started_at,s.warranty_expires_at,s.warranty_card_printed_at,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,d.imei,d.serial_number,p.id AS point_id,p.name AS point_name,hp.id AS home_point_id,hp.name AS home_point_name,cp.id AS current_point_id,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.customer_id=$1 ORDER BY s.received_at DESC,s.order_number DESC",
       [customerId]
     ),
     q(
@@ -1932,6 +2050,7 @@ const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
       currentPointId:row.current_point_id||null,currentPointName:row.current_point_name||null,
       estimatedCompletionAt:row.estimated_completion_at||null,estimatedCost:row.estimated_cost==null?null:Number(row.estimated_cost),
       finalCost:row.final_cost==null?null:Number(row.final_cost),currency:row.currency||'PLN',
+      warranty:warrantyPortalView(row),
       receivedAt:row.received_at,completedAt:row.completed_at||null,createdAt:row.created_at,updatedAt:row.updated_at,
       serviceCardAvailable:true
     })),
@@ -2035,6 +2154,12 @@ const staffQuoteVisible = async (user, requestId) => {
 const renderStatusEmail = (item) => {
   const displayName = cleanText(item.sender_display_name || 'LockOn ServiceOS', 80).replace(/[\r\n]+/g, ' ');
   const isIntakeCard = item.template_key === 'SERVICE_INTAKE_CARD';
+  const isEtaChange = item.template_key === 'SERVICE_ETA_CHANGED';
+  const etaRaw = item.payload?.newEstimatedCompletionAt || null;
+  const etaDate = etaRaw ? new Date(etaRaw) : null;
+  const etaLabel = etaDate && !Number.isNaN(etaDate.getTime())
+    ? etaDate.toLocaleDateString('pl-PL',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})
+    : 'termin do ponownego ustalenia';
   const transferStatus = String(item.payload?.transferStatus || '').toUpperCase();
   const transferKind = String(item.payload?.transferKind || 'OUTBOUND_SERVICE').toUpperCase();
   const returnHome = transferKind === 'RETURN_HOME';
@@ -2054,7 +2179,7 @@ const renderStatusEmail = (item) => {
 
   const isTransfer = Boolean(transferLabels[transferStatus]);
   const targetStatus = String(item.payload?.to || item.status || 'RECEIVED').toUpperCase();
-  const label = isTransfer ? transferLabels[transferStatus] : (STATUS_LABELS[targetStatus] || targetStatus);
+  const label = isEtaChange ? ('Nowy przewidywany termin: ' + etaLabel) : isTransfer ? transferLabels[transferStatus] : (STATUS_LABELS[targetStatus] || targetStatus);
   const fromPoint = cleanText(item.payload?.fromPointName || item.point_name || '', 100);
   const toPoint = cleanText(item.payload?.toPointName || '', 100);
   const transferNote = cleanText(item.payload?.note || '', 300);
@@ -2080,9 +2205,15 @@ const renderStatusEmail = (item) => {
 
   const subject = isIntakeCard
     ? 'LockOn ServiceOS · karta serwisowa · zlecenie #' + item.order_number
-    : 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
+    : isEtaChange
+      ? 'LockOn ServiceOS · zmiana terminu · zlecenie #' + item.order_number
+      : 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
   const intro = isIntakeCard
     ? 'Przyjęliśmy urządzenie ' + item.brand + ' ' + item.model + ' do punktu ' + item.point_name + '. W załączniku znajdziesz kartę serwisową PDF.'
+    : isEtaChange
+      ? (etaRaw
+          ? 'Przewidywany termin realizacji Twojego zlecenia został zmieniony. Nowy termin to ' + etaLabel + '.'
+          : 'Przewidywany termin realizacji Twojego zlecenia został zmieniony i zostanie ustalony ponownie przez serwis.')
     : isTransfer
     ? (
         returnHome
@@ -2139,7 +2270,7 @@ const renderStatusEmail = (item) => {
       '<div style="border:1px solid #252b33;border-radius:20px;background:#11151a;overflow:hidden">' +
         '<div style="padding:24px 22px 20px">' +
           '<div style="font-size:11px;color:#ff8b60;font-weight:800;letter-spacing:.1em">ZLECENIE #' + escapeHtml(item.order_number) + '</div>' +
-          '<div style="font-size:26px;line-height:1.15;font-weight:850;margin-top:8px">' + (isIntakeCard ? 'Potwierdzenie przyjęcia urządzenia' : 'Mamy aktualizację Twojej naprawy') + '</div>' +
+          '<div style="font-size:26px;line-height:1.15;font-weight:850;margin-top:8px">' + (isIntakeCard ? 'Potwierdzenie przyjęcia urządzenia' : isEtaChange ? 'Zmieniliśmy przewidywany termin' : 'Mamy aktualizację Twojej naprawy') + '</div>' +
           '<p style="margin:12px 0 0;color:#909aa5;font-size:14px;line-height:1.55">Dzień dobry ' + escapeHtml(item.first_name) + '. Poniżej najważniejsza informacja — bez technicznych szczegółów.</p>' +
         '</div>' +
         '<div style="margin:0 22px;padding:18px;border-radius:15px;background:#171d23;border:1px solid #2a323c">' +
@@ -2345,6 +2476,32 @@ const processNotification = async (notificationId) => {
       if(item.sender_point_id) await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1", [item.sender_point_id, message]);
     }
     return { sent: false, status: 'FAILED', reason: isGmailReauthError(error) ? 'GMAIL_REAUTH_REQUIRED' : 'SEND_FAILED', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
+  }
+};
+
+const queueEtaChangedNotification = async (actor, orderId, oldEta, newEta) => {
+  try {
+    const orderData = (await q(
+      "SELECT s.id,s.point_id,s.customer_id,c.email FROM service_orders s JOIN customers c ON c.id=s.customer_id WHERE s.id=$1 LIMIT 1",
+      [orderId]
+    )).rows[0];
+    if (!orderData?.email) return { queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL' };
+    const settings = await mailSettingsForPoint(orderData.point_id);
+    const customerPrefs = await customerNotificationPreferences(orderData.customer_id);
+    if (customerPrefs.serviceUpdates === false) return { queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED' };
+    if (settings.automatic_email_enabled !== true) return { queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED' };
+    const notificationId = makeId('ntf');
+    await q(
+      "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_ETA_CHANGED',$5,$6::jsonb,'PENDING')",
+      [notificationId,actor.id,orderData.customer_id,orderId,orderData.email,JSON.stringify({
+        oldEstimatedCompletionAt:oldEta ? new Date(oldEta).toISOString() : null,
+        newEstimatedCompletionAt:newEta ? new Date(newEta).toISOString() : null
+      })]
+    );
+    return { queued:true,...(await processNotification(notificationId)) };
+  } catch (error) {
+    console.error('[eta notification]',error);
+    return { queued:false,sent:false,reason:'NOTIFICATION_ERROR' };
   }
 };
 
@@ -2927,6 +3084,19 @@ const route = async (request) => {
     if(!owned)return json(request,{error:'NOT_FOUND',message:'Nie znaleziono tej karty serwisowej.'},404);
     const card=await renderServiceCardPdf(owned.id,'CUSTOMER');
     return json(request,{orderId:owned.id,orderNumber:card.context.orderNumber,fileName:card.fileName,mimeType:'application/pdf',pdfBase64:card.buffer.toString('base64')});
+  }
+
+  const customerWarrantyCardMatch=url.pathname.match(/^\/public\/customer-portal\/orders\/([^/]+)\/warranty-card$/);
+  if(method==='GET'&&customerWarrantyCardMatch){
+    const customerSession=await requireCustomerPortal(request);
+    const owned=(await q("SELECT id,warranty_card_printed_at FROM service_orders WHERE id=$1 AND customer_id=$2 LIMIT 1",[customerWarrantyCardMatch[1],customerSession.customer_id])).rows[0];
+    if(!owned)return json(request,{error:'NOT_FOUND',message:'Nie znaleziono tej karty gwarancyjnej.'},404);
+    if(!owned.warranty_card_printed_at)return json(request,{error:'WARRANTY_CARD_NOT_READY',message:'Karta gwarancyjna nie została jeszcze przygotowana przez serwis.'},409);
+    const card=await renderWarrantyCardPdf(owned.id);
+    await q("INSERT INTO audit_log(id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,NULL,'CUSTOMER_WARRANTY_CARD_DOWNLOADED','service_order',$2,$3::jsonb)",[
+      makeId('aud'),owned.id,JSON.stringify({clientType:'CUSTOMER_PORTAL'})
+    ]);
+    return json(request,{orderId:owned.id,orderNumber:card.context.orderNumber,warrantyCardNumber:card.context.warrantyCardNumber,fileName:card.fileName,mimeType:'application/pdf',pdfBase64:card.buffer.toString('base64')});
   }
 
   if (method === 'POST' && url.pathname === '/public/customer-portal/settings') {
@@ -3858,7 +4028,10 @@ const route = async (request) => {
   if(method==='GET'&&url.pathname==='/service/orders'){
     const session=await requireActive(request);
     if(!SERVICE_READ_ROLES.has(session.user.role_code)) throw Object.assign(new Error('Brak uprawnień do zleceń.'),{status:403});
-    return json(request,await listVisibleOrders(session.user));
+    const rawLimit=Number(url.searchParams.get('limit')||40),rawOffset=Number(url.searchParams.get('offset')||0);
+    const limit=Number.isFinite(rawLimit)?Math.max(1,Math.min(Math.trunc(rawLimit),60)):40;
+    const offset=Number.isFinite(rawOffset)?Math.max(0,Math.min(Math.trunc(rawOffset),5000)):0;
+    return json(request,await listVisibleOrders(session.user,{limit,offset}));
   }
 
   if(method==='GET'&&url.pathname==='/service/technician-workspace'){
@@ -3892,6 +4065,19 @@ const route = async (request) => {
     await q('INSERT INTO technician_private_notes(id,user_id,title,body,pinned) VALUES($1,$2,NULLIF($3,\'\'),$4,$5)',[id,u.id,title,note,pinned]);
     await audit(session,'TECHNICIAN_PRIVATE_NOTE_CREATED','technician_note',id,null,{pinned,length:note.length});
     return json(request,{id,title,body:note,pinned,createdAt:nowIso(),updatedAt:nowIso()},201);
+  }
+
+  const technicianNoteUpdateMatch=url.pathname.match(/^\/service\/technician-notes\/([^/]+)$/);
+  if(method==='POST'&&technicianNoteUpdateMatch){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Prywatny pokój notatek jest dostępny dla serwisanta.'),{status:403,code:'TECHNICIAN_ONLY'});
+    const body=await readJson(request);
+    const title=cleanText(body.title,120),note=cleanText(body.body,4000),pinned=body.pinned===true;
+    if(!note)return json(request,{error:'NOTE_REQUIRED',message:'Notatka nie może być pusta.'},400);
+    const updated=(await q("UPDATE technician_private_notes SET title=NULLIF($3,''),body=$4,pinned=$5,updated_at=now() WHERE id=$1 AND user_id=$2 RETURNING id,title,body,pinned,created_at,updated_at",[technicianNoteUpdateMatch[1],u.id,title,note,pinned])).rows[0];
+    if(!updated)return json(request,{error:'NOT_FOUND'},404);
+    await audit(session,'TECHNICIAN_PRIVATE_NOTE_UPDATED','technician_note',updated.id,null,{pinned,length:note.length});
+    return json(request,{id:updated.id,title:updated.title||'',body:updated.body,pinned:updated.pinned===true,createdAt:updated.created_at,updatedAt:updated.updated_at});
   }
 
   const technicianNoteDeleteMatch=url.pathname.match(/^\/service\/technician-notes\/([^/]+)$/);
@@ -4003,7 +4189,7 @@ const route = async (request) => {
     try{
       await client.query('BEGIN');
       const order=(await client.query(
-        "SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,assigned_technician_id,customer_id FROM service_orders WHERE id=$1 FOR UPDATE",
+        "SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,assigned_technician_id,customer_id,warranty_months,warranty_expires_at,warranty_card_printed_at FROM service_orders WHERE id=$1 FOR UPDATE",
         [cardRow.service_order_id]
       )).rows[0];
       if(!order)throw Object.assign(new Error('Nie znaleziono zlecenia.'),{status:404,code:'NOT_FOUND'});
@@ -4027,7 +4213,8 @@ const route = async (request) => {
         if(!acceptedTransfer)throw Object.assign(new Error('Przekazanie zmieniło się w międzyczasie. Zeskanuj ponownie.'),{status:409,code:'TRANSFER_STATUS_CHANGED'});
 
         const assignTechnician=transfer.kind==='OUTBOUND_SERVICE'&&u.role_code==='TECHNICIAN'&&order.handling_mode!=='TRANSFER_ONLY';
-        const shouldReady=transfer.kind==='RETURN_HOME'&&actingPointId===homePointId&&order.status==='REPAIR_DONE';
+        const warrantyReady=Boolean(order.warranty_months&&order.warranty_expires_at&&order.warranty_card_printed_at);
+        const shouldReady=transfer.kind==='RETURN_HOME'&&actingPointId===homePointId&&order.status==='REPAIR_DONE'&&warrantyReady;
         await client.query(
           "UPDATE service_orders SET current_point_id=$2,assigned_technician_id=CASE WHEN $3::boolean THEN $4 ELSE assigned_technician_id END,status=CASE WHEN $5::boolean THEN 'READY' ELSE status END,updated_at=now() WHERE id=$1",
           [order.id,actingPointId,assignTechnician,u.id,shouldReady]
@@ -4039,7 +4226,9 @@ const route = async (request) => {
             [makeId('hst'),order.id,'Automatyczne przyjęcie zwrotu skanem karty urządzenia.',u.id]
           );
         }
-        scanAction=transfer.kind==='RETURN_HOME'?(shouldReady?'RETURN_ACCEPTED_READY':'RETURN_ACCEPTED'):'SERVICE_ACCEPTED';
+        scanAction=transfer.kind==='RETURN_HOME'
+          ? (shouldReady?'RETURN_ACCEPTED_READY':(order.status==='REPAIR_DONE'&&!warrantyReady?'RETURN_ACCEPTED_WARRANTY_REQUIRED':'RETURN_ACCEPTED'))
+          : 'SERVICE_ACCEPTED';
       }else{
         const currentPointId=order.current_point_id||homePointId;
         if(currentPointId!==actingPointId){
@@ -4335,11 +4524,88 @@ const route = async (request) => {
     return json(request,{ok:true});
   }
 
+  const planMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/plan$/);
+  if(method==='POST'&&planMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do planu pracy.'),{status:403});
+    const found=(await q("SELECT id,point_id,home_point_id,current_point_id,assigned_technician_id,estimated_completion_at,plan_position,status FROM service_orders WHERE id=$1 LIMIT 1",[planMatch[1]])).rows[0];
+    if(!found)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,found.id);
+    if(!found.assigned_technician_id)return json(request,{error:'TECHNICIAN_REQUIRED',message:'Zlecenie musi mieć przypisanego serwisanta, aby trafiło do planu pracy.'},409);
+    if(u.role_code==='TECHNICIAN'&&found.assigned_technician_id!==u.id)throw Object.assign(new Error('Możesz układać tylko własny plan pracy.'),{status:403});
+    if(['COMPLETED','CANCELLED','REJECTED'].includes(found.status))return json(request,{error:'ORDER_CLOSED',message:'Zamkniętego zlecenia nie można przesuwać w planie.'},409);
+    const body=await readJson(request);
+    const rawTarget=cleanText(body.estimatedCompletionAt,64);
+    let targetDate=null;
+    if(rawTarget){
+      targetDate=new Date(rawTarget);
+      if(Number.isNaN(targetDate.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy termin planu pracy.'},400);
+    }
+    const targetIndex=Math.max(0,Math.min(500,Number.isFinite(Number(body.targetIndex))?Math.trunc(Number(body.targetIndex)):500));
+    const dayKey=(value)=>value?new Date(value).toISOString().slice(0,10):null;
+    const sourceDay=dayKey(found.estimated_completion_at);
+    const targetDay=dayKey(targetDate);
+    const etaChanged=sourceDay!==targetDay;
+    const warsawToday=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    if(sourceDay&&!targetDay){
+      return json(request,{error:'ETA_CANNOT_REMOVE',message:'Zlecenie z ustalonym terminem może zostać tylko ułożone w tym samym dniu albo przesunięte na późniejszy termin.'},409);
+    }
+    if(sourceDay&&targetDay&&targetDay<sourceDay){
+      return json(request,{error:'ETA_CANNOT_MOVE_BACK',message:'Nie można skrócić przewidywanego terminu w planie pracy. Możesz pozostawić ten sam dzień albo przesunąć zlecenie później.'},409);
+    }
+    if(!sourceDay&&targetDay&&targetDay<warsawToday){
+      return json(request,{error:'ETA_IN_PAST',message:'Nie można zaplanować zlecenia w przeszłości.'},409);
+    }
+
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      await client.query("UPDATE service_orders SET estimated_completion_at=$2,updated_at=now() WHERE id=$1",[found.id,targetDate]);
+
+      if(targetDate){
+        const targetRows=(await client.query(
+          "SELECT id FROM service_orders WHERE assigned_technician_id=$1 AND estimated_completion_at::date=$2::date AND status NOT IN ('COMPLETED','CANCELLED','REJECTED') AND id<>$3 ORDER BY plan_position ASC,estimated_completion_at ASC,created_at ASC FOR UPDATE",
+          [found.assigned_technician_id,targetDate,found.id]
+        )).rows.map((row)=>row.id);
+        targetRows.splice(Math.min(targetIndex,targetRows.length),0,found.id);
+        for(let index=0;index<targetRows.length;index+=1){
+          await client.query("UPDATE service_orders SET plan_position=$2 WHERE id=$1",[targetRows[index],(index+1)*10]);
+        }
+      }else{
+        await client.query("UPDATE service_orders SET plan_position=0 WHERE id=$1",[found.id]);
+      }
+
+      if(sourceDay&&sourceDay!==targetDay){
+        const sourceRows=(await client.query(
+          "SELECT id FROM service_orders WHERE assigned_technician_id=$1 AND estimated_completion_at::date=$2::date AND status NOT IN ('COMPLETED','CANCELLED','REJECTED') AND id<>$3 ORDER BY plan_position ASC,estimated_completion_at ASC,created_at ASC FOR UPDATE",
+          [found.assigned_technician_id,sourceDay,found.id]
+        )).rows;
+        for(let index=0;index<sourceRows.length;index+=1){
+          await client.query("UPDATE service_orders SET plan_position=$2 WHERE id=$1",[sourceRows[index].id,(index+1)*10]);
+        }
+      }
+      await client.query('COMMIT');
+    }catch(error){
+      await client.query('ROLLBACK').catch(()=>undefined);
+      throw error;
+    }finally{client.release();}
+
+    await audit(session,etaChanged?'SERVICE_PLAN_MOVED':'SERVICE_PLAN_REORDERED','service_order',found.id,found.point_id,{
+      fromDate:sourceDay,toDate:targetDay,targetIndex
+    });
+    const notification=etaChanged
+      ? await queueEtaChangedNotification(u,found.id,found.estimated_completion_at,targetDate)
+      : {queued:false,sent:false,reason:'DATE_UNCHANGED'};
+    const view=(await listVisibleOrders(u)).find((order)=>order.id===found.id)||null;
+    return json(request,{order:view,notification});
+  }
+
   const detailsMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
   if(method==='POST'&&detailsMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_INTAKE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji danych przyjęcia.'),{status:403});
     const found=(await q('SELECT id,point_id,home_point_id,current_point_id,handling_mode,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
+    const previousEstimatedCompletionAt=found?.estimated_completion_at||null;
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
     const detailsOpenTransfer=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') LIMIT 1",[found.id])).rows[0]||null;
@@ -4429,6 +4695,11 @@ const route = async (request) => {
       hasImei:Boolean(imei),
       hasSerialNumber:Boolean(serialNumber)
     });
+    const previousEtaDay=previousEstimatedCompletionAt?new Date(previousEstimatedCompletionAt).toISOString().slice(0,10):null;
+    const nextEtaDay=estimatedCompletionAt?new Date(estimatedCompletionAt).toISOString().slice(0,10):null;
+    if(previousEtaDay!==nextEtaDay){
+      await queueEtaChangedNotification(u,found.id,previousEstimatedCompletionAt,estimatedCompletionAt);
+    }
     const view=(await listVisibleOrders(u)).find((order)=>order.id===found.id);
     return json(request,view);
   }
@@ -4533,6 +4804,63 @@ const route = async (request) => {
     }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
   }
 
+  const warrantyMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/warranty$/);
+  if(method==='POST'&&warrantyMatch){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do gwarancji serwisowej.'),{status:403});
+    const found=(await q("SELECT id,point_id,home_point_id,current_point_id,status,assigned_technician_id,repair_summary,warranty_months,warranty_started_at,warranty_expires_at,warranty_card_printed_at FROM service_orders WHERE id=$1 LIMIT 1",[warrantyMatch[1]])).rows[0];
+    if(!found)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,found.id);
+    const activePointId=found.current_point_id||found.home_point_id||found.point_id;
+    await requirePoint(u,activePointId);
+    if(u.role_code==='TECHNICIAN'&&found.assigned_technician_id!==u.id){
+      throw Object.assign(new Error('Gwarancję może ustawić serwisant przypisany do tego zlecenia.'),{status:403,code:'TECHNICIAN_ORDER_REQUIRED'});
+    }
+    if(found.status!=='REPAIR_DONE'){
+      return json(request,{error:'REPAIR_DONE_REQUIRED',message:'Okres gwarancji ustaw po zakończeniu naprawy, przed oznaczeniem urządzenia jako gotowe do odbioru.'},409);
+    }
+    const months=Number(body.months);
+    if(!Number.isInteger(months)||months<1||months>60){
+      return json(request,{error:'WARRANTY_MONTHS',message:'Podaj okres gwarancji od 1 do 60 miesięcy.'},400);
+    }
+    const repairSummary=cleanText(body.repairSummary,2000);
+    if(!repairSummary)return json(request,{error:'REPAIR_SUMMARY_REQUIRED',message:'Opisz wykonaną naprawę przed zapisaniem gwarancji.'},400);
+    const repairDoneAt=(await q("SELECT created_at FROM service_order_status_history WHERE service_order_id=$1 AND to_status='REPAIR_DONE' ORDER BY created_at DESC LIMIT 1",[found.id])).rows[0]?.created_at||nowIso();
+    const changed=Number(found.warranty_months||0)!==months||String(found.repair_summary||'')!==repairSummary;
+    const row=(await q(
+      "UPDATE service_orders SET repair_summary=$3,warranty_months=$2::integer,warranty_started_at=COALESCE(warranty_started_at,$4::timestamptz),warranty_expires_at=COALESCE(warranty_started_at,$4::timestamptz) + ($2::integer::text || ' months')::interval,warranty_card_printed_at=CASE WHEN $5::boolean THEN NULL ELSE warranty_card_printed_at END,updated_at=now() WHERE id=$1 RETURNING repair_summary,warranty_months,warranty_started_at,warranty_expires_at,warranty_card_printed_at,warranty_card_print_count",
+      [found.id,months,repairSummary,repairDoneAt,changed]
+    )).rows[0];
+    await audit(session,'SERVICE_WARRANTY_SET','service_order',found.id,found.point_id,{months,repairSummaryLength:repairSummary.length,cardReprintRequired:changed});
+    const view=(await listVisibleOrders(u)).find((order)=>order.id===found.id)||null;
+    return json(request,{ok:true,warranty:{months:Number(row.warranty_months),startedAt:row.warranty_started_at,expiresAt:row.warranty_expires_at,cardPrintedAt:row.warranty_card_printed_at||null,cardPrintCount:Number(row.warranty_card_print_count||0),repairSummary:row.repair_summary,warrantyCardNumber:warrantyCardNumberFor(view?.orderNumber||0,row.warranty_started_at)},order:view});
+  }
+
+  const warrantyCardMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/warranty-card$/);
+  if(method==='POST'&&warrantyCardMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do karty gwarancyjnej.'),{status:403});
+    const found=(await q("SELECT id,point_id,home_point_id,current_point_id,status,assigned_technician_id,warranty_months,warranty_expires_at FROM service_orders WHERE id=$1 LIMIT 1",[warrantyCardMatch[1]])).rows[0];
+    if(!found)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,found.id);
+    const activePointId=found.current_point_id||found.home_point_id||found.point_id;
+    await requirePoint(u,activePointId);
+    if(u.role_code==='TECHNICIAN'&&found.assigned_technician_id!==u.id){
+      throw Object.assign(new Error('Kartę gwarancyjną może przygotować serwisant przypisany do tego zlecenia.'),{status:403,code:'TECHNICIAN_ORDER_REQUIRED'});
+    }
+    if(!found.warranty_months||!found.warranty_expires_at){
+      return json(request,{error:'WARRANTY_REQUIRED',message:'Najpierw ustaw okres gwarancji.'},409);
+    }
+    if(!['REPAIR_DONE','READY'].includes(found.status)){
+      return json(request,{error:'WARRANTY_STAGE',message:'Kartę gwarancyjną przygotuj po zakończeniu naprawy i przed wydaniem urządzenia.'},409);
+    }
+    const card=await renderWarrantyCardPdf(found.id);
+    await q("UPDATE service_orders SET warranty_card_printed_at=now(),warranty_card_print_count=warranty_card_print_count+1,updated_at=now() WHERE id=$1",[found.id]);
+    await audit(session,'SERVICE_WARRANTY_CARD_PRINTED','service_order',found.id,found.point_id,{months:Number(found.warranty_months)});
+    const view=(await listVisibleOrders(u)).find((order)=>order.id===found.id)||null;
+    return json(request,{ok:true,fileName:card.fileName,mimeType:'application/pdf',pdfBase64:card.buffer.toString('base64'),order:view});
+  }
+
   const statusMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/status$/);
   if(method==='POST'&&statusMatch){
     const session=await requireActive(request),u=session.user;
@@ -4542,7 +4870,7 @@ const route = async (request) => {
     if(!canEditStatus&&!canCancelOnly)throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
     if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
 
-    const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
+    const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency,warranty_months,warranty_started_at,warranty_expires_at,warranty_card_printed_at FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
 
@@ -4576,6 +4904,9 @@ const route = async (request) => {
       await requirePoint(u,homePointId);
       if(next==='READY'&&found.status!=='REPAIR_DONE'){
         return json(request,{error:'REPAIR_DONE_REQUIRED',message:'Status „Gotowe do odbioru” można ustawić dopiero po zakończeniu naprawy.'},409);
+      }
+      if(next==='READY'&&(!found.warranty_months||!found.warranty_expires_at||!found.warranty_card_printed_at)){
+        return json(request,{error:'WARRANTY_REQUIRED',message:'Przed oznaczeniem urządzenia jako gotowe ustaw okres gwarancji i wydrukuj kartę gwarancyjną dołączaną do telefonu.'},409);
       }
       if(next==='COMPLETED'&&found.status!=='READY'){
         return json(request,{error:'READY_REQUIRED',message:'Zlecenie można zakończyć dopiero po oznaczeniu urządzenia jako gotowego do odbioru w punkcie macierzystym.'},409);

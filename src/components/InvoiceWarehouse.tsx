@@ -4,6 +4,7 @@ import {
   FileText, RefreshCw, Search, Trash2
 } from 'lucide-react';
 import type { ServiceInvoice } from '../types/electron';
+import { useAppDialog } from './AppDialog';
 
 interface WarehousePoint { id:string; name:string; city?:string; }
 interface Props { pointId:string; pointName:string; points?:WarehousePoint[]; onPointChange?:(pointId:string)=>void; }
@@ -15,6 +16,7 @@ const monthLabel=(value:string)=>{const [year,month]=value.split('-').map(Number
 const shiftMonth=(value:string,delta:number)=>{const [year,month]=value.split('-').map(Number);return monthKey(new Date(year||new Date().getFullYear(),(month||1)-1+delta,1));};
 
 export function InvoiceWarehouse({pointId,pointName,points=[],onPointChange}:Props){
+  const {confirm}=useAppDialog();
   const [month,setMonth]=useState(currentMonth);
   const [invoices,setInvoices]=useState<ServiceInvoice[]>([]);
   const [query,setQuery]=useState('');
@@ -53,7 +55,13 @@ export function InvoiceWarehouse({pointId,pointName,points=[],onPointChange}:Pro
     finally{setBusy('');}
   };
   const remove=async(invoice:ServiceInvoice)=>{
-    if(busy||!window.confirm(`Usunąć fakturę „${invoice.fileName}” z magazynu punktu ${pointName}?`))return;
+    if(busy)return;
+    if(!await confirm({
+      title:'Usunąć fakturę z magazynu?',
+      message:invoice.fileName,
+      detail:`Dokument zostanie usunięty z magazynu punktu ${pointName}. Ta operacja nie usuwa samego zlecenia.`,
+      confirmLabel:'Usuń fakturę',tone:'danger'
+    }))return;
     setBusy('delete:'+invoice.id);setError('');
     try{await window.lockOn.service.deleteInvoice(invoice.id);setInvoices((current)=>current.filter((item)=>item.id!==invoice.id));setNotice('Faktura usunięta.');}
     catch(reason){setError(reason instanceof Error?reason.message:'Nie udało się usunąć faktury.');}

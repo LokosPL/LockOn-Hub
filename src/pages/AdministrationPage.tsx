@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
 import type { AdminAuditEvent, AdminOverview, AdminPoint, AdminUser } from '../types/electron';
+import { useAppDialog } from '../components/AppDialog';
 
 const ASSIGNABLE_ROLES: UserRole[] = ['BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER'];
 type AdminTab = 'PENDING' | 'ACTIVE' | 'SECURITY' | 'POINTS' | 'AUDIT';
@@ -236,6 +237,7 @@ function auditActorLine(event: AdminAuditEvent) {
 interface AdministrationPageProps { focusUserId?: string | null; }
 
 export function AdministrationPage({ focusUserId = null }: AdministrationPageProps) {
+  const {confirm,prompt}=useAppDialog();
   const [data, setData] = useState<AdminOverview | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -363,9 +365,15 @@ export function AdministrationPage({ focusUserId = null }: AdministrationPagePro
   };
 
   const blockUser = async (user: AdminUser, blocked: boolean) => {
-    const confirmed = window.confirm(blocked
-      ? `Zablokować konto ${user.name} (${user.email})? Użytkownik zostanie natychmiast wylogowany ze wszystkich urządzeń.`
-      : `Odblokować konto ${user.name} (${user.email})?`);
+    const confirmed = await confirm({
+      title:blocked?'Zablokować konto?':'Odblokować konto?',
+      message:`${user.name} · ${user.email}`,
+      detail:blocked
+        ? 'Użytkownik zostanie natychmiast wylogowany ze wszystkich urządzeń i straci dostęp do ServiceOS.'
+        : 'Użytkownik ponownie będzie mógł korzystać z nadanych mu uprawnień.',
+      confirmLabel:blocked?'Zablokuj konto':'Odblokuj konto',
+      tone:blocked?'danger':'default'
+    });
     if (!confirmed) return;
     const reason = blocked ? 'Ręczna blokada konta przez właściciela' : '';
     setBusy(true); setNotice('');
@@ -381,7 +389,12 @@ export function AdministrationPage({ focusUserId = null }: AdministrationPagePro
   };
 
   const logoutUser = async (user: AdminUser) => {
-    if (!window.confirm(`Wylogować konto ${user.email} ze wszystkich urządzeń?`)) return;
+    if (!await confirm({
+      title:'Wylogować konto ze wszystkich urządzeń?',
+      message:user.email,
+      detail:'Wszystkie aktywne sesje desktopowe i WWW tego użytkownika zostaną natychmiast unieważnione.',
+      confirmLabel:'Wyloguj wszędzie',tone:'warning'
+    })) return;
     setBusy(true); setNotice('');
     try {
       const result = await window.lockOn.admin.logoutUserSessions(user.id);
@@ -393,7 +406,12 @@ export function AdministrationPage({ focusUserId = null }: AdministrationPagePro
   };
 
   const logoutEveryone = async () => {
-    if (!window.confirm('Wylogować wszystkich użytkowników ze wszystkich urządzeń? Twoja bieżąca sesja pozostanie aktywna.')) return;
+    if (!await confirm({
+      title:'Wylogować wszystkich użytkowników?',
+      message:'Wszystkie pozostałe aktywne sesje ServiceOS zostaną unieważnione.',
+      detail:'Twoja bieżąca sesja OWNER pozostanie aktywna.',
+      confirmLabel:'Wyloguj wszystkich',tone:'danger'
+    })) return;
     setBusy(true); setNotice('');
     try {
       const result = await window.lockOn.admin.logoutAllSessions(true);
@@ -456,14 +474,29 @@ export function AdministrationPage({ focusUserId = null }: AdministrationPagePro
         `rozliczenia: ${counts.revenues ?? 0}`,
         `sesje: ${counts.sessions ?? 0}`
       ].join('\n');
-      if (!window.confirm('Factory reset usunie wszystkie dane biznesowe z produkcyjnej bazy ServiceOS.\n\nAktualny stan:\n' + summary + '\n\nSchemat, role, migracje, wiedza systemowa i dziennik resetów pozostaną. Kontynuować?')) return;
-      const phrase = window.prompt('Wpisz dokładnie frazę:\n\nUSUŃ WSZYSTKIE DANE');
+      if (!await confirm({
+        title:'Factory reset danych ServiceOS',
+        message:'Ta operacja usunie wszystkie dane biznesowe z produkcyjnej bazy.',
+        detail:'Aktualny stan:\n'+summary+'\n\nSchemat, role, migracje, wiedza systemowa i dziennik resetów pozostaną.',
+        confirmLabel:'Przejdź dalej',tone:'danger'
+      })) return;
+      const phrase = await prompt({
+        title:'Potwierdzenie factory resetu',
+        message:'Wpisz frazę bezpieczeństwa, aby odblokować ostatni krok.',
+        detail:'Ta operacja jest nieodwracalna.',
+        inputLabel:'Fraza potwierdzająca',
+        placeholder:'USUŃ WSZYSTKIE DANE',
+        requiredText:'USUŃ WSZYSTKIE DANE',
+        confirmLabel:'Potwierdź frazę',
+        tone:'danger'
+      });
       if (phrase === null) return;
-      if (phrase !== 'USUŃ WSZYSTKIE DANE') {
-        setNotice('Reset anulowany: fraza potwierdzająca nie jest identyczna.');
-        return;
-      }
-      if (!window.confirm('OSTATECZNE POTWIERDZENIE\n\nPo kliknięciu OK dane pokazane powyżej zostaną nieodwracalnie usunięte.')) return;
+      if (!await confirm({
+        title:'Ostateczne potwierdzenie',
+        message:'Dane pokazane w podsumowaniu zostaną nieodwracalnie usunięte.',
+        detail:'To ostatni krok. Po wykonaniu operacji aplikacja wyloguje bieżącą sesję.',
+        confirmLabel:'Wykonaj factory reset',tone:'danger'
+      })) return;
       const result = await window.lockOn.admin.factoryReset({
         phrase,
         confirmed:true,

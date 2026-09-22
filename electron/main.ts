@@ -1058,6 +1058,27 @@ const registerIpc = () => {
     if(openError)throw new Error('Nie udało się otworzyć karty serwisowej: '+openError);
     return {opened:true,filePath,fileName:result.fileName,printMode:mode,staffScanCode:result.staffScanCode};
   });
+  secureHandle('service:updateWarranty', async (orderId: string, payload: any) => {
+    const token=requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/warranty`,{
+      method:'POST',
+      body:JSON.stringify({
+        months:Math.max(1,Math.min(60,Math.trunc(Number(payload?.months)||0))),
+        repairSummary:String(payload?.repairSummary??'').trim().slice(0,2000)
+      })
+    },token);
+  });
+  secureHandle('service:openWarrantyCard', async (orderId: string) => {
+    const token=requireSessionToken();
+    const result=await backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/warranty-card`,{
+      method:'POST',body:'{}'
+    },token) as {fileName:string;pdfBase64:string;order?:unknown};
+    const filePath=await writeApiPdfToTemp(result.pdfBase64,result.fileName);
+    const openError=await shell.openPath(filePath);
+    if(openError)throw new Error('Nie udało się otworzyć karty gwarancyjnej: '+openError);
+    return {opened:true,filePath,fileName:result.fileName,order:result.order};
+  });
+
   secureHandle('service:scanServiceCard', async (payload: any) => {
     const token=requireSessionToken();
     return backendRequest('/service/scan',{
@@ -1069,9 +1090,11 @@ const registerIpc = () => {
       })
     },token);
   });
-  secureHandle('service:listOrders', async () => {
+  secureHandle('service:listOrders', async (limit = 40, offset = 0) => {
     const token = requireSessionToken();
-    return backendRequest('/service/orders', {}, token);
+    const safeLimit=Math.max(1,Math.min(60,Math.trunc(Number(limit)||40)));
+    const safeOffset=Math.max(0,Math.min(5000,Math.trunc(Number(offset)||0)));
+    return backendRequest(`/service/orders?limit=${safeLimit}&offset=${safeOffset}`, {}, token);
   });
   secureHandle('service:getHistory', async (orderId: string) => {
     const token = requireSessionToken();
@@ -1190,12 +1213,30 @@ const registerIpc = () => {
       pinned:payload?.pinned===true
     })
   },requireSessionToken()));
+  secureHandle('service:updateTechnicianNote', async (noteId: string, payload: any) => backendRequest(`/service/technician-notes/${encodeURIComponent(safeId(noteId,'tnn'))}`,{
+    method:'POST',
+    body:JSON.stringify({
+      title:String(payload?.title??'').trim().slice(0,120),
+      body:String(payload?.body??'').trim().slice(0,4000),
+      pinned:payload?.pinned===true
+    })
+  },requireSessionToken()));
   secureHandle('service:deleteTechnicianNote', async (noteId: string) => backendRequest(`/service/technician-notes/${encodeURIComponent(safeId(noteId,'tnn'))}`,{method:'DELETE'},requireSessionToken()));
   secureHandle('service:updateDetails', async (orderId: string, payload: unknown) => {
     const token = requireSessionToken();
     return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/details`, {
       method: 'POST',
       body: JSON.stringify(payload)
+    }, token);
+  });
+  secureHandle('service:updatePlan', async (orderId: string, payload: any) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/plan`, {
+      method: 'POST',
+      body: JSON.stringify({
+        estimatedCompletionAt: payload?.estimatedCompletionAt == null ? null : String(payload.estimatedCompletionAt).slice(0,64),
+        targetIndex: Math.max(0, Math.min(500, Number(payload?.targetIndex) || 0))
+      })
     }, token);
   });
   secureHandle('service:updateStatus', async (orderId: string, status: string, note?: string, actingPointId?: string) => {

@@ -28,6 +28,7 @@ import {
   UsersRound,
   Wrench
 } from 'lucide-react';
+import { useAppDialog } from '../components/AppDialog';
 import type {
   CustomerAccountOverview,
   CustomerAccountSummary,
@@ -75,6 +76,7 @@ const orderTone = (order:ServiceOrderSummary) => {
 };
 
 export function CustomerAccountsPage() {
+  const {confirm,prompt}=useAppDialog();
   const [data,setData]=useState<CustomerAccountOverview | null>(null);
   const [query,setQuery]=useState('');
   const [filter,setFilter]=useState<CustomerFilter>('ALL');
@@ -186,7 +188,12 @@ export function CustomerAccountsPage() {
 
   const getCode=async(customer:CustomerAccountSummary,rotate=false)=>{
     if(busyRef.current)return;
-    if(rotate&&!window.confirm(`Wygenerować nowy kod dla ${customer.name}? Stary kod i sesje kodowe przestaną działać.`))return;
+    if(rotate&&!await confirm({
+      title:'Wygenerować nowy kod klienta?',
+      message:customer.name,
+      detail:'Stary kod oraz aktywne sesje utworzone tym kodem przestaną działać.',
+      confirmLabel:'Wygeneruj nowy kod',tone:'warning'
+    }))return;
     setBusySafe(customer.id+':code');setNotice(null);
     try{
       const result=await window.lockOn.customers.getCode(customer.id,rotate);
@@ -211,10 +218,23 @@ export function CustomerAccountsPage() {
   const toggleBlock=async(customer:CustomerAccountSummary)=>{
     if(busyRef.current)return;
     const next=!customer.blocked;
-    if(!window.confirm(next
-      ? `Zablokować portal klienta ${customer.name}? Wszystkie aktywne sesje zostaną zamknięte.`
-      : `Odblokować portal klienta ${customer.name}?`))return;
-    const reason=next ? (window.prompt('Powód blokady (opcjonalnie):','')||'') : '';
+    if(!await confirm({
+      title:next?'Zablokować portal klienta?':'Odblokować portal klienta?',
+      message:customer.name,
+      detail:next?'Wszystkie aktywne sesje klienta zostaną natychmiast zamknięte.':'Klient ponownie będzie mógł zalogować się do swojego portalu.',
+      confirmLabel:next?'Zablokuj portal':'Odblokuj portal',
+      tone:next?'danger':'default'
+    }))return;
+    const promptedReason=next ? await prompt({
+      title:'Powód blokady',
+      message:'Możesz zapisać krótką informację administracyjną.',
+      inputLabel:'Powód (opcjonalnie)',
+      placeholder:'Np. zgłoszenie klienta, bezpieczeństwo…',
+      confirmLabel:'Zapisz i blokuj',
+      tone:'warning'
+    }) : '';
+    if(next&&promptedReason===null)return;
+    const reason=promptedReason||'';
     setBusySafe(customer.id+':block');setNotice(null);
     try{
       await window.lockOn.customers.block(customer.id,next,reason);
@@ -226,7 +246,12 @@ export function CustomerAccountsPage() {
 
   const logoutAll=async(customer:CustomerAccountSummary)=>{
     if(busyRef.current)return;
-    if(!window.confirm(`Wylogować ${customer.name} ze wszystkich aktywnych sesji portalu?`))return;
+    if(!await confirm({
+      title:'Wylogować klienta ze wszystkich sesji?',
+      message:customer.name,
+      detail:'Wszystkie aktywne sesje portalu klienta zostaną zamknięte. Kod i konto nie zostaną usunięte.',
+      confirmLabel:'Wyloguj wszędzie',tone:'warning'
+    }))return;
     setBusySafe(customer.id+':logout');setNotice(null);
     try{
       const result=await window.lockOn.customers.logoutAll(customer.id);
@@ -239,7 +264,12 @@ export function CustomerAccountsPage() {
   const unlinkGoogle=async(customer:CustomerAccountSummary)=>{
     if(busyRef.current)return;
     if(!customer.googleLinked)return;
-    if(!window.confirm(`Odłączyć konto Google klienta ${customer.name}? Klient nadal będzie mógł wejść kodem i ponownie połączyć Google.`))return;
+    if(!await confirm({
+      title:'Odłączyć konto Google klienta?',
+      message:customer.name,
+      detail:'Klient nadal będzie mógł wejść kodem i później ponownie połączyć konto Google.',
+      confirmLabel:'Odłącz Google',tone:'warning'
+    }))return;
     setBusySafe(customer.id+':unlink');setNotice(null);
     try{
       const result=await window.lockOn.customers.unlinkGoogle(customer.id);
@@ -254,7 +284,12 @@ export function CustomerAccountsPage() {
     if(busyRef.current||!selectedId||!selected)return;
     if(!profile.firstName.trim()){setNotice({tone:'error',text:'Podaj imię klienta.'});return;}
     const emailChanged=(detail?.customer.email||'').trim().toLowerCase()!==profile.email.trim().toLowerCase();
-    if(emailChanged&&selected.googleLinked&&!window.confirm('Zmiana e-mailu odłączy obecne konto Google klienta dla bezpieczeństwa. Kontynuować?'))return;
+    if(emailChanged&&selected.googleLinked&&!await confirm({
+      title:'Zmienić e-mail klienta?',
+      message:'Dla bezpieczeństwa obecne połączenie konta Google zostanie odłączone.',
+      detail:'Klient będzie mógł ponownie połączyć Google po zapisaniu nowego adresu.',
+      confirmLabel:'Zmień e-mail',tone:'warning'
+    }))return;
     setBusySafe(selectedId+':profile');setNotice(null);
     try{
       const result=await window.lockOn.customers.updateProfile(selectedId,{

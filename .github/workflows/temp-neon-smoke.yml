@@ -2,7 +2,7 @@ name: Temp Neon integration smoke
 
 on:
   push:
-    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "feature/service-intake-automation-*", "fix/service-card-*"]
+    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "feature/service-intake-automation-*", "fix/service-card-*", "release/**"]
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
@@ -437,16 +437,78 @@ jobs:
           api POST "/service/orders/$order_id/status" '{"status":"REPAIR_DONE","note":"CI temp smoke"}' > repair-done.json
           node -e "const d=require('./repair-done.json');if(d.order?.status!=='REPAIR_DONE')throw new Error('Could not mark repair done at service point')"
 
-          api POST "/service/orders/$order_id/transfer" '{"kind":"RETURN_HOME","note":"CI temp smoke return"}' > return-home.json
+          api POST "/service/orders/$order_id/transfer" '{"kind":"RETURN_HOME","note":"CI temp smoke return before warranty"}' > return-home.json
           api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
-          api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-return.json
+          api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-return-before-warranty.json
           node - <<'NODE'
-          const d=require('./scan-return.json');
-          if(d.scanAction!=='RETURN_ACCEPTED_READY')throw new Error('Return-home scan did not auto-ready the repaired order');
-          if(d.order?.status!=='READY')throw new Error('Returned repaired order is not READY');
+          const d=require('./scan-return-before-warranty.json');
+          if(d.scanAction!=='RETURN_ACCEPTED_WARRANTY_REQUIRED')throw new Error('Return-home scan did not keep REPAIR_DONE pending warranty');
+          if(d.order?.status!=='REPAIR_DONE')throw new Error('Returned repaired order changed status before warranty');
           NODE
 
+          set +e
+          ready_without_warranty_http="$(curl --silent --show-error --output ready-without-warranty.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_id/status"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data '{"status":"READY","note":"CI must be blocked before warranty"}')"
+          set -e
+          [ "$ready_without_warranty_http" = "409" ] || { echo "::error::READY was not blocked before warranty: HTTP $ready_without_warranty_http"; cat ready-without-warranty.json; exit 1; }
+          node -e "const d=require('./ready-without-warranty.json');if(d.error!=='WARRANTY_REQUIRED')throw new Error('READY rejection did not use WARRANTY_REQUIRED: '+JSON.stringify(d))"
+
+          api POST "/service/orders/$order_id/warranty" '{"months":6,"repairSummary":"Wymiana modułu wyświetlacza i test funkcjonalny CI"}' > warranty.json
+          node - <<'NODE'
+          const d=require('./warranty.json');
+          if(d.warranty?.months!==6)throw new Error('Warranty months were not saved');
+          if(!d.warranty?.startedAt||!d.warranty?.expiresAt)throw new Error('Warranty dates were not created');
+          if(d.warranty?.repairSummary!=='Wymiana modułu wyświetlacza i test funkcjonalny CI')throw new Error('Repair summary was not saved with warranty');
+          if(!d.warranty?.warrantyCardNumber?.startsWith('GW-'))throw new Error('Warranty card number missing');
+          if(d.order?.warrantyReady!==false)throw new Error('Warranty must not be ready before card print');
+          NODE
+
+          api POST "/service/orders/$order_id/warranty-card" '{}' > warranty-card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./warranty-card.json');
+          if(d.order?.warrantyReady!==true)throw new Error('Warranty was not unlocked after card print');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Warranty card is not a PDF');
+          if(pdf.length<7000)throw new Error('Warranty card PDF is unexpectedly small');
+          fs.writeFileSync('warranty-card.pdf',pdf);
+          NODE
+          pdfinfo warranty-card.pdf > warranty-card-pdfinfo.txt
+          grep -q '^Pages:[[:space:]]*1' warranty-card-pdfinfo.txt || { echo "::error::Warranty card is not exactly one page"; exit 1; }
+          pdftotext -layout warranty-card.pdf warranty-card.txt
+          grep -Fqi 'Karta gwarancyjna naprawy' warranty-card.txt || { echo "::error::Warranty title missing from PDF"; exit 1; }
+          grep -Fqi 'Kod klienta' warranty-card.txt || { echo "::error::Customer code missing from warranty PDF"; exit 1; }
+          grep -Fqi '6 mies.' warranty-card.txt || { echo "::error::Warranty duration missing from PDF"; exit 1; }
+          grep -Fqi 'Wykonana naprawa' warranty-card.txt || { echo "::error::Performed repair heading missing from warranty PDF"; exit 1; }
+          grep -Fqi 'Wymiana modułu wyświetlacza' warranty-card.txt || { echo "::error::Performed repair content missing from warranty PDF"; exit 1; }
+          grep -Eq 'GW-[0-9]{4}-[0-9]{6}' warranty-card.txt || { echo "::error::Warranty card number missing from PDF"; exit 1; }
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/public/customer-portal/me"             --header "Authorization: Bearer $customer_token" > customer-warranty.json
+          node - <<'NODE' "$order_id"
+          const d=require('./customer-warranty.json'), orderId=process.argv[2];
+          const order=d.orders?.find((item)=>item.id===orderId);
+          if(!order?.warranty||order.warranty.months!==6||!order.warranty.expiresAt)throw new Error('Customer portal does not expose warranty');
+          if(order.warranty.status!=='ACTIVE'||order.warranty.active!==true||order.warranty.daysRemaining<1)throw new Error('Customer warranty status is not active');
+          if(order.warranty.cardAvailable!==true||!order.warranty.cardNumber?.startsWith('GW-'))throw new Error('Customer warranty card metadata missing');
+          if(!order.warranty.repairSummary?.includes('Wymiana modułu'))throw new Error('Customer warranty repair summary missing');
+          NODE
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/public/customer-portal/orders/$order_id/warranty-card"             --header "Authorization: Bearer $customer_token" > customer-warranty-card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./customer-warranty-card.json');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Customer warranty card download is not a PDF');
+          if(!d.warrantyCardNumber?.startsWith('GW-'))throw new Error('Customer warranty card number missing');
+          fs.writeFileSync('customer-warranty-card.pdf',pdf);
+          NODE
+
+          api POST "/service/orders/$order_id/status" '{"status":"READY","note":"CI warranty gate passed"}' > ready-after-warranty.json
+          node -e "const d=require('./ready-after-warranty.json');if(d.order?.status!=='READY')throw new Error('READY did not succeed after warranty card generation')"
+
           api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
+
+          api GET "/service/orders?limit=1&offset=0" > orders-page-one.json
+          node -e "const d=require('./orders-page-one.json');if(!Array.isArray(d)||d.length>1)throw new Error('Service orders pagination limit failed')"
 
           api GET /service/orders > owner-orders-after-transfer.json
           node - <<'NODE' "$owner_id" "$order_id"
@@ -530,12 +592,102 @@ jobs:
           if(!notes.some(x=>x.id===id&&x.body===marker&&x.pinned===true)) throw new Error('Technician cannot read own private note');
           NODE
 
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/technician-notes/$note_id"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data '{"title":"TEMP E2E edited","body":"Edytowana prywatna notatka CI","pinned":false}' > tech-note-edited.json
+          node -e "const d=require('./tech-note-edited.json');if(d.title!=='TEMP E2E edited'||d.body!=='Edytowana prywatna notatka CI'||d.pinned!==false)throw new Error('Private note edit failed')"
+
           owner_code="$(curl --silent --show-error --output owner-private-note.json --write-out '%{http_code}'             "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $owner_token")"
           [ "$owner_code" = "403" ] || { echo "::error::OWNER unexpectedly read technician private notes: HTTP $owner_code"; cat owner-private-note.json; exit 1; }
 
           curl --silent --show-error --fail-with-body             --request DELETE "$TEMP_API_URL/service/technician-notes/$note_id"             --header "Authorization: Bearer $tech_token" > tech-note-delete.json
           curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $tech_token" > tech-notes-after.json
           node -e "const d=require('./tech-notes-after.json');if(d.some(x=>x.id===process.argv[1]))throw new Error('Private note was not deleted')" "$note_id"
+
+      - name: Temp draggable technician plan E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          tech_token="$(node -e "const d=require('./role-TECHNICIAN.json');process.stdout.write(d.token)")"
+          tech_point="$(node -e "const d=require('./role-TECHNICIAN.json');process.stdout.write(d.activePointId||d.points?.[0]?.id||'')")"
+          [ -n "$tech_point" ]
+
+          plan_api() {
+            local method="$1" path="$2" body="${3:-}"
+            if [ -n "$body" ]; then
+              curl --silent --show-error --fail-with-body \
+                --request "$method" "$TEMP_API_URL$path" \
+                --header "Authorization: Bearer $tech_token" \
+                --header "Content-Type: application/json" \
+                --data "$body"
+            else
+              curl --silent --show-error --fail-with-body \
+                --request "$method" "$TEMP_API_URL$path" \
+                --header "Authorization: Bearer $tech_token"
+            fi
+          }
+
+          suffix="PLAN-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          make_order() {
+            local ordinal="$1"
+            node - <<'NODE' "$suffix" "$ordinal"
+          const [suffix,ordinal]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            firstName:'Plan',
+            lastName:'CI '+suffix+' '+ordinal,
+            email:'serviceos-plan-'+suffix+'-'+ordinal+'@invalid.test',
+            phone:'+48123456789',
+            brand:'CI',
+            model:'Drag '+ordinal,
+            issueDescription:'Test przeciągania i kolejności planu pracy',
+            orderType:'REPAIR'
+          }));
+          NODE
+          }
+
+          plan_api POST /service/orders "$(make_order 1)" > plan-order-1.json
+          plan_api POST /service/orders "$(make_order 2)" > plan-order-2.json
+          order_1="$(node -e "const d=require('./plan-order-1.json');if(!d.order?.id||!d.order?.assignedTechnicianId)throw new Error('Technician intake did not self-assign');process.stdout.write(d.order.id)")"
+          order_2="$(node -e "const d=require('./plan-order-2.json');if(!d.order?.id||!d.order?.assignedTechnicianId)throw new Error('Technician intake did not self-assign');process.stdout.write(d.order.id)")"
+
+          target_day="$(node -e "const d=new Date(Date.now()+5*86400000);d.setUTCHours(12,0,0,0);process.stdout.write(d.toISOString())")"
+          target_key="$(node -e "process.stdout.write(new Date(process.argv[1]).toISOString().slice(0,10))" "$target_day")"
+
+          plan_api POST "/service/orders/$order_1/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-move-1.json
+          node - <<'NODE' "$target_key"
+          const d=require('./plan-move-1.json'),target=process.argv[2];
+          if(!d.order?.estimatedCompletionAt)throw new Error('Plan move did not return ETA');
+          if(new Date(d.order.estimatedCompletionAt).toISOString().slice(0,10)!==target)throw new Error('Plan move returned wrong day');
+          if(Number(d.order.planPosition||0)<=0)throw new Error('Plan position was not persisted');
+          if(!d.notification||typeof d.notification.sent!=='boolean')throw new Error('ETA notification result missing');
+          NODE
+
+          earlier_day="$(node -e "const d=new Date(process.argv[1]);d.setUTCDate(d.getUTCDate()-1);process.stdout.write(d.toISOString())" "$target_day")"
+          set +e
+          earlier_http="$(curl --silent --show-error --output plan-earlier.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_1/plan"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$earlier_day")")"
+          remove_http="$(curl --silent --show-error --output plan-remove.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_1/plan"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data '{"estimatedCompletionAt":null,"targetIndex":0}')"
+          set -e
+          [ "$earlier_http" = "409" ] || { echo "::error::Plan allowed moving ETA backward: HTTP $earlier_http"; cat plan-earlier.json; exit 1; }
+          [ "$remove_http" = "409" ] || { echo "::error::Plan allowed removing established ETA: HTTP $remove_http"; cat plan-remove.json; exit 1; }
+          node -e "const d=require('./plan-earlier.json');if(d.error!=='ETA_CANNOT_MOVE_BACK')throw new Error('Backward plan move returned wrong error')"
+          node -e "const d=require('./plan-remove.json');if(d.error!=='ETA_CANNOT_REMOVE')throw new Error('ETA removal returned wrong error')"
+
+          plan_api POST "/service/orders/$order_2/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-move-2.json
+          plan_api POST "/service/orders/$order_1/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-reorder.json
+
+          node - <<'NODE'
+          const d=require('./plan-reorder.json');
+          if(!d.order||Number(d.order.planPosition)!==10)throw new Error('Same-day reorder did not move order to first position');
+          if(d.notification?.queued===true)throw new Error('Same-day reorder unexpectedly queued ETA email');
+          NODE
+
+          plan_api GET /service/technician-workspace > plan-workspace.json
+          node - <<'NODE' "$order_1" "$order_2" "$target_key"
+          const w=require('./plan-workspace.json');
+          const [oneId,twoId,target]=process.argv.slice(2);
+          const one=w.orders?.find(x=>x.id===oneId),two=w.orders?.find(x=>x.id===twoId);
+          if(!one||!two)throw new Error('Moved orders missing from technician workspace');
+          if(new Date(one.estimatedCompletionAt).toISOString().slice(0,10)!==target||new Date(two.estimatedCompletionAt).toISOString().slice(0,10)!==target)throw new Error('Cross-day drag date was not persisted');
+          if(Number(one.planPosition)!==10||Number(two.planPosition)!==20)throw new Error('Daily drag order was not persisted as 1/2');
+          NODE
 
       - name: Temp private invoice signed URL E2E
         shell: bash
@@ -545,6 +697,7 @@ jobs:
           user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
           support_token="$(node -e "const d=require('./role-SUPPORT.json');process.stdout.write(d.token)")"
           order_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.id)")"
+          invoice_point_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.pointId)")"
 
           test -s service-card.pdf
           size_bytes="$(stat -c%s service-card.pdf)"
@@ -583,7 +736,7 @@ jobs:
           if(d.uploadedByUserId!==ownerId || d.uploadedByName!=='System LockOn') throw new Error('OWNER invoice uploader identity leaked');
           NODE
 
-          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/invoices?month=$period"             --header "Authorization: Bearer $owner_token" > invoices-list.json
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/invoices?month=$period&pointId=$invoice_point_id"             --header "Authorization: Bearer $owner_token" > invoices-list.json
           node - <<'NODE' "$invoice_id" "$owner_id"
           const d=require('./invoices-list.json');
           const [invoiceId,ownerId]=process.argv.slice(2);

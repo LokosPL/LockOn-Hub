@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Calculator, Download, FileText, PackagePlus, ReceiptText, Save, Trash2, Upload } from 'lucide-react';
 import type { ServiceCosting, ServiceInvoice, ServiceOrderPart, ServiceOrderSummary } from '../types/electron';
+import { useAppDialog } from './AppDialog';
 
 interface Props {
   order: ServiceOrderSummary;
@@ -27,6 +28,7 @@ const emptyPart = ():PartDraft => ({
 });
 
 export function OrderCostingCard({ order, disabled=false }:Props) {
+  const {confirm}=useAppDialog();
   const [data,setData]=useState<ServiceCosting|null>(null);
   const [parts,setParts]=useState<PartDraft[]>([]);
   const [labor,setLabor]=useState('0');
@@ -134,7 +136,12 @@ export function OrderCostingCard({ order, disabled=false }:Props) {
 
   const removeInvoice=async(invoice:ServiceInvoice)=>{
     if(busy||disabled)return;
-    if(!window.confirm('Usunąć fakturę „'+invoice.fileName+'” z magazynu?'))return;
+    if(!await confirm({
+      title:'Usunąć fakturę z magazynu?',
+      message:invoice.fileName,
+      detail:'Dokument PDF zostanie usunięty z magazynu faktur tego zlecenia.',
+      confirmLabel:'Usuń fakturę',tone:'danger'
+    }))return;
     setBusy('delete:'+invoice.id);setError('');setNotice('');
     try{
       await window.lockOn.service.deleteInvoice(invoice.id);

@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BadgeDollarSign, BellRing, CalendarClock, CalendarDays, CheckCircle2, ClipboardList, ClipboardPlus,
   Clock3, FileArchive, History, IdCard, Mail, MailCheck, MapPin, MessageSquareText, NotebookPen, PackageCheck, Printer, RefreshCw, RotateCcw, Save, Search, Send,
-  Settings2, Smartphone, StickyNote, Truck, UserCog, UserRound, Wrench, XCircle
+  Settings2, ShieldCheck, Smartphone, StickyNote, Truck, UserCog, UserRound, Wrench, XCircle
 } from 'lucide-react';
 import { InvoiceWarehouse } from '../components/InvoiceWarehouse';
 import { MonthlyInvoicePrompt } from '../components/MonthlyInvoicePrompt';
 import { OrderCostingCard } from '../components/OrderCostingCard';
 import { TechnicianCalendar } from '../components/TechnicianCalendar';
 import { TechnicianNotesRoom } from '../components/TechnicianNotesRoom';
+import { useAppDialog } from '../components/AppDialog';
 import type {
   AdminPoint,
   AuthState,
@@ -119,6 +120,7 @@ const isTransferredToService = (order: ServiceOrderSummary) =>
 type ServiceTab = 'CALENDAR' | 'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAILS' | 'INVOICES' | 'TECH_NOTES';
 
 export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
+  const {confirm}=useAppDialog();
   const isActualTechnician = auth.role === 'TECHNICIAN';
   const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'NEW');
   const [form, setForm] = useState<ServiceIntakeForm>(() => makeEmptyForm());
@@ -133,6 +135,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [busy, setBusy] = useState(false);
   const submitBusyRef = useRef(false);
   const [ordersBusy, setOrdersBusy] = useState(false);
+  const ordersLoadedRef = useRef(false);
+  const [ordersVisibleLimit,setOrdersVisibleLimit]=useState(28);
+  const [ordersHasMore,setOrdersHasMore]=useState(true);
+  const [ordersPageBusy,setOrdersPageBusy]=useState(false);
   const [result, setResult] = useState<ServiceCreateOrderResult | null>(null);
   const [cardChoice, setCardChoice] = useState<{orderId:string;orderNumber:number}|null>(null);
   const [notificationChoice, setNotificationChoice] = useState<{
@@ -159,6 +165,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
   const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
+  const [warrantyBusyId, setWarrantyBusyId] = useState<string | null>(null);
+  const [warrantyDrafts, setWarrantyDrafts] = useState<Record<string,string>>({});
+  const [warrantyRepairDrafts, setWarrantyRepairDrafts] = useState<Record<string,string>>({});
   const [servicePoints, setServicePoints] = useState<AdminPoint[]>([]);
   const [transfers, setTransfers] = useState<ServiceTransfer[]>([]);
   const [transferDrafts, setTransferDrafts] = useState<Record<string,{toPointId:string;note:string}>>({});
@@ -169,6 +178,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [quoteNoteDrafts, setQuoteNoteDrafts] = useState<Record<string,string>>({});
 
   const pointOptions = useMemo(() => auth.points, [auth.points]);
+  const pointAccessSet = useMemo(() => new Set(pointOptions.map((point)=>point.id)), [pointOptions]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
   useEffect(() => {
     const nextPointId = auth.point?.id ?? auth.points[0]?.id ?? '';
@@ -221,6 +231,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         : orders.filter((order)=>order.workflow?.flags.includes(orderFilter)),
     [orders,orderFilter]
   );
+  const renderedOrders=useMemo(()=>visibleOrders.slice(0,ordersVisibleLimit),[visibleOrders,ordersVisibleLimit]);
+  useEffect(()=>{setOrdersVisibleLimit(28);},[orderFilter]);
 
   const brandSuggestions = useMemo(() => {
     const term = form.brand.trim().toLocaleLowerCase('pl-PL');
@@ -239,12 +251,31 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const loadOrders = async () => {
     setOrdersBusy(true);
     try {
-      setOrders(await window.lockOn.service.listOrders());
+      const page=await window.lockOn.service.listOrders(40,0);
+      setOrders(page);
+      setOrdersHasMore(page.length===40);
+      setOrdersVisibleLimit(28);
+      ordersLoadedRef.current=true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się pobrać zleceń.');
     } finally {
       setOrdersBusy(false);
     }
+  };
+
+  const loadMoreOrders=async()=>{
+    if(ordersPageBusy||!ordersHasMore)return;
+    setOrdersPageBusy(true);setError('');
+    try{
+      const page=await window.lockOn.service.listOrders(40,orders.length);
+      setOrders((current)=>{
+        const known=new Set(current.map((item)=>item.id));
+        return [...current,...page.filter((item)=>!known.has(item.id))];
+      });
+      setOrdersHasMore(page.length===40);
+      setOrdersVisibleLimit((value)=>value+40);
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się pobrać kolejnych zleceń.');}
+    finally{setOrdersPageBusy(false);}
   };
 
   const loadTransfers = async () => {
@@ -291,6 +322,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         finalCost: order.finalCost == null ? '' : String(order.finalCost),
         estimatedCompletionAt: toLocalDateInput(order.estimatedCompletionAt)
       }
+    }));
+    setWarrantyDrafts((current)=>({
+      ...current,
+      [order.id]: current[order.id] ?? (order.warrantyMonths ? String(order.warrantyMonths) : '')
+    }));
+    setWarrantyRepairDrafts((current)=>({
+      ...current,
+      [order.id]: current[order.id] ?? (order.repairSummary || '')
     }));
 
     setHistoryBusyId(order.id);
@@ -375,8 +414,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   useEffect(() => {
+    if(tab!=='ORDERS'||ordersLoadedRef.current)return;
     void loadOrders();
-  }, []);
+  }, [tab]);
+
+  useEffect(() => {
+    if(!focusOrderId||ordersLoadedRef.current)return;
+    void loadOrders();
+  }, [focusOrderId]);
 
   useEffect(() => {
     if (!canHandleCustomerQuotes || tab !== 'QUOTES') return;
@@ -560,10 +605,59 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     finally{setServiceCardBusyId(null);}
   };
 
+  const saveWarranty = async (order: ServiceOrderSummary) => {
+    if(warrantyBusyId)return;
+    const months=Number(warrantyDrafts[order.id]||0);
+    if(!Number.isInteger(months)||months<1||months>60){
+      setError('Podaj okres gwarancji od 1 do 60 miesięcy.');
+      return;
+    }
+    const repairSummary=(warrantyRepairDrafts[order.id]||'').trim();
+    if(!repairSummary){
+      setError('Opisz wykonaną naprawę przed zapisaniem gwarancji.');
+      return;
+    }
+    setWarrantyBusyId(order.id);setError('');setNotice('');
+    try{
+      const result=await window.lockOn.service.updateWarranty(order.id,{months,repairSummary});
+      if(result.order)setOrders((current)=>current.map((item)=>item.id===order.id?result.order!:item));
+      setWarrantyDrafts((current)=>({...current,[order.id]:String(months)}));
+      setNotice(result.warranty.cardPrintedAt
+        ? `Gwarancja ${months} mies. została zapisana.`
+        : `Gwarancja ${months} mies. została zapisana. Teraz wydrukuj kartę gwarancyjną.`);
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się zapisać gwarancji.');}
+    finally{setWarrantyBusyId(null);}
+  };
+
+  const openWarrantyCard = async (order: ServiceOrderSummary) => {
+    if(warrantyBusyId)return;
+    setWarrantyBusyId(order.id);setError('');setNotice('');
+    try{
+      const result=await window.lockOn.service.openWarrantyCard(order.id);
+      if(result.order)setOrders((current)=>current.map((item)=>item.id===order.id?result.order!:item));
+      setNotice('Karta gwarancyjna została przygotowana i oznaczona jako wydrukowana. Dołącz ją do urządzenia.');
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się przygotować karty gwarancyjnej.');}
+    finally{setWarrantyBusyId(null);}
+  };
+
   const changeStatus = async (order: ServiceOrderSummary, status: string) => {
     if (orderBusyId || status === order.status) return;
-    if (status === 'CANCELLED' && !window.confirm(`Anulować zlecenie #${order.orderNumber}? Tej zmiany nie należy używać zamiast zwykłego etapu naprawy.`)) return;
-    if (status === 'COMPLETED' && !window.confirm(`Zakończyć zlecenie #${order.orderNumber}? ServiceOS zapisze rozliczenie na podstawie kosztu końcowego.`)) return;
+    if(status==='READY'&&!order.warrantyReady){
+      setError('Przed statusem „Gotowe do odbioru” ustaw gwarancję i wydrukuj kartę gwarancyjną.');
+      return;
+    }
+    if (status === 'CANCELLED' && !await confirm({
+      title:`Anulować zlecenie #${order.orderNumber}?`,
+      message:'Zlecenie zostanie oznaczone jako anulowane.',
+      detail:'Tej operacji używaj tylko wtedy, gdy zlecenie faktycznie ma zostać anulowane — nie zamiast zwykłego etapu naprawy.',
+      confirmLabel:'Anuluj zlecenie',tone:'danger'
+    })) return;
+    if (status === 'COMPLETED' && !await confirm({
+      title:`Zakończyć zlecenie #${order.orderNumber}?`,
+      message:'ServiceOS zamknie obsługę tego urządzenia.',
+      detail:'Rozliczenie zostanie zapisane na podstawie kosztu końcowego. Upewnij się, że urządzenie zostało wydane klientowi.',
+      confirmLabel:'Zakończ zlecenie'
+    })) return;
     setOrderBusyId(order.id);
     setError('');
     setNotice('');
@@ -677,7 +771,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     const draft = transferDrafts[order.id] ?? {toPointId:'',note:''};
     if (!draft.toPointId) { setError('Wybierz docelowy punkt serwisowy.'); return; }
     const destination=servicePoints.find((point)=>point.id===draft.toPointId);
-    if (!window.confirm(`Przekazać urządzenie ze zlecenia #${order.orderNumber} do ${destination?.name || 'wybranego punktu'}?`)) return;
+    if (!await confirm({
+      title:'Przekazać urządzenie do serwisu?',
+      message:`Zlecenie #${order.orderNumber} → ${destination?.name || 'wybrany punkt'}`,
+      detail:'Po potwierdzeniu rozpocznie się proces logistyczny, a klient może otrzymać automatyczną wiadomość.',
+      confirmLabel:'Rozpocznij przekazanie'
+    })) return;
     setOrderBusyId(order.id); setError(''); setNotice('');
     try {
       const currentPointId = order.currentPointId || order.homePointId || order.pointId;
@@ -699,7 +798,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const sendReturnHome = async (order: ServiceOrderSummary) => {
     if (orderBusyId) return;
     const draft = transferDrafts[order.id] ?? {toPointId:'',note:''};
-    if (!window.confirm(`Odesłać urządzenie ze zlecenia #${order.orderNumber} do punktu macierzystego?`)) return;
+    if (!await confirm({
+      title:'Odesłać urządzenie do punktu macierzystego?',
+      message:`Zlecenie #${order.orderNumber}`,
+      detail:'ServiceOS rozpocznie przekazanie zwrotne i zaktualizuje lokalizację urządzenia zgodnie z kolejnymi potwierdzeniami.',
+      confirmLabel:'Rozpocznij powrót'
+    })) return;
     setOrderBusyId(order.id); setError(''); setNotice('');
     try {
       const result = await window.lockOn.service.transferOrder(order.id, {
@@ -719,8 +823,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   const changeTransferStatus = async (transfer: ServiceTransfer, status: ServiceTransfer['status']) => {
     if (orderBusyId) return;
-    if (status === 'CANCELLED' && !window.confirm(`Anulować przekazanie zlecenia #${transfer.orderNumber}? Urządzenie wróci logicznie do punktu źródłowego.`)) return;
-    if (status === 'REJECTED' && !window.confirm(`Odrzucić przekazanie zlecenia #${transfer.orderNumber}? Potwierdź tylko, jeśli punkt docelowy faktycznie odmawia przyjęcia.`)) return;
+    if (status === 'CANCELLED' && !await confirm({
+      title:'Anulować przekazanie?',
+      message:`Zlecenie #${transfer.orderNumber}`,
+      detail:'Urządzenie wróci logicznie do punktu źródłowego. Potwierdź tylko, jeśli transport faktycznie został anulowany.',
+      confirmLabel:'Anuluj przekazanie',tone:'danger'
+    })) return;
+    if (status === 'REJECTED' && !await confirm({
+      title:'Odrzucić przekazanie?',
+      message:`Zlecenie #${transfer.orderNumber}`,
+      detail:'Potwierdź tylko, jeśli punkt docelowy faktycznie odmawia przyjęcia urządzenia.',
+      confirmLabel:'Odrzuć przekazanie',tone:'danger'
+    })) return;
     setOrderBusyId(transfer.id); setError(''); setNotice('');
     try {
       const result = await window.lockOn.service.updateTransferStatus(transfer.id,status);
@@ -778,7 +892,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   const closeCustomerQuote = async (requestId: string) => {
     if (quoteBusyId) return;
-    if (!window.confirm('Zamknąć tę rozmowę o wycenie? Klient nie będzie mógł kontynuować tego wątku.')) return;
+    if (!await confirm({
+      title:'Zamknąć rozmowę o wycenie?',
+      message:'Klient nie będzie mógł kontynuować tego wątku.',
+      detail:'Historia rozmowy i przygotowana wycena pozostaną zapisane.',
+      confirmLabel:'Zamknij rozmowę',tone:'warning'
+    })) return;
     setQuoteBusyId(requestId); setError(''); setNotice('');
     try {
       await window.lockOn.service.closeCustomerQuote(requestId);
@@ -806,7 +925,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   const disconnectGmail = async () => {
     if (!pointId || gmailBusy) return;
-    if (!window.confirm('Odłączyć Gmail od tego punktu? Automatyczne wiadomości przestaną być wysyłane do ponownego połączenia konta.')) return;
+    if (!await confirm({
+      title:'Odłączyć Gmail od punktu?',
+      message:'Automatyczne wiadomości przestaną być wysyłane.',
+      detail:'Wysyłkę można przywrócić przez ponowne połączenie konta Google.',
+      confirmLabel:'Odłącz Gmail',tone:'warning'
+    })) return;
     setGmailBusy(true); setError(''); setNotice('');
     try {
       await window.lockOn.gmail.disconnect(pointId);
@@ -885,7 +1009,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         </div>
         <div className="service-tabs">
           {isActualTechnician && <button className={tab === 'CALENDAR' ? 'active' : ''} onClick={() => setTab('CALENDAR')}><CalendarDays size={15}/> Plan pracy</button>}
-          <button className={tab === 'NEW' ? 'active' : ''} onClick={() => setTab('NEW')}><ClipboardPlus size={15}/> Nowe zlecenie</button>
+          <button className={tab === 'NEW' ? 'active' : ''} onClick={() => { setIntakeStage('TYPE'); setTab('NEW'); }}><ClipboardPlus size={15}/> Nowe zlecenie</button>
           <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia{transferredToServiceCount>0&&<b className="service-tab-count" title="Telefony przekazane do serwisu">{transferredToServiceCount}</b>}</button>
           <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
           {canHandleCustomerQuotes && <button className={tab === 'QUOTES' ? 'active' : ''} onClick={() => {setTab('QUOTES');void loadCustomerQuotes(pointId);}}><MessageSquareText size={15}/> Wyceny klientów{customerQuotes.filter((item)=>item.status==='OPEN').length > 0 && <b className="service-tab-count">{customerQuotes.filter((item)=>item.status==='OPEN').length}</b>}</button>}
@@ -953,11 +1077,13 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const notes = orderNotes[order.id] ?? [];
         const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
         const pointTechnicians = currentServicePointId ? (techniciansByPoint[currentServicePointId] ?? []) : [];
-        const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
+        const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(currentServicePointId));
         const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
         const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
         const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
         const canUseOrderFinance = canEditCosts && (!isActualTechnician || order.assignedTechnicianId === auth.user?.id);
+        const stageSteps=['Przyjęto','Diagnoza','Oczekiwanie na decyzję / części','Naprawa','Testy','Zakończono naprawę','Gotowe do odbioru','Wydano'];
+        const stageIndex=({RECEIVED:0,DIAGNOSIS:1,WAITING_PARTS:2,IN_REPAIR:3,REPAIR_DONE:5,READY:6,COMPLETED:7} as Record<string,number>)[order.status] ?? 0;
         return <div className="service-order-details-backdrop" role="presentation" onMouseDown={()=>setExpandedOrderId(null)}>
           <section className="service-order-details-dialog" role="dialog" aria-modal="true" aria-label={`Szczegóły zlecenia #${order.orderNumber}`} onMouseDown={(event)=>event.stopPropagation()}>
             <header className="service-order-details-header">
@@ -971,13 +1097,62 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             <div className="service-order-workspace">
                       {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
 
+                      <section className="service-workspace-card service-stage-card">
+                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Etap naprawy</strong><span>Naprawa, testy, gwarancja i wydanie w jednym czytelnym przebiegu.</span></div></div>
+                        <div className="service-stage-overview">
+                          <div className="service-stage-progress"><span style={{width:`${order.workflow?.progressPercent ?? 10}%`}}/></div>
+                          <div className="service-repair-stage-rail">
+                            {stageSteps.map((label,index)=><span key={label} className={index<stageIndex?'done':index===stageIndex?'current':index===stageIndex+1?'next':''}>{label}</span>)}
+                          </div>
+                          <div className="service-stage-meta">
+                            <div><span>Aktualny status</span><strong>{order.statusLabel}</strong></div>
+                            <div><span>Następny krok</span><strong>{order.workflow?.nextAction || 'Sprawdź szczegóły zlecenia.'}</strong></div>
+                            <div><span>Termin</span><strong>{order.estimatedCompletionAt?new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL'):'Nie podano'}</strong></div>
+                            <div><span>Lokalizacja</span><strong>{order.currentLocationLabel || order.currentPointName || order.pointName}</strong></div>
+                          </div>
+                        </div>
+                        {canEditOrderHere ? <label className="service-stage-select">
+                          <span>Zmień etap</span>
+                          <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e)=>void changeStatus(order,e.target.value)}>
+                            {statuses.map(([value,label])=><option key={value} value={value} disabled={(value==='READY'&&(order.status!=='REPAIR_DONE'||order.canMarkReady===false||!order.warrantyReady))||(value==='COMPLETED'&&order.status!=='READY')}>{label}</option>)}
+                          </select>
+                        </label> : <div className="service-history-empty">Etap może zmienić użytkownik obsługujący aktualny punkt urządzenia.</div>}
+                      </section>
+
+                      {order.handlingMode!=='TRANSFER_ONLY' && (
+                        <section className={`service-workspace-card service-warranty-card ${order.warrantyReady?'ready':''}`}>
+                          <div className="service-workspace-title"><ShieldCheck size={15}/><div><strong>Gwarancja po naprawie</strong><span>Wymagana przed oznaczeniem urządzenia jako gotowe do odbioru.</span></div></div>
+                          <div className="service-warranty-status">
+                            <div><span>Okres</span><strong>{order.warrantyMonths ? `${order.warrantyMonths} mies.` : 'Nie ustawiono'}</strong></div>
+                            <div><span>Ważna do</span><strong>{order.warrantyExpiresAt ? new Date(order.warrantyExpiresAt).toLocaleDateString('pl-PL') : '—'}</strong></div>
+                            <div><span>Karta</span><strong>{order.warrantyCardPrintedAt ? 'Wygenerowana' : 'Do wygenerowania'}</strong></div>
+                            <div><span>Numer</span><strong>{order.warrantyCardNumber || '—'}</strong></div>
+                          </div>
+                          {order.status==='REPAIR_DONE' ? <>
+                            <div className="service-warranty-controls">
+                              <label><span>Gwarancja (miesiące)</span><input type="number" min="1" max="60" step="1" value={warrantyDrafts[order.id]??''} onChange={(e)=>setWarrantyDrafts((current)=>({...current,[order.id]:e.target.value.replace(/\D/g,'').slice(0,2)}))} placeholder="np. 3 lub 6"/></label>
+                              <label className="service-warranty-repair-summary"><span>Wykonana naprawa</span><textarea rows={3} maxLength={2000} value={warrantyRepairDrafts[order.id]??''} onChange={(e)=>setWarrantyRepairDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="Np. wymiana wyświetlacza, czyszczenie i test funkcjonalny"/></label>
+                              <button className="button secondary small" disabled={warrantyBusyId===order.id||!(warrantyRepairDrafts[order.id]??'').trim()} onClick={()=>void saveWarranty(order)}><Save size={13}/> Zapisz gwarancję</button>
+                              <button className="button primary small" disabled={warrantyBusyId===order.id||!order.warrantyMonths||!order.repairSummary} onClick={()=>void openWarrantyCard(order)}><Printer size={13}/> Wygeneruj / drukuj kartę</button>
+                            </div>
+                            <small className="service-warranty-hint">{order.warrantyReady
+                              ? 'Gotowe — karta została przygotowana. Możesz teraz ustawić „Gotowe do odbioru”.'
+                              : order.warrantyMonths
+                                ? 'Wydrukuj kartę gwarancyjną i dołącz ją do telefonu. Dopiero wtedy ServiceOS odblokuje „Gotowe do odbioru”.'
+                                : 'Wpisz liczbę miesięcy gwarancji. Po zapisaniu wydrukuj kartę z QR i kodem klienta.'}</small>
+                          </> : <small className="service-warranty-hint">{order.status==='READY'||order.status==='COMPLETED'
+                            ? 'Gwarancja została przygotowana przed odbiorem urządzenia.'
+                            : 'Sekcja odblokuje zapis gwarancji po ustawieniu etapu „Naprawa zakończona”.'}</small>}
+                        </section>
+                      )}
+
                       {draft && (
                         <section className="service-workspace-card">
                           <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
                           <div className="service-details-grid">
                             <label><span>IMEI</span><input disabled={!canEditIntakeHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
                             <label><span>Numer seryjny</span><input disabled={!canEditIntakeHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
-                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditIntakeHere && <div className="service-detail-date-field"><span>Przewidywany termin</span><div><input disabled={!canEditIntakeHere} type="date" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/><button type="button" className="button tiny secondary" disabled={!canEditIntakeHere} onClick={()=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:''}}))}>Nie podano</button></div></div>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditIntakeHere && <div className="service-detail-date-field"><span>Przewidywany termin</span><div><input disabled={!canEditIntakeHere} type="date" min={toLocalDateInput(order.estimatedCompletionAt)||undefined} value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/><button type="button" className="button tiny secondary" disabled={!canEditIntakeHere||Boolean(order.estimatedCompletionAt)} title={order.estimatedCompletionAt?'Istniejącego terminu nie można usunąć — można go tylko wydłużyć.':'Brak przewidywanego terminu'} onClick={()=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:''}}))}>Nie podano</button></div></div>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditOrderHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
@@ -1131,27 +1306,35 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       {tab === 'NEW' && (
         <div className="service-intake-hotfix service-intake-v3">
           {intakeStage === 'TYPE' ? (
-            <section className="service-intake-type-screen">
-              <div className="service-intake-type-copy">
-                <span className="eyebrow"><ClipboardPlus size={13}/> NOWE ZLECENIE</span>
-                <h2>Co przyjmujesz?</h2>
-                <p>Najpierw wybierz typ. Potem otworzy się jeden czytelny formularz — taki sam styl jak szczegóły zlecenia.</p>
-              </div>
-              <div className="service-order-type-picker service-order-type-picker-v3" role="group" aria-label="Typ zlecenia">
-                <button type="button" onClick={()=>{update('orderType','REPAIR');setIntakeStage('DETAILS');}}>
-                  <i><Wrench size={22}/></i>
-                  <span><strong>Naprawa</strong><small>Standardowe przyjęcie urządzenia do serwisu.</small></span>
-                  <b>→</b>
-                </button>
-                <button type="button" onClick={()=>{update('orderType','COMPLAINT');setIntakeStage('DETAILS');}}>
-                  <i><RotateCcw size={22}/></i>
-                  <span><strong>Reklamacja</strong><small>Przyjęcie reklamacji z osobnym oznaczeniem zlecenia.</small></span>
-                  <b>→</b>
-                </button>
-              </div>
-            </section>
+            <div className="service-order-details-backdrop service-intake-details-backdrop" role="presentation" onMouseDown={()=>setTab(isActualTechnician?'CALENDAR':'ORDERS')}>
+              <section className="service-intake-details-card service-intake-details-dialog service-intake-type-dialog" role="dialog" aria-modal="true" aria-label="Wybierz typ nowego zlecenia" onMouseDown={(event)=>event.stopPropagation()}>
+                <header className="service-intake-details-head">
+                  <div>
+                    <span className="eyebrow"><ClipboardPlus size={13}/> NOWE ZLECENIE</span>
+                    <h2>Co przyjmujesz?</h2>
+                    <p>Wybierz typ, a formularz pozostanie w tym samym dużym panelu ServiceOS.</p>
+                  </div>
+                  <button className="service-order-details-close" title="Zamknij" onClick={()=>setTab(isActualTechnician?'CALENDAR':'ORDERS')}><XCircle size={20}/></button>
+                </header>
+                <section className="service-intake-type-screen">
+                  <div className="service-order-type-picker service-order-type-picker-v3" role="group" aria-label="Typ zlecenia">
+                    <button type="button" onClick={()=>{update('orderType','REPAIR');setIntakeStage('DETAILS');}}>
+                      <i><Wrench size={22}/></i>
+                      <span><strong>Nowe zlecenie / Naprawa</strong><small>Standardowe przyjęcie urządzenia do naprawy.</small></span>
+                      <b>→</b>
+                    </button>
+                    <button type="button" onClick={()=>{update('orderType','COMPLAINT');setIntakeStage('DETAILS');}}>
+                      <i><RotateCcw size={22}/></i>
+                      <span><strong>Reklamacja</strong><small>Przyjęcie reklamacji z osobnym oznaczeniem zlecenia.</small></span>
+                      <b>→</b>
+                    </button>
+                  </div>
+                </section>
+              </section>
+            </div>
           ) : (
-            <section className="service-intake-details-card">
+            <div className="service-order-details-backdrop service-intake-details-backdrop" role="presentation" onMouseDown={()=>setIntakeStage('TYPE')}>
+            <section className="service-intake-details-card service-intake-details-dialog" role="dialog" aria-modal="true" aria-label={form.orderType==='COMPLAINT'?'Nowa reklamacja':'Nowe zlecenie'} onMouseDown={(event)=>event.stopPropagation()}>
               <header className="service-intake-details-head">
                 <div>
                   <button type="button" className="service-intake-back" onClick={()=>setIntakeStage('TYPE')}>← Zmień typ</button>
@@ -1205,6 +1388,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                 <button className="button primary service-submit service-submit-v2" disabled={busy||!pointId} onClick={()=>void submit()}>{busy?'Tworzę zlecenie…':'Utwórz zlecenie'}</button>
               </footer>
             </section>
+            </div>
           )}
         </div>
       )}
@@ -1226,7 +1410,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             ><span>{filter.label}</span><strong>{filter.count}</strong></button>)}
           </div>
           <div className="service-orders-list">
-            {visibleOrders.map((order) => {
+            {renderedOrders.map((order) => {
               const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
               const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
               const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
@@ -1274,7 +1458,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="transfer-only-status"><span className="status-badge">Tylko przekazanie</span>{order.status !== 'CANCELLED' && <button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button>}</div>
                         ) : canEditOrderHere ? (
                           <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e) => void changeStatus(order, e.target.value)}>
-                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && (order.canMarkReady===false || order.status!=='REPAIR_DONE')) || (value==='COMPLETED' && order.status!=='READY')}>{label}</option>)}
+                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && (order.canMarkReady===false || order.status!=='REPAIR_DONE' || !order.warrantyReady)) || (value==='COMPLETED' && order.status!=='READY')}>{label}</option>)}
                           </select>
                         ) : (
                           <div className="service-status-readonly">
@@ -1296,6 +1480,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             })}
             {!ordersBusy && orders.length === 0 && <div className="service-empty">Brak zleceń w Twoim zakresie.</div>}
             {!ordersBusy && orders.length > 0 && visibleOrders.length === 0 && <div className="service-empty">Brak zleceń w wybranej sekcji.</div>}
+            {!ordersBusy && (renderedOrders.length < visibleOrders.length || ordersHasMore) && <div className="service-orders-load-more">
+              <button className="button secondary" disabled={ordersPageBusy} onClick={()=>renderedOrders.length<visibleOrders.length?setOrdersVisibleLimit((value)=>value+28):void loadMoreOrders()}>
+                {renderedOrders.length<visibleOrders.length
+                  ? `Pokaż kolejne ${Math.min(28,visibleOrders.length-renderedOrders.length)} zleceń`
+                  : ordersPageBusy?'Pobieram…':'Pobierz kolejne z serwera'}
+              </button>
+              <small>Wyświetlam {renderedOrders.length} z {visibleOrders.length} pobranych. ServiceOS pobiera następne zlecenia dopiero na żądanie.</small>
+            </div>}
           </div>
         </section>
       )}
