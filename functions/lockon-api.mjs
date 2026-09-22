@@ -1887,7 +1887,7 @@ const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
   const fullAccess = authMethod === 'GOOGLE' && Boolean(account?.google_sub);
   const [ordersResult,quotesResult,pointsResult] = await Promise.all([
     q(
-      "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_completion_at,s.estimated_cost,s.final_cost,s.currency,s.received_at,s.completed_at,s.created_at,s.updated_at,d.brand,d.model,d.imei,d.serial_number,p.id AS point_id,p.name AS point_name,hp.id AS home_point_id,hp.name AS home_point_name,cp.id AS current_point_id,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.customer_id=$1 ORDER BY s.received_at DESC,s.order_number DESC",
+      "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.estimated_completion_at,s.estimated_cost,s.final_cost,s.currency,s.received_at,s.completed_at,s.created_at,s.updated_at,s.warranty_months,s.warranty_issued_at,s.warranty_expires_at,s.warranty_card_printed_at,d.brand,d.model,d.imei,d.serial_number,p.id AS point_id,p.name AS point_name,hp.id AS home_point_id,hp.name AS home_point_name,cp.id AS current_point_id,cp.name AS current_point_name FROM service_orders s JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id LEFT JOIN points hp ON hp.id=COALESCE(s.home_point_id,s.point_id) LEFT JOIN points cp ON cp.id=s.current_point_id WHERE s.customer_id=$1 ORDER BY s.received_at DESC,s.order_number DESC",
       [customerId]
     ),
     q(
@@ -1942,6 +1942,13 @@ const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
       currentPointId:row.current_point_id||null,currentPointName:row.current_point_name||null,
       estimatedCompletionAt:row.estimated_completion_at||null,estimatedCost:row.estimated_cost==null?null:Number(row.estimated_cost),
       finalCost:row.final_cost==null?null:Number(row.final_cost),currency:row.currency||'PLN',
+      warranty:row.warranty_months&&row.warranty_issued_at&&row.warranty_expires_at&&['READY','COMPLETED'].includes(row.status)?{
+        months:Number(row.warranty_months),
+        issuedAt:row.warranty_issued_at,
+        expiresAt:row.warranty_expires_at,
+        active:new Date(row.warranty_expires_at).getTime()>Date.now(),
+        daysRemaining:Math.max(0,Math.ceil((new Date(row.warranty_expires_at).getTime()-Date.now())/86400000))
+      }:null,
       receivedAt:row.received_at,completedAt:row.completed_at||null,createdAt:row.created_at,updatedAt:row.updated_at,
       serviceCardAvailable:true
     })),
