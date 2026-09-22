@@ -1539,31 +1539,31 @@ const serviceCardInfoTable = (rows,{labelWidth=94,labelFontSize=7,valueFontSize=
   table:{
     widths:[labelWidth,'*'],
     body:rows.map(([label,value])=>[
-      {text:String(label),fontSize:labelFontSize,bold:true,color:'#667085',margin:[0,rowMargin,0,rowMargin]},
+      {text:String(label),fontSize:labelFontSize,bold:true,color:'#111827',margin:[0,rowMargin,0,rowMargin]},
       {text:String(value===null||value===undefined||value===''?'—':value),fontSize:valueFontSize,color:'#101828',margin:[0,rowMargin,0,rowMargin]}
     ])
   },
   layout:{
-    hLineWidth:()=>0.4,vLineWidth:()=>0.4,
-    hLineColor:()=> '#e4e7ec',vLineColor:()=> '#e4e7ec',
-    paddingLeft:()=>5,paddingRight:()=>5,paddingTop:()=>1,paddingBottom:()=>1
+    hLineWidth:()=>0.7,vLineWidth:()=>0.7,
+    hLineColor:()=> '#9ca3af',vLineColor:()=> '#9ca3af',
+    paddingLeft:()=>7,paddingRight:()=>7,paddingTop:()=>2,paddingBottom:()=>2
   }
 });
 
 const serviceCardTerms = [
   'Klient oświadcza, że jest właścicielem urządzenia albo jest uprawniony do zlecenia jego serwisu.',
-  'Urządzenie wydawane jest na podstawie karty serwisowej albo po potwierdzeniu uprawnienia do odbioru w panelu klienta lub na podstawie danych zlecenia.',
-  'Przed oddaniem sprzętu należy wykonać kopię zapasową. Serwis nie gwarantuje zachowania danych, gdy ich utrata jest skutkiem usterki lub niezbędnych czynności diagnostycznych albo naprawczych; nie ogranicza to odpowiedzialności wynikającej z bezwzględnie obowiązujących przepisów.',
-  'Cena orientacyjna jest szacunkiem. Wady ukryte lub dodatkowe uszkodzenia mogą wymagać zmiany zakresu i kosztu. Przed pracami wykraczającymi poza zaakceptowaną wycenę klient otrzyma informację do akceptacji.',
-  'Urządzenie należy odebrać w ciągu 90 dni od powiadomienia o gotowości. Po tym terminie serwis może wezwać do odbioru i naliczyć uzasadnione koszty przechowania, jeżeli przewiduje je zaakceptowany regulamin lub cennik. Brak odbioru nie oznacza automatycznego przeniesienia własności urządzenia.'
+  'Urządzenie wydawane jest po okazaniu karty serwisowej albo potwierdzeniu uprawnienia do odbioru w panelu klienta lub na podstawie danych zlecenia.',
+  'Przed oddaniem urządzenia wykonaj kopię zapasową. Diagnostyka lub naprawa może spowodować utratę danych. Serwis nie gwarantuje ich zachowania i nie odpowiada za szkody będące następstwem utraty, jeśli wynika ona z usterki, stanu nośnika lub niezbędnych czynności serwisowych; nie ogranicza to odpowiedzialności, której nie można wyłączyć prawem.',
+  'Cena orientacyjna jest szacunkiem. Wady ukryte lub dodatkowe uszkodzenia mogą zmienić zakres i koszt. Prace poza zaakceptowaną wyceną wymagają poinformowania klienta i jego akceptacji.',
+  'Urządzenie należy odebrać w ciągu 90 dni od powiadomienia o gotowości telefonicznie lub e-mailem. Po tym terminie serwis może ponownie wezwać do odbioru i naliczyć uzasadnione koszty przechowania przewidziane w zaakceptowanym regulaminie lub cenniku. Nieodebranie urządzenia nie oznacza porzucenia ani przeniesienia własności na sklep; dalsze postępowanie odbywa się zgodnie z prawem.'
 ];
 
 const serviceCardTermsBlock = ({titleFontSize=8,fontSize=5.8,marginTop=8}={}) => ({
   stack:[
-    {text:'Warunki przyjęcia i odbioru',fontSize:titleFontSize,bold:true,color:'#344054',margin:[0,marginTop,0,4]},
+    {text:'Warunki przyjęcia i odbioru',fontSize:titleFontSize,bold:true,color:'#000000',margin:[0,marginTop,0,5]},
     {
-      ul:serviceCardTerms.map((text)=>({text,fontSize,color:'#475467',lineHeight:1.14,margin:[0,0,0,2]})),
-      margin:[8,0,0,0]
+      ul:serviceCardTerms.map((text)=>({text,fontSize,color:'#111827',lineHeight:1.22,margin:[0,0,0,4]})),
+      margin:[10,0,0,0]
     }
   ]
 });
@@ -1633,8 +1633,24 @@ const customerServiceCardContent = (context,{compact=false}={}) => ({
 
 const customerServiceCardPortraitContent = (context) => ({
   stack:[
-    serviceCardHeader(context,'Karta serwisowa','Potwierdzenie przyjęcia urządzenia oraz bezpieczny dostęp do bieżącego zlecenia.',515),
-    {text:'Przyjęcie i urządzenie',fontSize:10,bold:true,color:'#344054',margin:[0,0,0,6]},
+    {
+      stack:[
+        {columns:[
+          {stack:[
+            {text:[{text:'LockOn',bold:true,color:'#111827'},{text:'  ServiceOS',color:'#111827'}],fontSize:18},
+            {text:'Karta serwisowa',fontSize:24,bold:true,margin:[0,8,0,3],color:'#000000'},
+            {text:'Potwierdzenie przyjęcia urządzenia i dane potrzebne do obsługi zlecenia.',fontSize:10.5,color:'#111827',lineHeight:1.15}
+          ],width:'*'},
+          {stack:[
+            {text:'NUMER KARTY',fontSize:9,bold:true,color:'#374151',alignment:'right'},
+            {text:context.serviceCardNumber,fontSize:16,bold:true,color:'#000000',alignment:'right',margin:[0,3,0,5]},
+            {text:'Zlecenie #'+context.orderNumber,fontSize:10,color:'#111827',alignment:'right'}
+          ],width:170}
+        ]},
+        {canvas:[{type:'line',x1:0,y1:0,x2:515,y2:0,lineWidth:1.2,lineColor:'#4b5563'}],margin:[0,12,0,14]}
+      ]
+    },
+    {text:'Przyjęcie i urządzenie',fontSize:13,bold:true,color:'#000000',margin:[0,0,0,7]},
     serviceCardInfoTable([
       ['Klient',context.customerName],
       ['Urządzenie',context.device],
@@ -1643,54 +1659,53 @@ const customerServiceCardPortraitContent = (context) => ({
       ['Punkt przyjęcia',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
       ['Typ zlecenia',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
       ['Przyjęto',formatServiceCardDateTime(context.receivedAt)]
-    ],{labelWidth:112,labelFontSize:7.3,valueFontSize:8.2,rowMargin:2.5}),
-    {text:'Obsługa serwisowa',fontSize:10,bold:true,color:'#344054',margin:[0,9,0,6]},
+    ],{labelWidth:122,labelFontSize:10,valueFontSize:11,rowMargin:3}),
+    {text:'Obsługa serwisowa',fontSize:13,bold:true,color:'#000000',margin:[0,13,0,7]},
     serviceCardInfoTable([
       ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
       ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
       ['Opis usterki',context.issueDescription],
-      ['Uwagi',context.deviceNotes||'—']
-    ],{labelWidth:112,labelFontSize:7.3,valueFontSize:8.2,rowMargin:2.5}),
+      ['Uwagi',context.deviceNotes||'Brak uwag']
+    ],{labelWidth:122,labelFontSize:10,valueFontSize:11,rowMargin:3}),
     {
       table:{
         widths:['*'],
         body:[[
           {
-            fillColor:'#f8fafc',
-            margin:[12,10,12,10],
+            margin:[14,12,14,12],
             columns:[
               {
                 width:'*',
                 stack:[
-                  {text:'PANEL KLIENTA',fontSize:8,bold:true,color:'#667085',characterSpacing:.7},
-                  {text:'Skan QR otwiera bezpośrednio to zlecenie. Kod możesz też wpisać ręcznie.',fontSize:7.2,color:'#475467',lineHeight:1.2,margin:[0,4,12,8]},
-                  {text:'Adres WWW',fontSize:6.7,bold:true,color:'#667085',margin:[0,0,0,2]},
-                  {text:context.customerPortalBaseUrl,fontSize:8.3,bold:true,color:'#175cd3',margin:[0,0,0,7]},
-                  {text:'Kod klienta',fontSize:6.7,bold:true,color:'#667085',margin:[0,0,0,2]},
-                  {text:context.customerPortalCode,fontSize:16,bold:true,color:'#101828',characterSpacing:.8}
+                  {text:'PANEL KLIENTA',fontSize:10,bold:true,color:'#000000',characterSpacing:.5},
+                  {text:'Zeskanuj kod QR albo wpisz kod klienta ręcznie.',fontSize:10,color:'#111827',lineHeight:1.2,margin:[0,5,12,10]},
+                  {text:'Adres WWW',fontSize:9,bold:true,color:'#111827',margin:[0,0,0,3]},
+                  {text:context.customerPortalBaseUrl,fontSize:10.5,bold:true,color:'#000000',margin:[0,0,0,9]},
+                  {text:'Kod klienta',fontSize:9,bold:true,color:'#111827',margin:[0,0,0,3]},
+                  {text:context.customerPortalCode,fontSize:18,bold:true,color:'#000000',characterSpacing:1}
                 ]
               },
               {
-                width:118,
+                width:124,
                 stack:[
-                  {qr:context.customerPortalUrl,fit:100,alignment:'center'},
-                  {text:'Zeskanuj QR',fontSize:6.7,bold:true,color:'#667085',alignment:'center',margin:[0,5,0,0]}
+                  {qr:context.customerPortalUrl,fit:108,alignment:'center'},
+                  {text:'Zeskanuj QR',fontSize:9,bold:true,color:'#000000',alignment:'center',margin:[0,6,0,0]}
                 ]
               }
             ],
-            columnGap:12
+            columnGap:14
           }
         ]]
       },
       layout:{
-        hLineWidth:()=>0.8,vLineWidth:()=>0.8,
-        hLineColor:()=> '#d0d5dd',vLineColor:()=> '#d0d5dd',
+        hLineWidth:()=>1,vLineWidth:()=>1,
+        hLineColor:()=> '#4b5563',vLineColor:()=> '#4b5563',
         paddingLeft:()=>0,paddingRight:()=>0,paddingTop:()=>0,paddingBottom:()=>0
       },
-      margin:[0,10,0,0]
+      margin:[0,13,0,0]
     },
-    serviceCardTermsBlock({titleFontSize:8.5,fontSize:5.55,marginTop:8}),
-    {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:7.4,bold:true,color:'#ff7048',margin:[0,6,0,0]}
+    serviceCardTermsBlock({titleFontSize:11.5,fontSize:8.8,marginTop:10}),
+    {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:10,bold:true,color:'#000000',margin:[0,7,0,0]}
   ]
 });
 
@@ -1721,7 +1736,8 @@ const renderServiceCardPdf = async (orderId,variant='CUSTOMER') => {
   }else if(normalized==='CUSTOMER'){
     definition={
       ...common,
-      pageSize:'A4',pageOrientation:'portrait',pageMargins:[32,28,32,28],
+      pageSize:'A4',pageOrientation:'portrait',pageMargins:[30,24,30,24],
+      defaultStyle:{font:'Roboto',fontSize:10,color:'#000000'},
       content:[customerServiceCardPortraitContent(context)]
     };
   }else{

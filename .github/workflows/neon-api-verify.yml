@@ -105,11 +105,15 @@ jobs:
           grep -Fq "serviceCardNumber='KS-'" functions/lockon-api.mjs
           grep -Fq 'customerPortalBaseUrl' functions/lockon-api.mjs
           grep -Fq 'Warunki przyjęcia i odbioru' functions/lockon-api.mjs
+          grep -Fq 'Nieodebranie urządzenia nie oznacza porzucenia ani przeniesienia własności na sklep' functions/lockon-api.mjs
+          grep -Fq 'szkody będące następstwem utraty' functions/lockon-api.mjs
+          grep -Fq "serviceCardTermsBlock({titleFontSize:11.5,fontSize:8.8,marginTop:10})" functions/lockon-api.mjs
+          grep -Fq "labelFontSize:10,valueFontSize:11,rowMargin:3" functions/lockon-api.mjs
           grep -Fq 'Zeskanuj kod QR w ServiceOS, aby otworzyć zlecenie i obsłużyć urządzenie.' functions/lockon-api.mjs
           grep -Fq 'Kod ręczny — użyj, gdy nie możesz zeskanować QR.' functions/lockon-api.mjs
           grep -Fq 'const customerServiceCardPortraitContent' functions/lockon-api.mjs
           grep -Fq "if(normalized==='CUSTOMER')" functions/lockon-api.mjs
-          grep -Fq "pageSize:'A4',pageOrientation:'portrait',pageMargins:[32,28,32,28]" functions/lockon-api.mjs
+          grep -Fq "pageSize:'A4',pageOrientation:'portrait',pageMargins:[30,24,30,24]" functions/lockon-api.mjs
           grep -Fq 'formatServiceCardDateTime(context.receivedAt)' functions/lockon-api.mjs
           grep -Fq 'Przyjęcie i urządzenie' functions/lockon-api.mjs
           grep -Fq 'Obsługa serwisowa' functions/lockon-api.mjs

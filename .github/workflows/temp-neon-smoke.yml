@@ -413,6 +413,8 @@ jobs:
           grep -Fqi 'Obsługa serwisowa' customer-card.txt || { echo "::error::Customer service section missing from PDF"; exit 1; }
           grep -Eq '[0-9]{2}\.[0-9]{2}\.[0-9]{4}[^0-9]+[0-9]{2}:[0-9]{2}' customer-card.txt || { echo "::error::Customer card is missing intake time"; exit 1; }
           grep -Fqi 'Warunki przyjęcia i odbioru' customer-card.txt || { echo "::error::Terms missing from customer PDF"; exit 1; }
+          grep -Fqi 'nie oznacza porzucenia' customer-card.txt || { echo "::error::Safe 90-day collection wording missing from customer PDF"; exit 1; }
+          grep -Fqi 'szkody będące następstwem' customer-card.txt || { echo "::error::Data-loss consequential-damage notice missing from customer PDF"; exit 1; }
           grep -Eq 'KS-[0-9]{4}-[0-9]{6}' customer-card.txt || { echo "::error::Service card number missing from customer PDF"; exit 1; }
           if grep -Fqi 'PRZETNIJ TUTAJ' customer-card.txt; then echo "::error::Customer-only PDF reused the physical two-card cut layout"; exit 1; fi
 
