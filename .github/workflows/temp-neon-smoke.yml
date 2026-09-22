@@ -437,6 +437,38 @@ jobs:
           api POST "/service/orders/$order_id/status" '{"status":"REPAIR_DONE","note":"CI temp smoke"}' > repair-done.json
           node -e "const d=require('./repair-done.json');if(d.order?.status!=='REPAIR_DONE')throw new Error('Could not mark repair done at service point')"
 
+          api POST "/service/orders/$order_id/warranty" '{"months":6}' > warranty.json
+          node - <<'NODE'
+          const d=require('./warranty.json');
+          if(d.warranty?.months!==6)throw new Error('Warranty months were not saved');
+          if(!d.warranty?.startedAt||!d.warranty?.expiresAt)throw new Error('Warranty dates were not created');
+          if(d.order?.warrantyReady!==false)throw new Error('Warranty must not be ready before card print');
+          NODE
+
+          api POST "/service/orders/$order_id/warranty-card" '{}' > warranty-card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./warranty-card.json');
+          if(d.order?.warrantyReady!==true)throw new Error('Warranty was not unlocked after card print');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Warranty card is not a PDF');
+          if(pdf.length<7000)throw new Error('Warranty card PDF is unexpectedly small');
+          fs.writeFileSync('warranty-card.pdf',pdf);
+          NODE
+          pdfinfo warranty-card.pdf > warranty-card-pdfinfo.txt
+          grep -q '^Pages:[[:space:]]*1' warranty-card-pdfinfo.txt || { echo "::error::Warranty card is not exactly one page"; exit 1; }
+          pdftotext -layout warranty-card.pdf warranty-card.txt
+          grep -Fqi 'Karta gwarancyjna naprawy' warranty-card.txt || { echo "::error::Warranty title missing from PDF"; exit 1; }
+          grep -Fqi 'Kod klienta' warranty-card.txt || { echo "::error::Customer code missing from warranty PDF"; exit 1; }
+          grep -Fqi '6 mies.' warranty-card.txt || { echo "::error::Warranty duration missing from PDF"; exit 1; }
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/public/customer-portal/me"             --header "Authorization: Bearer $customer_token" > customer-warranty.json
+          node - <<'NODE' "$order_id"
+          const d=require('./customer-warranty.json'), orderId=process.argv[2];
+          const order=d.orders?.find((item)=>item.id===orderId);
+          if(!order?.warranty||order.warranty.months!==6||!order.warranty.expiresAt)throw new Error('Customer portal does not expose warranty');
+          NODE
+
           api POST "/service/orders/$order_id/transfer" '{"kind":"RETURN_HOME","note":"CI temp smoke return"}' > return-home.json
           api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
           api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-return.json
