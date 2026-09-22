@@ -469,12 +469,13 @@ const performGoogleLogin = async (development: boolean): Promise<AuthState> => {
         client_id: APP_CONFIG.auth.googleClientId,
         redirect_uri: redirectUri,
         response_type: 'code',
-        scope: 'openid email profile',
-        include_granted_scopes: 'false',
+        scope: 'openid email profile https://www.googleapis.com/auth/gmail.send',
+        access_type: 'offline',
+        include_granted_scopes: 'true',
         state: stateToken,
         code_challenge: challenge,
         code_challenge_method: 'S256',
-        prompt: 'select_account'
+        prompt: 'consent select_account'
       }).toString();
       try {
         await shell.openExternal(authUrl.toString());

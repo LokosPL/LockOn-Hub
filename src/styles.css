@@ -4780,3 +4780,228 @@ input,textarea,select{line-height:1.45}
   .service-stage-actions>.button{width:100%}
   .service-stage-primary{min-width:0}
 }
+
+
+/* ServiceOS action-first workspace */
+.service-intake-page-shell {
+  position: relative;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+}
+.service-intake-inline {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  margin: 0;
+  border-radius: 20px;
+  box-shadow: none;
+}
+.service-intake-type-dialog.service-intake-inline {
+  min-height: 360px;
+}
+.service-intake-inline .service-intake-details-body {
+  min-height: 0;
+}
+.service-order-type-picker-v3 {
+  grid-template-columns: repeat(3,minmax(0,1fr));
+}
+.service-order-type-disabled {
+  opacity: .5;
+  cursor: not-allowed !important;
+}
+.service-order-type-disabled b {
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.service-complaint-lookup {
+  grid-column: 1 / -1;
+  border-color: rgba(255,116,62,.34);
+  background: linear-gradient(135deg,rgba(255,104,45,.08),rgba(255,255,255,.015));
+}
+.service-complaint-results {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+.service-complaint-results > button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: rgba(255,255,255,.025);
+  color: var(--text);
+}
+.service-complaint-results > button:hover {
+  border-color: rgba(255,111,54,.5);
+  background: rgba(255,111,54,.06);
+}
+.service-complaint-results span {
+  display: grid;
+  gap: 3px;
+}
+.service-complaint-results small,
+.service-complaint-hint {
+  color: var(--muted);
+}
+.service-complaint-selected {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(62,203,134,.3);
+  border-radius: 13px;
+  background: rgba(62,203,134,.07);
+}
+.service-complaint-selected > div {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+}
+.service-complaint-selected span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.service-order-details-page {
+  width: 100%;
+  margin: 0 0 18px;
+}
+.service-order-details-inline {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  margin: 0;
+  border-radius: 20px;
+  box-shadow: none;
+}
+.service-order-details-back {
+  white-space: nowrap;
+}
+.service-order-keyfacts {
+  display: grid;
+  grid-template-columns: repeat(4,minmax(0,1fr));
+  gap: 10px;
+}
+.service-order-keyfacts article {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255,255,255,.025);
+}
+.service-order-keyfacts article > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.service-order-keyfacts article > strong {
+  overflow-wrap: anywhere;
+}
+.service-order-keyfacts article > small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+.service-frontdesk-card {
+  display: grid;
+  gap: 12px;
+  padding: 15px 16px;
+  border: 1px solid rgba(62,203,134,.28);
+  border-radius: 15px;
+  background: rgba(62,203,134,.055);
+}
+.service-frontdesk-card > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.service-frontdesk-card > div:first-child > span {
+  display: grid;
+  gap: 3px;
+}
+.service-frontdesk-card small {
+  color: var(--muted);
+}
+.service-frontdesk-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.service-frontdesk-meta span {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.055);
+  font-size: 12px;
+}
+.service-stage-task-card {
+  padding: 16px;
+  border: 1px solid rgba(255,111,54,.34);
+  border-radius: 16px;
+  background: linear-gradient(135deg,rgba(255,111,54,.07),rgba(255,255,255,.012));
+}
+.service-stage-task-card .service-costing-card {
+  margin-top: 12px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+.service-costing-guide {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255,111,54,.07);
+  color: var(--muted);
+  font-size: 12px;
+}
+.service-costing-guide strong {
+  color: var(--text);
+}
+.service-invoice-part-description {
+  grid-column: span 2;
+}
+
+@media (max-width: 1180px) {
+  .service-order-type-picker-v3,
+  .service-order-keyfacts {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+}
+@media (max-width: 760px) {
+  .service-order-type-picker-v3,
+  .service-order-keyfacts {
+    grid-template-columns: 1fr;
+  }
+  .service-invoice-part-description {
+    grid-column: auto;
+  }
+}
+
+.service-order-workspace-frontdesk .service-workspace-collapse,
+.service-order-workspace-frontdesk .service-warranty-card,
+.service-order-workspace-frontdesk .service-stage-task-card {
+  display: none;
+}
+.service-order-workspace-frontdesk .service-stage-card {
+  order: 3;
+}

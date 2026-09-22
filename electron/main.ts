@@ -1000,6 +1000,12 @@ const registerIpc = () => {
     if (safeQuery.length < 2) return [];
     return backendRequest(`/service/customers/search?q=${encodeURIComponent(safeQuery)}`, {}, token);
   });
+  secureHandle('service:searchOrders', async (query: string) => {
+    const token = requireSessionToken();
+    const safeQuery = String(query ?? '').trim().slice(0, 120);
+    if (safeQuery.length < 2) return [];
+    return backendRequest(`/service/orders/search?q=${encodeURIComponent(safeQuery)}`, {}, token);
+  });
   secureHandle('service:getCustomer', async (customerId: string) => {
     const token = requireSessionToken();
     return backendRequest(`/service/customers/${encodeURIComponent(safeId(customerId, 'cst'))}`, {}, token);

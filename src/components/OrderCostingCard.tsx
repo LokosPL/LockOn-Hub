@@ -6,6 +6,7 @@ import { useAppDialog } from './AppDialog';
 interface Props {
   order: ServiceOrderSummary;
   disabled?: boolean;
+  guided?: boolean;
 }
 
 type PartDraft = Pick<ServiceOrderPart,'description'|'quantity'|'unitCostGross'|'invoiceReceived'> & {
@@ -27,13 +28,13 @@ const emptyPart = ():PartDraft => ({
   purchasedAt:''
 });
 
-export function OrderCostingCard({ order, disabled=false }:Props) {
+export function OrderCostingCard({ order, disabled=false, guided=false }:Props) {
   const {confirm}=useAppDialog();
   const [data,setData]=useState<ServiceCosting|null>(null);
   const [parts,setParts]=useState<PartDraft[]>([]);
   const [labor,setLabor]=useState('0');
   const [other,setOther]=useState('0');
-  const [invoiceMeta,setInvoiceMeta]=useState({invoiceNumber:'',supplier:'',invoiceDate:'',grossAmount:''});
+  const [invoiceMeta,setInvoiceMeta]=useState({invoiceNumber:'',supplier:'',invoiceDate:'',grossAmount:'',partDescription:''});
   const [busy,setBusy]=useState('');
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
@@ -109,16 +110,47 @@ export function OrderCostingCard({ order, disabled=false }:Props) {
     if(busy||disabled)return;
     setBusy('upload');setError('');setNotice('');
     try{
+      const grossAmount=invoiceMeta.grossAmount===''?null:Number(String(invoiceMeta.grossAmount).replace(',','.'));
       const result=await window.lockOn.service.uploadInvoice(order.id,{
         invoiceNumber:invoiceMeta.invoiceNumber.trim(),
         supplier:invoiceMeta.supplier.trim(),
         invoiceDate:invoiceMeta.invoiceDate,
-        grossAmount:invoiceMeta.grossAmount===''?null:Number(String(invoiceMeta.grossAmount).replace(',','.'))
+        grossAmount
       });
       if(result.cancelled)return;
-      setInvoiceMeta({invoiceNumber:'',supplier:'',invoiceDate:'',grossAmount:''});
-      setNotice('Faktura PDF została bezpiecznie dodana do magazynu.');
-      await load();
+      const invoice=result.invoice;
+      const autoPartDescription=invoiceMeta.partDescription.trim();
+      if(invoice&&autoPartDescription&&grossAmount!=null&&Number.isFinite(grossAmount)&&grossAmount>=0){
+        const nextParts=[...parts,{
+          description:autoPartDescription,
+          quantity:1,
+          unitCostGross:grossAmount,
+          invoiceReceived:true,
+          invoiceNumber:invoice.invoiceNumber||invoiceMeta.invoiceNumber.trim(),
+          supplier:invoice.supplier||invoiceMeta.supplier.trim(),
+          purchasedAt:invoice.invoiceDate||invoiceMeta.invoiceDate
+        }];
+        setParts(nextParts);
+        const costing=await window.lockOn.service.saveCosting(order.id,{
+          laborCostGross:Number(String(labor).replace(',','.'))||0,
+          otherCostGross:Number(String(other).replace(',','.'))||0,
+          parts:nextParts.map((part)=>({
+            description:part.description.trim(),
+            quantity:Number(part.quantity)||1,
+            unitCostGross:Number(part.unitCostGross)||0,
+            invoiceReceived:part.invoiceReceived,
+            invoiceNumber:(part.invoiceNumber||'').trim(),
+            supplier:(part.supplier||'').trim(),
+            purchasedAt:part.purchasedAt||''
+          }))
+        });
+        setData(costing);
+        setNotice('Faktura dodana. Część i jej koszt zostały dopisane do naprawy automatycznie.');
+      }else{
+        setNotice('Faktura PDF została bezpiecznie dodana do magazynu.');
+        await load();
+      }
+      setInvoiceMeta({invoiceNumber:'',supplier:'',invoiceDate:'',grossAmount:'',partDescription:''});
     }catch(reason){
       setError(reason instanceof Error?reason.message:'Nie udało się dodać faktury PDF.');
     }finally{setBusy('');}
@@ -154,8 +186,14 @@ export function OrderCostingCard({ order, disabled=false }:Props) {
   return <section className="service-workspace-card service-costing-card">
     <div className="service-workspace-title">
       <Calculator size={16}/>
-      <div><strong>Wycena, części i faktury</strong><span>Wewnętrzne koszty serwisu. Nie są pokazywane klientowi.</span></div>
+      <div><strong>{guided?'Części, faktura i koszt':'Wycena, części i faktury'}</strong><span>{guided?'Dodaj to, co faktycznie montujesz. ServiceOS przeliczy koszt i zapisze fakturę w magazynie.':'Wewnętrzne koszty serwisu. Nie są pokazywane klientowi.'}</span></div>
     </div>
+    {guided&&<div className="service-costing-guide">
+      <strong>Najprościej:</strong>
+      <span>1. Wpisz nazwę części.</span>
+      <span>2. Podaj kwotę brutto z faktury.</span>
+      <span>3. Dodaj PDF — część i koszt zapiszą się automatycznie.</span>
+    </div>}
 
     {error&&<div className="service-inline-error">{error}</div>}
     {notice&&<div className="service-inline-success">{notice}</div>}
@@ -208,11 +246,12 @@ export function OrderCostingCard({ order, disabled=false }:Props) {
       <small>PDF do 20 MB · prywatny magazyn</small>
     </div>
     <div className="service-invoice-upload-grid">
+      {guided&&<input className="service-invoice-part-description" disabled={disabled||Boolean(busy)} maxLength={240} placeholder="Co kupiono? np. wyświetlacz Samsung S24" value={invoiceMeta.partDescription} onChange={(e)=>setInvoiceMeta({...invoiceMeta,partDescription:e.target.value})}/>}
       <input disabled={disabled||Boolean(busy)} maxLength={120} placeholder="Numer faktury (opcjonalnie)" value={invoiceMeta.invoiceNumber} onChange={(e)=>setInvoiceMeta({...invoiceMeta,invoiceNumber:e.target.value})}/>
       <input disabled={disabled||Boolean(busy)} maxLength={180} placeholder="Dostawca (opcjonalnie)" value={invoiceMeta.supplier} onChange={(e)=>setInvoiceMeta({...invoiceMeta,supplier:e.target.value})}/>
       <input disabled={disabled||Boolean(busy)} type="date" value={invoiceMeta.invoiceDate} onChange={(e)=>setInvoiceMeta({...invoiceMeta,invoiceDate:e.target.value})}/>
       <input disabled={disabled||Boolean(busy)} type="number" min="0" step="0.01" placeholder="Kwota brutto" value={invoiceMeta.grossAmount} onChange={(e)=>setInvoiceMeta({...invoiceMeta,grossAmount:e.target.value})}/>
-      <button className="button secondary small" disabled={disabled||Boolean(busy)} onClick={()=>void uploadInvoice()}><Upload size={13}/>{busy==='upload'?'Wysyłanie…':'Dodaj FV w PDF'}</button>
+      <button className="button secondary small" disabled={disabled||Boolean(busy)} onClick={()=>void uploadInvoice()}><Upload size={13}/>{busy==='upload'?'Wysyłanie…':guided?'Dodaj fakturę i koszt':'Dodaj FV w PDF'}</button>
     </div>
 
     <div className="service-invoice-list">

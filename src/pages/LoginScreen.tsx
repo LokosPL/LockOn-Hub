@@ -68,7 +68,7 @@ export function LoginScreen({ auth, onAuthenticated }: LoginScreenProps) {
 
         <div className="login-features">
           <div><ShieldCheck size={17} /><span>Bezpieczne logowanie Google</span></div>
-          <div><CheckCircle2 size={17} /><span>Gmail połączysz osobno tylko w punkcie, który ma wysyłać wiadomości</span></div>
+          <div><CheckCircle2 size={17} /><span>Jedno logowanie obejmuje wysyłkę Gmail przez ServiceOS</span></div>
           <div><Building2 size={17} /><span>Dostęp i punkty kontrolowane przez ServiceOS</span></div>
         </div>
 

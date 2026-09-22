@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('lockOn', {
   },
   service: {
     searchCustomers: (query: string) => ipcRenderer.invoke('service:searchCustomers', query),
+    searchOrders: (query: string) => ipcRenderer.invoke('service:searchOrders', query),
     getCustomer: (customerId: string) => ipcRenderer.invoke('service:getCustomer', customerId),
     listTechnicians: (pointId: string) => ipcRenderer.invoke('service:listTechnicians', pointId),
     listServicePoints: () => ipcRenderer.invoke('service:listServicePoints'),

@@ -536,8 +536,35 @@ jobs:
           suffix="cmp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           imei="$(printf '870000%09d' "$((GITHUB_RUN_ID % 1000000000))")"
           imei="${imei:0:15}"
-          node - <<'NODE' "$suffix" "$imei" > complaint-body.json
+
+          node - <<'NODE' "$suffix" "$imei" > complaint-original-body.json
           const [suffix,imei]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'Reklamacja '+suffix,
+            email:'complaint-'+suffix+'@invalid.test',
+            phone:'+48111222333',
+            brand:'LockOn',
+            model:'Complaint E2E',
+            imei,
+            serialNumber:'CMP-'+suffix,
+            deviceNotes:'Urządzenie bazowe reklamacji TEMP E2E.',
+            issueDescription:'Naprawa bazowa TEMP przed reklamacją.',
+            orderType:'REPAIR'
+          }));
+          NODE
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data @complaint-original-body.json > complaint-original.json
+          original_id="$(node -e "const d=require('./complaint-original.json');if(!d.order?.id)throw new Error('Original repair missing');process.stdout.write(d.order.id)")"
+          original_number="$(node -e "const d=require('./complaint-original.json');process.stdout.write(String(d.order.orderNumber||''))")"
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/orders/search?q=$(node -p "encodeURIComponent(process.argv[1])" "$original_number")"             --header "Authorization: Bearer $token" > complaint-search.json
+          node - <<'NODE' "$original_id"
+          const rows=require('./complaint-search.json'), originalId=process.argv[2];
+          if(!rows.some(x=>x.id===originalId)) throw new Error('Order search did not find original repair');
+          NODE
+
+          node - <<'NODE' "$suffix" "$imei" "$original_id" > complaint-body.json
+          const [suffix,imei,originalOrderId]=process.argv.slice(2);
           process.stdout.write(JSON.stringify({
             firstName:'CI',
             lastName:'Reklamacja '+suffix,
@@ -549,16 +576,18 @@ jobs:
             serialNumber:'CMP-'+suffix,
             deviceNotes:'Syntetyczna reklamacja TEMP E2E.',
             issueDescription:'Reklamacja TEMP: weryfikacja trybu COMPLAINT_FLOW.',
-            orderType:'COMPLAINT'
+            orderType:'COMPLAINT',
+            originalOrderId
           }));
           NODE
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data @complaint-body.json > complaint.json
 
-          node - <<'NODE'
-          const d=require('./complaint.json');
+          node - <<'NODE' "$original_id"
+          const d=require('./complaint.json'), originalId=process.argv[2];
           if(!d.order?.id) throw new Error('Complaint order was not created');
           if(d.order.orderType!=='COMPLAINT') throw new Error('Complaint orderType mismatch');
+          if(d.order.originalOrderId!==originalId) throw new Error('Complaint originalOrderId mismatch');
           if(d.order.handlingMode!=='COMPLAINT_FLOW') throw new Error('Complaint did not derive COMPLAINT_FLOW');
           if(d.serviceCard?.required!==true) throw new Error('Complaint did not require service card');
           NODE
