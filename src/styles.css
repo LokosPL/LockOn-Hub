@@ -4692,3 +4692,91 @@ input,textarea,select{line-height:1.45}
   .service-repair-stage-rail{grid-template-columns:repeat(2,minmax(0,1fr))}
   .service-intake-type-dialog{width:min(96vw,920px)}
 }
+
+
+/* 1.0.0.15 — calmer service entry and action-first order details */
+.service-order-details-dialog>.service-order-workspace{
+  grid-template-columns:1fr;
+  gap:10px;
+}
+.service-stage-card{grid-column:1/-1}
+.service-repair-stage-rail-compact{
+  grid-template-columns:repeat(7,minmax(72px,1fr));
+  overflow-x:auto;
+  padding-bottom:2px;
+}
+.service-repair-stage-rail-compact span{
+  min-width:72px;
+  text-align:center;
+  white-space:nowrap;
+}
+.service-stage-meta-simple{grid-template-columns:repeat(3,minmax(0,1fr))}
+.service-stage-actions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  padding-top:4px;
+}
+.service-stage-primary{min-width:190px}
+.service-stage-gate{
+  flex:1 1 260px;
+  color:#e3a06f;
+  font-size:10px;
+  line-height:1.4;
+}
+.service-stage-more{
+  flex:1 1 100%;
+  margin-top:4px;
+  border-top:1px solid var(--line);
+  padding-top:8px;
+}
+.service-stage-more>summary{
+  width:max-content;
+  cursor:pointer;
+  color:var(--muted);
+  font-size:10px;
+  font-weight:750;
+}
+.service-stage-more[open]>summary{margin-bottom:9px;color:var(--text)}
+.service-stage-more .service-stage-select{max-width:620px}
+.service-warranty-card{grid-column:1/-1}
+.service-workspace-collapse{
+  padding:0!important;
+  overflow:hidden;
+}
+.service-workspace-collapse>summary{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:13px 15px;
+  cursor:pointer;
+  list-style:none;
+  color:#ff8150;
+}
+.service-workspace-collapse>summary::-webkit-details-marker{display:none}
+.service-workspace-collapse>summary>span{
+  display:flex;
+  min-width:0;
+  flex-direction:column;
+  gap:2px;
+}
+.service-workspace-collapse>summary strong{color:var(--text);font-size:11px}
+.service-workspace-collapse>summary small{color:var(--muted);font-size:9px;font-weight:500}
+.service-workspace-collapse>summary::after{
+  content:'Rozwiń';
+  margin-left:auto;
+  color:var(--muted);
+  font-size:9px;
+  font-weight:800;
+}
+.service-workspace-collapse[open]>summary::after{content:'Zwiń'}
+.service-collapse-body{
+  border-top:1px solid var(--line);
+  padding:14px 15px;
+}
+@media(max-width:820px){
+  .service-stage-meta-simple{grid-template-columns:1fr}
+  .service-stage-actions>.button{width:100%}
+  .service-stage-primary{min-width:0}
+}
