@@ -4996,3 +4996,12 @@ input,textarea,select{line-height:1.45}
     grid-column: auto;
   }
 }
+
+.service-order-workspace-frontdesk .service-workspace-collapse,
+.service-order-workspace-frontdesk .service-warranty-card,
+.service-order-workspace-frontdesk .service-stage-task-card {
+  display: none;
+}
+.service-order-workspace-frontdesk .service-stage-card {
+  order: 3;
+}
