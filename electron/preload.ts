@@ -84,6 +84,7 @@ contextBridge.exposeInMainWorld('lockOn', {
     addTechnicianNote: (payload: unknown) => ipcRenderer.invoke('service:addTechnicianNote', payload),
     deleteTechnicianNote: (noteId: string) => ipcRenderer.invoke('service:deleteTechnicianNote', noteId),
     updateDetails: (orderId: string, payload: unknown) => ipcRenderer.invoke('service:updateDetails', orderId, payload),
+    updatePlan: (orderId: string, payload: unknown) => ipcRenderer.invoke('service:updatePlan', orderId, payload),
     updateStatus: (orderId: string, status: string, note?: string, actingPointId?: string) => ipcRenderer.invoke('service:updateStatus', orderId, status, note, actingPointId),
     listCustomerQuotes: (pointId?: string) => ipcRenderer.invoke('service:listCustomerQuotes', pointId),
     replyCustomerQuote: (requestId: string, message: string) => ipcRenderer.invoke('service:replyCustomerQuote', requestId, message),
