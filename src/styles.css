@@ -2533,3 +2533,365 @@ input,textarea,select{line-height:1.45}
   .service-custom-date input{width:min(170px,55vw)}
   .service-quick-pills>button{flex:1 1 auto}
 }
+
+
+/* Service workspace refresh — lightweight layouts for older laptops */
+.service-order-details-backdrop{
+  position:fixed;
+  inset:0;
+  z-index:180;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  background:rgba(3,8,14,.76);
+}
+.service-order-details-dialog{
+  width:min(1120px,calc(100vw - 48px));
+  max-height:calc(100vh - 48px);
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  border:1px solid var(--border);
+  border-radius:18px;
+  background:var(--panel);
+  box-shadow:0 20px 60px rgba(0,0,0,.35);
+}
+.service-order-details-header{
+  flex:0 0 auto;
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:18px;
+  padding:18px 20px;
+  border-bottom:1px solid var(--border);
+  background:var(--panel);
+}
+.service-order-details-header>div{min-width:0}
+.service-order-details-header span{
+  display:block;
+  margin-bottom:4px;
+  color:var(--muted);
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:.09em;
+}
+.service-order-details-header h2{
+  margin:0;
+  font-size:20px;
+  line-height:1.25;
+  overflow-wrap:anywhere;
+}
+.service-order-details-header small{
+  display:block;
+  margin-top:5px;
+  color:var(--muted);
+}
+.service-order-details-close{
+  width:38px;
+  height:38px;
+  flex:0 0 38px;
+  display:grid;
+  place-items:center;
+  padding:0;
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:var(--panel-2);
+  color:var(--text);
+  cursor:pointer;
+}
+.service-order-details-dialog>.service-order-workspace{
+  flex:1 1 auto;
+  min-height:0;
+  overflow:auto;
+  padding:18px;
+  border:0;
+  background:transparent;
+}
+.service-order-details-dialog .service-workspace-card{
+  content-visibility:auto;
+  contain-intrinsic-size:280px;
+}
+.service-orders-heading-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.service-transferred-counter{
+  min-height:38px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:7px 10px;
+  border:1px solid rgba(255,112,72,.35);
+  border-radius:10px;
+  background:rgba(255,112,72,.08);
+}
+.service-transferred-counter span{font-size:11px;color:var(--muted)}
+.service-transferred-counter strong{font-size:16px;color:var(--text)}
+.service-transferred-chip{
+  border-color:rgba(255,112,72,.35)!important;
+  color:#ff8a68!important;
+}
+.service-orders-list .service-order-wrap{
+  contain:layout paint;
+}
+.service-orders-list .service-order-row{
+  min-height:0;
+}
+
+/* Technician calendar v2 */
+.technician-calendar-v2{overflow:hidden}
+.technician-calendar-heading{align-items:flex-start}
+.technician-calendar-toolbar{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:6px;
+  flex-wrap:wrap;
+}
+.technician-calendar-range{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  margin:0 0 12px;
+  padding:10px 12px;
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:var(--panel-2);
+}
+.technician-calendar-range strong{font-size:13px}
+.technician-calendar-range span{font-size:11px;color:var(--muted)}
+.technician-week-grid-v2{
+  grid-template-columns:repeat(7,minmax(145px,1fr));
+  gap:8px;
+  overflow-x:auto;
+  padding-bottom:6px;
+  overscroll-behavior-inline:contain;
+}
+.technician-week-grid-v2 .technician-day{
+  min-width:145px;
+  min-height:210px;
+  transition:none!important;
+}
+.technician-week-grid-v2 .technician-day.today{
+  border-color:rgba(255,112,72,.55);
+  box-shadow:inset 0 2px 0 #ff7048;
+}
+.technician-week-grid-v2 .technician-day.drop-target,
+.technician-queues-v2>section.drop-target{
+  border-color:#ff7048;
+  background:rgba(255,112,72,.08);
+  outline:1px dashed rgba(255,112,72,.7);
+  outline-offset:-5px;
+}
+.technician-week-grid-v2 .technician-day header>div{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.technician-week-grid-v2 .technician-day header small{
+  color:#ff8a68;
+  font-size:9px;
+  font-weight:800;
+  text-transform:uppercase;
+}
+.technician-day-jobs{min-height:160px}
+.technician-job{
+  position:relative;
+  padding-left:26px!important;
+  transition:none!important;
+}
+.technician-job[draggable="true"]{cursor:grab}
+.technician-job.dragging{opacity:.45}
+.technician-job-grip{
+  position:absolute;
+  left:7px;
+  top:10px;
+  color:var(--muted);
+  pointer-events:none;
+}
+.technician-queues-v2>section{
+  transition:none!important;
+}
+.technician-queues-v2>section>button{
+  transition:none!important;
+}
+
+/* Invoice warehouse v2 */
+.invoice-warehouse-v2{overflow:hidden}
+.invoice-warehouse-heading{align-items:flex-start}
+.invoice-toolbar{
+  display:grid;
+  grid-template-columns:auto minmax(220px,1fr) auto;
+  gap:10px;
+  align-items:center;
+  margin-bottom:14px;
+}
+.invoice-month-nav{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.invoice-month-nav label,
+.invoice-search{
+  height:38px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:0 10px;
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:var(--panel-2);
+}
+.invoice-month-nav input,
+.invoice-search input{
+  min-width:0;
+  border:0!important;
+  padding:0!important;
+  background:transparent!important;
+  box-shadow:none!important;
+}
+.invoice-search{width:100%}
+.invoice-warehouse-summary-v2 article{
+  min-height:86px;
+}
+.invoice-warehouse-summary-v2 article small{
+  display:block;
+  margin-top:3px;
+  color:var(--muted);
+  font-size:10px;
+}
+.invoice-warehouse-list-v2{
+  max-height:520px;
+  overflow:auto;
+  padding-right:3px;
+}
+.invoice-warehouse-list-v2>article{
+  contain:layout paint;
+}
+.invoice-file-title{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.invoice-file-title b{
+  padding:2px 6px;
+  border-radius:999px;
+  background:var(--panel-2);
+  color:var(--muted);
+  font-size:10px;
+}
+
+/* Technician notebook v2 */
+.technician-notes-layout{
+  display:grid;
+  grid-template-columns:minmax(280px,360px) minmax(0,1fr);
+  gap:14px;
+  align-items:start;
+}
+.technician-note-compose-v2{
+  position:sticky;
+  top:10px;
+  display:grid;
+  gap:10px;
+  padding:14px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:var(--panel-2);
+}
+.technician-note-compose-v2 input,
+.technician-note-compose-v2 textarea{width:100%}
+.technician-note-templates{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+}
+.technician-note-templates button,
+.technician-note-toolbar button{
+  min-height:30px;
+  padding:5px 8px;
+  border:1px solid var(--border);
+  border-radius:8px;
+  background:var(--panel);
+  color:var(--muted);
+  font-size:10px;
+  cursor:pointer;
+}
+.technician-note-browser{min-width:0}
+.technician-note-toolbar{
+  display:grid;
+  grid-template-columns:minmax(180px,1fr) auto;
+  gap:8px;
+  margin-bottom:8px;
+}
+.technician-note-toolbar label{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-height:36px;
+  padding:0 10px;
+  border:1px solid var(--border);
+  border-radius:9px;
+  background:var(--panel-2);
+}
+.technician-note-toolbar input{
+  min-width:0;
+  width:100%;
+  border:0!important;
+  padding:0!important;
+  background:transparent!important;
+  box-shadow:none!important;
+}
+.technician-note-toolbar button{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.technician-note-toolbar button.active{
+  border-color:rgba(255,112,72,.5);
+  color:#ff8a68;
+}
+.technician-note-count{
+  display:flex;
+  align-items:baseline;
+  gap:5px;
+  margin:0 0 9px;
+  color:var(--muted);
+}
+.technician-note-count strong{font-size:18px;color:var(--text)}
+.technician-note-grid-v2{
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  max-height:550px;
+  overflow:auto;
+  padding-right:3px;
+}
+.technician-note-grid-v2 article{
+  min-height:150px;
+  contain:layout paint;
+}
+.technician-note-grid-v2 article p{
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+}
+
+@media (max-width:1100px){
+  .service-order-details-backdrop{padding:12px}
+  .service-order-details-dialog{width:calc(100vw - 24px);max-height:calc(100vh - 24px)}
+  .service-order-details-dialog>.service-order-workspace{padding:12px}
+  .invoice-toolbar{grid-template-columns:1fr auto}
+  .invoice-month-nav{grid-column:1/-1}
+  .technician-notes-layout{grid-template-columns:1fr}
+  .technician-note-compose-v2{position:static}
+}
+@media (max-width:760px){
+  .service-orders-heading-actions{justify-content:flex-start}
+  .technician-calendar-range{align-items:flex-start;flex-direction:column}
+  .invoice-toolbar{grid-template-columns:1fr}
+  .invoice-toolbar>*{grid-column:auto}
+  .invoice-month-nav{overflow-x:auto}
+  .technician-note-grid-v2{grid-template-columns:1fr}
+}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BadgeDollarSign, BellRing, CalendarClock, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, ClipboardPlus,
+  BadgeDollarSign, BellRing, CalendarClock, CalendarDays, CheckCircle2, ClipboardList, ClipboardPlus,
   Clock3, FileArchive, History, IdCard, Mail, MailCheck, MapPin, MessageSquareText, NotebookPen, PackageCheck, Printer, RefreshCw, RotateCcw, Save, Search, Send,
   Settings2, Smartphone, StickyNote, Truck, UserCog, UserRound, Wrench, XCircle
 } from 'lucide-react';
@@ -111,6 +111,11 @@ const deliveryLabel = (status: NotificationHistoryItem['status']) => ({
   CANCELLED: 'Anulowano'
 }[status]);
 
+const isTransferredToService = (order: ServiceOrderSummary) =>
+  order.openTransfer?.kind === 'OUTBOUND_SERVICE' ||
+  Boolean(order.homePointId && order.currentPointId && order.currentPointId !== order.homePointId) ||
+  Boolean(order.returnRequired && order.currentPointId && order.currentPointId !== (order.homePointId || order.pointId));
+
 type ServiceTab = 'CALENDAR' | 'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAILS' | 'INVOICES' | 'TECH_NOTES';
 
 export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
@@ -184,8 +189,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     (gmailState === 'NOT_CONNECTED' || gmailState === 'REAUTH_REQUIRED')
   );
 
+  const transferredToServiceCount = useMemo(() => orders.filter(isTransferredToService).length, [orders]);
+
   const workflowFilters = useMemo(() => [
     {code:'ALL',label:'Wszystkie',count:orders.length},
+    {code:'TRANSFERRED_SERVICE',label:'Przekazane do serwisu',count:transferredToServiceCount},
     {code:'ACTION_NOW',label:'Wymaga działania teraz',count:orders.filter((order)=>order.workflow?.flags.includes('ACTION_NOW')).length},
     {code:'DUE_SOON',label:'Kończy się termin',count:orders.filter((order)=>order.workflow?.flags.includes('DUE_SOON')).length},
     {code:'OVERDUE',label:'Po terminie',count:orders.filter((order)=>order.workflow?.flags.includes('OVERDUE')).length},
@@ -193,10 +201,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     {code:'WAITING_SERVICE',label:'Czeka na serwis',count:orders.filter((order)=>order.workflow?.flags.includes('WAITING_SERVICE')).length},
     {code:'WAITING_PARTS',label:'Czeka na części',count:orders.filter((order)=>order.workflow?.flags.includes('WAITING_PARTS')).length},
     {code:'READY_FOR_PICKUP',label:'Gotowe do odbioru',count:orders.filter((order)=>order.workflow?.flags.includes('READY_FOR_PICKUP')).length}
-  ], [orders]);
+  ], [orders,transferredToServiceCount]);
 
   const visibleOrders = useMemo(
-    () => orderFilter === 'ALL' ? orders : orders.filter((order)=>order.workflow?.flags.includes(orderFilter)),
+    () => orderFilter === 'ALL'
+      ? orders
+      : orderFilter === 'TRANSFERRED_SERVICE'
+        ? orders.filter(isTransferredToService)
+        : orders.filter((order)=>order.workflow?.flags.includes(orderFilter)),
     [orders,orderFilter]
   );
 
@@ -275,6 +287,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     setError('');
     try {
       const requests: Promise<unknown>[] = [];
+      if (canTransferService && servicePoints.length === 0) {
+        requests.push(window.lockOn.service.listServicePoints().then(setServicePoints));
+      }
       if (!orderHistories[order.id]) {
         requests.push(window.lockOn.service.getHistory(order.id).then((history) =>
           setOrderHistories((current) => ({ ...current, [order.id]: history }))
@@ -351,18 +366,16 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   useEffect(() => {
     void loadOrders();
-    void loadTransfers();
-    if (canHandleCustomerQuotes) void loadCustomerQuotes(pointId);
   }, []);
 
   useEffect(() => {
-    if (!canHandleCustomerQuotes) return;
+    if (!canHandleCustomerQuotes || tab !== 'QUOTES') return;
     void loadCustomerQuotes(pointId);
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void loadCustomerQuotes(pointId);
-    }, 20_000);
+    }, 60_000);
     return () => window.clearInterval(timer);
-  }, [pointId, effectiveRole]);
+  }, [tab, pointId, effectiveRole]);
 
   useEffect(() => {
     setNotificationSettings(null);
@@ -374,10 +387,17 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     if (!focusOrderId || expandedOrderId === focusOrderId) return;
     const order = orders.find((item)=>item.id===focusOrderId);
     if (!order) return;
-    setTab('ORDERS');
     void toggleOrderHistory(order);
-    window.setTimeout(() => document.querySelector('[data-service-order-id="'+CSS.escape(focusOrderId)+'"]')?.scrollIntoView({behavior:'smooth',block:'center'}), 120);
   }, [focusOrderId,orders]);
+
+  useEffect(() => {
+    if (!expandedOrderId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setExpandedOrderId(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [expandedOrderId]);
 
   const search = async () => {
     const clean = query.trim();
@@ -798,9 +818,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const openOrderFromWorkspace = (order: ServiceOrderSummary) => {
-    setTab('ORDERS');
     if (expandedOrderId !== order.id) void toggleOrderHistory(order);
-    window.setTimeout(() => document.querySelector('[data-service-order-id="'+CSS.escape(order.id)+'"]')?.scrollIntoView({behavior:'smooth',block:'center'}), 120);
   };
 
   const retryNotification = async (id: string) => {
@@ -825,7 +843,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         <div className="service-tabs">
           {isActualTechnician && <button className={tab === 'CALENDAR' ? 'active' : ''} onClick={() => setTab('CALENDAR')}><CalendarDays size={15}/> Plan pracy</button>}
           <button className={tab === 'NEW' ? 'active' : ''} onClick={() => setTab('NEW')}><ClipboardPlus size={15}/> Nowe zlecenie</button>
-          <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia</button>
+          <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia{transferredToServiceCount>0&&<b className="service-tab-count" title="Telefony przekazane do serwisu">{transferredToServiceCount}</b>}</button>
           <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
           {canHandleCustomerQuotes && <button className={tab === 'QUOTES' ? 'active' : ''} onClick={() => {setTab('QUOTES');void loadCustomerQuotes(pointId);}}><MessageSquareText size={15}/> Wyceny klientów{customerQuotes.filter((item)=>item.status==='OPEN').length > 0 && <b className="service-tab-count">{customerQuotes.filter((item)=>item.status==='OPEN').length}</b>}</button>}
           {canEditCosts && <button className={tab === 'INVOICES' ? 'active' : ''} onClick={() => setTab('INVOICES')}><FileArchive size={15}/> Magazyn faktur</button>}
@@ -855,7 +873,154 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           {cardBusy && <small>Generuję zabezpieczony PDF…</small>}
         </section>
       </div>}
-      {isActualTechnician && <MonthlyInvoicePrompt onOpenWarehouse={() => setTab('INVOICES')}/>}
+
+      {expandedOrderId && (() => {
+        const order = orders.find((item)=>item.id===expandedOrderId);
+        if (!order) return null;
+        const draft = detailsDrafts[order.id];
+        const card = customerCards[order.customerId];
+        const notes = orderNotes[order.id] ?? [];
+        const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
+        const pointTechnicians = currentServicePointId ? (techniciansByPoint[currentServicePointId] ?? []) : [];
+        const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
+        const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
+        const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
+        const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
+        const canUseOrderFinance = canEditCosts && (!isActualTechnician || order.assignedTechnicianId === auth.user?.id);
+        return <div className="service-order-details-backdrop" role="presentation" onMouseDown={()=>setExpandedOrderId(null)}>
+          <section className="service-order-details-dialog" role="dialog" aria-modal="true" aria-label={`Szczegóły zlecenia #${order.orderNumber}`} onMouseDown={(event)=>event.stopPropagation()}>
+            <header className="service-order-details-header">
+              <div>
+                <span>ZLECENIE #{order.orderNumber}</span>
+                <h2>{order.customerName} · {formatDeviceLabel(order.brand,order.model)}</h2>
+                <small>{order.statusLabel} · {order.currentLocationLabel || order.currentPointName || order.pointName}</small>
+              </div>
+              <button className="service-order-details-close" title="Zamknij szczegóły" onClick={()=>setExpandedOrderId(null)}><XCircle size={20}/></button>
+            </header>
+            <div className="service-order-workspace">
+                      {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
+
+                      {draft && (
+                        <section className="service-workspace-card">
+                          <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
+                          <div className="service-details-grid">
+                            <label><span>IMEI</span><input disabled={!canEditIntakeHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
+                            <label><span>Numer seryjny</span><input disabled={!canEditIntakeHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditIntakeHere && <div className="service-detail-date-field"><span>Przewidywany termin</span><div><input disabled={!canEditIntakeHere} type="date" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/><button type="button" className="button tiny secondary" disabled={!canEditIntakeHere} onClick={()=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:''}}))}>Nie podano</button></div></div>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditOrderHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
+                            <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditIntakeHere} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
+                          </div>
+                          {canEditIntakeHere && <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
+                        </section>
+                      )}
+
+                      {canUseOrderFinance && <OrderCostingCard order={order}/>}
+
+                      <section className="service-workspace-card service-transfer-card">
+                        <div className="service-workspace-title"><Truck size={15}/><div><strong>Logistyka urządzenia</strong><span>Punkt macierzysty jest stały, a transport jest prowadzony niezależnie od statusu naprawy.</span></div></div>
+                        <div className="active-transfer-summary">
+                          <div><MapPin size={15}/><span>Macierzysty: {order.homePointName || order.pointName}</span><b>·</b><strong>Teraz: {order.currentLocationLabel || order.currentPointName || 'W transporcie'}</strong></div>
+                          <small>{order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
+                        </div>
+                        {order.openTransfer ? (
+                          <div className="active-transfer-summary">
+                            <div><Truck size={15}/><span>{order.openTransfer.fromPointName}</span><b>→</b><strong>{order.openTransfer.toPointName}</strong></div>
+                            <small>{order.openTransfer.kind==='RETURN_HOME' ? 'Obowiązkowy zwrot do punktu macierzystego' : 'Wysłanie do zewnętrznego serwisu'} · {order.openTransfer.status==='IN_TRANSIT'?'w drodze':order.openTransfer.status==='DELIVERED'?'dostarczono, czeka na przyjęcie':'oczekuje'}</small>
+                          </div>
+                        ) : order.handlingMode === 'TRANSFER_ONLY' ? (
+                          canTransferHere ? (
+                            <div className="transfer-compose">
+                              <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
+                                <option value="">Wybierz punkt docelowy…</option>
+                                {currentServicePointId !== (order.homePointId || order.pointId) && <option value={order.homePointId || order.pointId}>{order.homePointName || order.pointName} — punkt macierzysty</option>}
+                                {servicePoints.filter((point)=>point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
+                              </select>
+                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do protokołu przekazania (opcjonalnie)"/>
+                              <button className="button primary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Przekaż urządzenie dalej</button>
+                            </div>
+                          ) : <div className="service-history-empty">Przekazanie może rozpocząć użytkownik obsługujący aktualny punkt urządzenia.</div>
+                        ) : order.returnRequired ? (
+                          canTransferHere && canEditStatus && order.status==='REPAIR_DONE' ? (
+                            <div className="transfer-compose">
+                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów"/>
+                              <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> Odeślij do punktu macierzystego</button>
+                            </div>
+                          ) : (
+                            <div className="service-history-empty">
+                              {order.status==='REPAIR_DONE'
+                                ? 'Zwrot do punktu macierzystego musi rozpocząć użytkownik obsługujący aktualny punkt urządzenia.'
+                                : 'Urządzenie jest poza punktem macierzystym. Po zakończeniu naprawy ustaw status „Naprawa zakończona”, a następnie rozpocznij obowiązkowy zwrot.'}
+                            </div>
+                          )
+                        ) : canTransferHere ? (
+                          <div className="transfer-compose">
+                            <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
+                              <option value="">Wybierz serwis docelowy…</option>
+                              {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
+                            </select>
+                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
+                            <button className="button secondary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
+                          </div>
+                        ) : <div className="service-history-empty">Brak aktywnego transportu.</div>}
+                        {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
+                          {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót: ':'Do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
+                        </div>}
+                      </section>
+
+                      <section className="service-workspace-card service-print-card">
+                        <div className="service-workspace-title"><Printer size={15}/><div><strong>Karta serwisowa</strong><span>QR klienta otwiera portal bez wpisywania kodu; QR urządzenia obsługuje logistykę pracownika.</span></div></div>
+                        <div className="service-print-card-actions">
+                          <button className="button secondary small" disabled={Boolean(serviceCardBusyId)} onClick={()=>void reopenServiceCard(order,'PHYSICAL_AND_ONLINE')}><Printer size={13}/> A4: klient + urządzenie</button>
+                          <button className="button secondary small" disabled={Boolean(serviceCardBusyId)} onClick={()=>void reopenServiceCard(order,'ONLINE_ONLY')}><Printer size={13}/> Tylko karta urządzenia</button>
+                        </div>
+                      </section>
+
+                      <section className="service-workspace-card">
+                        <div className="service-workspace-title"><IdCard size={15}/><div><strong>Karta klienta</strong><span>Historia widoczna tylko w Twoim zakresie punktów.</span></div></div>
+                        {card ? <>
+                          <div className="service-customer-card-head">
+                            <div><strong>{card.customer.firstName} {card.customer.lastName}</strong><span>{card.customer.email || 'brak e-maila'} · {card.customer.phone || 'brak telefonu'}</span></div>
+                            <b>{card.totalVisibleOrders} zleceń</b>
+                          </div>
+                          <div className="service-customer-order-mini">
+                            {card.orders.slice(0,5).map((item)=><div key={item.id}><span>#{item.orderNumber} · {item.brand} {item.model}</span><small>{item.statusLabel} · {new Date(item.receivedAt).toLocaleDateString('pl-PL')}</small></div>)}
+                          </div>
+                        </> : <div className="service-history-empty">Pobieram kartę klienta…</div>}
+                      </section>
+
+                      <section className="service-workspace-card">
+                        <div className="service-workspace-title"><StickyNote size={15}/><div><strong>Notatki wewnętrzne</strong><span>Nie są wysyłane klientowi.</span></div></div>
+                        {canEditStatus && <div className="service-note-compose">
+                          <textarea rows={3} maxLength={2000} value={noteDrafts[order.id] ?? ''} onChange={(e)=>setNoteDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="Diagnoza technika, zamówione części, ustalenia z klientem…"/>
+                          <button className="button secondary small" disabled={Boolean(orderBusyId) || !(noteDrafts[order.id] ?? '').trim()} onClick={()=>void addOrderNote(order.id)}>Dodaj notatkę</button>
+                        </div>}
+                        <div className="service-note-list">
+                          {notes.map((note)=><div key={note.id}><div><strong>{note.authorName}</strong><span>{new Date(note.createdAt).toLocaleString('pl-PL')}</span></div><p>{note.body}</p></div>)}
+                          {notes.length===0 && <div className="service-history-empty">Brak notatek wewnętrznych.</div>}
+                        </div>
+                      </section>
+
+                      <section className="service-workspace-card service-workspace-history">
+                        <div className="service-workspace-title"><History size={15}/><div><strong>Historia statusów</strong><span>Pełna oś czasu zlecenia #{order.orderNumber}</span></div></div>
+                        {(orderHistories[order.id] ?? []).map((item, index) => (
+                          <div className="service-history-item" key={item.id}>
+                            <div className="service-history-line"><i className={index === (orderHistories[order.id] ?? []).length - 1 ? 'current' : ''}></i></div>
+                            <div className="service-history-content">
+                              <div className="service-history-status">{item.fromLabel && <span>{item.fromLabel}</span>}{item.fromLabel && <b>→</b>}<strong>{item.toLabel}</strong></div>
+                              <small>{new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
+                              {item.note && <p>{item.note}</p>}
+                            </div>
+                          </div>
+                        ))}
+                        {(orderHistories[order.id] ?? []).length === 0 && <div className="service-history-empty">Brak zapisanych zmian statusu.</div>}
+                      </section>
+                    </div>
+          </section>
+        </div>;
+      })()}
+      {isActualTechnician && <MonthlyInvoicePrompt onOpenWarehouse={() => setTab('INVOICES')}/>} 
       {showGmailOnboarding && (
         <section className="panel-card service-mail-card">
           <div className="service-mail-copy">
@@ -987,8 +1152,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       {tab === 'ORDERS' && (
         <section className="panel-card service-orders-card">
           <div className="panel-heading">
-            <div><span className="eyebrow"><ClipboardList size={13}/> ZLECENIA</span><h2>Ostatnie naprawy</h2><p>Widoczne są wyłącznie zlecenia z punktów dostępnych dla Twojego konta.</p></div>
-            <button className="button small secondary" disabled={ordersBusy} onClick={() => void loadOrders()}><RefreshCw className={ordersBusy ? 'spin' : ''} size={14}/> Odśwież</button>
+            <div><span className="eyebrow"><ClipboardList size={13}/> ZLECENIA</span><h2>Ostatnie naprawy</h2><p>Lista jest lekka — pełne szczegóły otwierają się dopiero po kliknięciu, w osobnym oknie.</p></div>
+            <div className="service-orders-heading-actions">
+              <div className="service-transferred-counter"><Truck size={16}/><span>Przekazane do serwisu</span><strong>{transferredToServiceCount}</strong></div>
+              <button className="button small secondary" disabled={ordersBusy} onClick={() => void loadOrders()}><RefreshCw className={ordersBusy ? 'spin' : ''} size={14}/> Odśwież</button>
+            </div>
           </div>
           <div className="service-workflow-filters">
             {workflowFilters.map((filter)=><button
@@ -999,19 +1167,13 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           </div>
           <div className="service-orders-list">
             {visibleOrders.map((order) => {
-              const draft = detailsDrafts[order.id];
-              const card = customerCards[order.customerId];
-              const notes = orderNotes[order.id] ?? [];
               const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
-              const pointTechnicians = currentServicePointId ? (techniciansByPoint[currentServicePointId] ?? []) : [];
               const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
               const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
-              const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
-              const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
               const canCancelHere = canCancelService && canOperateCurrentPoint && !order.openTransfer;
-              const canUseOrderFinance = canEditCosts && (!isActualTechnician || order.assignedTechnicianId === auth.user?.id);
+              const transferredToService = isTransferredToService(order);
               return (
-                <article key={order.id} data-service-order-id={order.id} className={`service-order-wrap ${expandedOrderId === order.id ? 'expanded' : ''} workflow-${(order.workflow?.attentionCode || 'ACTIVE').toLowerCase()}`}>
+                <article key={order.id} data-service-order-id={order.id} className={`service-order-wrap workflow-${(order.workflow?.attentionCode || 'ACTIVE').toLowerCase()}`}>
                   <div className="service-order-row">
                     <div className="service-order-number"><strong>#{order.orderNumber}</strong><span>{new Date(order.receivedAt).toLocaleString('pl-PL')}</span></div>
                     <div className="service-order-main">
@@ -1040,6 +1202,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           : <><span><UserCog size={11}/>{order.assignedTechnicianName || 'Nieprzypisany'}</span><span><CalendarClock size={11}/>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL') : 'Brak terminu'}</span></>}
                         <span><MapPin size={11}/>Macierzysty: {order.homePointName || order.pointName}</span>
                         <span><Truck size={11}/>Lokalizacja: {order.currentLocationLabel || order.currentPointName || order.pointName}</span>
+                        {transferredToService && <span className="service-transferred-chip"><Truck size={11}/>Przekazane do serwisu</span>}
                         {canEditCosts && order.handlingMode !== 'TRANSFER_ONLY' && <span><BadgeDollarSign size={11}/>{order.finalCost != null ? `${order.finalCost.toFixed(2)} PLN` : order.estimatedCost != null ? `~${order.estimatedCost.toFixed(2)} PLN` : 'Brak wyceny'}</span>}
                       </div>
                     </div>
@@ -1063,133 +1226,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       <button className="button small secondary service-history-button" onClick={() => void toggleOrderHistory(order)}>
                         <History size={13}/>
                         Szczegóły
-                        {expandedOrderId === order.id ? <ChevronUp size={13}/> : <ChevronDown size={13}/>}
                       </button>
                     </div>
                   </div>
 
-                  {expandedOrderId === order.id && (
-                    <div className="service-order-workspace">
-                      {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
-
-                      {draft && (
-                        <section className="service-workspace-card">
-                          <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
-                          <div className="service-details-grid">
-                            <label><span>IMEI</span><input disabled={!canEditIntakeHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
-                            <label><span>Numer seryjny</span><input disabled={!canEditIntakeHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
-                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditIntakeHere && <div className="service-detail-date-field"><span>Przewidywany termin</span><div><input disabled={!canEditIntakeHere} type="date" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/><button type="button" className="button tiny secondary" disabled={!canEditIntakeHere} onClick={()=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:''}}))}>Nie podano</button></div></div>}
-                            {order.handlingMode !== 'TRANSFER_ONLY' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditOrderHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
-                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
-                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
-                            <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditIntakeHere} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
-                          </div>
-                          {canEditIntakeHere && <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
-                        </section>
-                      )}
-
-                      {canUseOrderFinance && <OrderCostingCard order={order}/>}
-
-                      <section className="service-workspace-card service-transfer-card">
-                        <div className="service-workspace-title"><Truck size={15}/><div><strong>Logistyka urządzenia</strong><span>Punkt macierzysty jest stały, a transport jest prowadzony niezależnie od statusu naprawy.</span></div></div>
-                        <div className="active-transfer-summary">
-                          <div><MapPin size={15}/><span>Macierzysty: {order.homePointName || order.pointName}</span><b>·</b><strong>Teraz: {order.currentLocationLabel || order.currentPointName || 'W transporcie'}</strong></div>
-                          <small>{order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
-                        </div>
-                        {order.openTransfer ? (
-                          <div className="active-transfer-summary">
-                            <div><Truck size={15}/><span>{order.openTransfer.fromPointName}</span><b>→</b><strong>{order.openTransfer.toPointName}</strong></div>
-                            <small>{order.openTransfer.kind==='RETURN_HOME' ? 'Obowiązkowy zwrot do punktu macierzystego' : 'Wysłanie do zewnętrznego serwisu'} · {order.openTransfer.status==='IN_TRANSIT'?'w drodze':order.openTransfer.status==='DELIVERED'?'dostarczono, czeka na przyjęcie':'oczekuje'}</small>
-                          </div>
-                        ) : order.handlingMode === 'TRANSFER_ONLY' ? (
-                          canTransferHere ? (
-                            <div className="transfer-compose">
-                              <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
-                                <option value="">Wybierz punkt docelowy…</option>
-                                {currentServicePointId !== (order.homePointId || order.pointId) && <option value={order.homePointId || order.pointId}>{order.homePointName || order.pointName} — punkt macierzysty</option>}
-                                {servicePoints.filter((point)=>point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
-                              </select>
-                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do protokołu przekazania (opcjonalnie)"/>
-                              <button className="button primary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Przekaż urządzenie dalej</button>
-                            </div>
-                          ) : <div className="service-history-empty">Przekazanie może rozpocząć użytkownik obsługujący aktualny punkt urządzenia.</div>
-                        ) : order.returnRequired ? (
-                          canTransferHere && canEditStatus && order.status==='REPAIR_DONE' ? (
-                            <div className="transfer-compose">
-                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów"/>
-                              <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> Odeślij do punktu macierzystego</button>
-                            </div>
-                          ) : (
-                            <div className="service-history-empty">
-                              {order.status==='REPAIR_DONE'
-                                ? 'Zwrot do punktu macierzystego musi rozpocząć użytkownik obsługujący aktualny punkt urządzenia.'
-                                : 'Urządzenie jest poza punktem macierzystym. Po zakończeniu naprawy ustaw status „Naprawa zakończona”, a następnie rozpocznij obowiązkowy zwrot.'}
-                            </div>
-                          )
-                        ) : canTransferHere ? (
-                          <div className="transfer-compose">
-                            <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
-                              <option value="">Wybierz serwis docelowy…</option>
-                              {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
-                            </select>
-                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
-                            <button className="button secondary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
-                          </div>
-                        ) : <div className="service-history-empty">Brak aktywnego transportu.</div>}
-                        {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
-                          {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót: ':'Do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
-                        </div>}
-                      </section>
-
-                      <section className="service-workspace-card service-print-card">
-                        <div className="service-workspace-title"><Printer size={15}/><div><strong>Karta serwisowa</strong><span>QR klienta otwiera portal bez wpisywania kodu; QR urządzenia obsługuje logistykę pracownika.</span></div></div>
-                        <div className="service-print-card-actions">
-                          <button className="button secondary small" disabled={Boolean(serviceCardBusyId)} onClick={()=>void reopenServiceCard(order,'PHYSICAL_AND_ONLINE')}><Printer size={13}/> A4: klient + urządzenie</button>
-                          <button className="button secondary small" disabled={Boolean(serviceCardBusyId)} onClick={()=>void reopenServiceCard(order,'ONLINE_ONLY')}><Printer size={13}/> Tylko karta urządzenia</button>
-                        </div>
-                      </section>
-
-                      <section className="service-workspace-card">
-                        <div className="service-workspace-title"><IdCard size={15}/><div><strong>Karta klienta</strong><span>Historia widoczna tylko w Twoim zakresie punktów.</span></div></div>
-                        {card ? <>
-                          <div className="service-customer-card-head">
-                            <div><strong>{card.customer.firstName} {card.customer.lastName}</strong><span>{card.customer.email || 'brak e-maila'} · {card.customer.phone || 'brak telefonu'}</span></div>
-                            <b>{card.totalVisibleOrders} zleceń</b>
-                          </div>
-                          <div className="service-customer-order-mini">
-                            {card.orders.slice(0,5).map((item)=><div key={item.id}><span>#{item.orderNumber} · {item.brand} {item.model}</span><small>{item.statusLabel} · {new Date(item.receivedAt).toLocaleDateString('pl-PL')}</small></div>)}
-                          </div>
-                        </> : <div className="service-history-empty">Pobieram kartę klienta…</div>}
-                      </section>
-
-                      <section className="service-workspace-card">
-                        <div className="service-workspace-title"><StickyNote size={15}/><div><strong>Notatki wewnętrzne</strong><span>Nie są wysyłane klientowi.</span></div></div>
-                        {canEditStatus && <div className="service-note-compose">
-                          <textarea rows={3} maxLength={2000} value={noteDrafts[order.id] ?? ''} onChange={(e)=>setNoteDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="Diagnoza technika, zamówione części, ustalenia z klientem…"/>
-                          <button className="button secondary small" disabled={Boolean(orderBusyId) || !(noteDrafts[order.id] ?? '').trim()} onClick={()=>void addOrderNote(order.id)}>Dodaj notatkę</button>
-                        </div>}
-                        <div className="service-note-list">
-                          {notes.map((note)=><div key={note.id}><div><strong>{note.authorName}</strong><span>{new Date(note.createdAt).toLocaleString('pl-PL')}</span></div><p>{note.body}</p></div>)}
-                          {notes.length===0 && <div className="service-history-empty">Brak notatek wewnętrznych.</div>}
-                        </div>
-                      </section>
-
-                      <section className="service-workspace-card service-workspace-history">
-                        <div className="service-workspace-title"><History size={15}/><div><strong>Historia statusów</strong><span>Pełna oś czasu zlecenia #{order.orderNumber}</span></div></div>
-                        {(orderHistories[order.id] ?? []).map((item, index) => (
-                          <div className="service-history-item" key={item.id}>
-                            <div className="service-history-line"><i className={index === (orderHistories[order.id] ?? []).length - 1 ? 'current' : ''}></i></div>
-                            <div className="service-history-content">
-                              <div className="service-history-status">{item.fromLabel && <span>{item.fromLabel}</span>}{item.fromLabel && <b>→</b>}<strong>{item.toLabel}</strong></div>
-                              <small>{new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
-                              {item.note && <p>{item.note}</p>}
-                            </div>
-                          </div>
-                        ))}
-                        {(orderHistories[order.id] ?? []).length === 0 && <div className="service-history-empty">Brak zapisanych zmian statusu.</div>}
-                      </section>
-                    </div>
-                  )}
+                  
                 </article>
               );
             })}
