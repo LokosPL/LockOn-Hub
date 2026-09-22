@@ -3985,6 +3985,19 @@ const route = async (request) => {
     return json(request,{id,title,body:note,pinned,createdAt:nowIso(),updatedAt:nowIso()},201);
   }
 
+  const technicianNoteUpdateMatch=url.pathname.match(/^\/service\/technician-notes\/([^/]+)$/);
+  if(method==='PATCH'&&technicianNoteUpdateMatch){
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Prywatny pokój notatek jest dostępny dla serwisanta.'),{status:403,code:'TECHNICIAN_ONLY'});
+    const body=await readJson(request);
+    const title=cleanText(body.title,120),note=cleanText(body.body,4000),pinned=body.pinned===true;
+    if(!note)return json(request,{error:'NOTE_REQUIRED',message:'Notatka nie może być pusta.'},400);
+    const row=(await q("UPDATE technician_private_notes SET title=NULLIF($1,''),body=$2,pinned=$3,updated_at=now() WHERE id=$4 AND user_id=$5 RETURNING id,title,body,pinned,created_at,updated_at",[title,note,pinned,technicianNoteUpdateMatch[1],u.id])).rows[0];
+    if(!row)return json(request,{error:'NOT_FOUND'},404);
+    await audit(session,'TECHNICIAN_PRIVATE_NOTE_UPDATED','technician_note',row.id,null,{pinned,length:note.length});
+    return json(request,{id:row.id,title:row.title||'',body:row.body,pinned:row.pinned===true,createdAt:row.created_at,updatedAt:row.updated_at});
+  }
+
   const technicianNoteDeleteMatch=url.pathname.match(/^\/service\/technician-notes\/([^/]+)$/);
   if(method==='DELETE'&&technicianNoteDeleteMatch){
     const session=await requireActive(request),u=session.user;
@@ -4094,7 +4107,7 @@ const route = async (request) => {
     try{
       await client.query('BEGIN');
       const order=(await client.query(
-        "SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,assigned_technician_id,customer_id FROM service_orders WHERE id=$1 FOR UPDATE",
+        "SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,assigned_technician_id,customer_id,warranty_months,warranty_issued_at,warranty_expires_at,warranty_card_printed_at FROM service_orders WHERE id=$1 FOR UPDATE",
         [cardRow.service_order_id]
       )).rows[0];
       if(!order)throw Object.assign(new Error('Nie znaleziono zlecenia.'),{status:404,code:'NOT_FOUND'});
@@ -4118,7 +4131,7 @@ const route = async (request) => {
         if(!acceptedTransfer)throw Object.assign(new Error('Przekazanie zmieniło się w międzyczasie. Zeskanuj ponownie.'),{status:409,code:'TRANSFER_STATUS_CHANGED'});
 
         const assignTechnician=transfer.kind==='OUTBOUND_SERVICE'&&u.role_code==='TECHNICIAN'&&order.handling_mode!=='TRANSFER_ONLY';
-        const shouldReady=transfer.kind==='RETURN_HOME'&&actingPointId===homePointId&&order.status==='REPAIR_DONE';
+        const shouldReady=transfer.kind==='RETURN_HOME'&&actingPointId===homePointId&&order.status==='REPAIR_DONE'&&Boolean(order.warranty_months&&order.warranty_issued_at&&order.warranty_expires_at&&order.warranty_card_printed_at);
         await client.query(
           "UPDATE service_orders SET current_point_id=$2,assigned_technician_id=CASE WHEN $3::boolean THEN $4 ELSE assigned_technician_id END,status=CASE WHEN $5::boolean THEN 'READY' ELSE status END,updated_at=now() WHERE id=$1",
           [order.id,actingPointId,assignTechnician,u.id,shouldReady]
@@ -4531,7 +4544,7 @@ const route = async (request) => {
   if(method==='POST'&&detailsMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_INTAKE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji danych przyjęcia.'),{status:403});
-    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,handling_mode,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
+    const found=(await q('SELECT id,point_id,home_point_id,current_point_id,handling_mode,device_id,customer_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
     const detailsOpenTransfer=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') LIMIT 1",[found.id])).rows[0]||null;
@@ -4556,10 +4569,14 @@ const route = async (request) => {
     if(canEditEta&&found.handling_mode!=='TRANSFER_ONLY'&&('estimatedCompletionAt' in body)){
       const etaText=cleanText(body.estimatedCompletionAt,64);
       if(!etaText){
+        if(u.role_code==='TECHNICIAN'&&found.estimated_completion_at)return json(request,{error:'ETA_CANNOT_CLEAR',message:'Serwisant nie może usuwać już ustalonego terminu z planu pracy.'},409);
         estimatedCompletionAt=null;
       }else{
         const date=new Date(etaText);
         if(Number.isNaN(date.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
+        if(u.role_code==='TECHNICIAN'&&found.estimated_completion_at&&date.getTime()<new Date(found.estimated_completion_at).getTime()-60_000){
+          return json(request,{error:'ETA_CANNOT_MOVE_BACK',message:'Terminu nie można skracać. Możesz pozostawić obecną datę albo przesunąć zlecenie na później.'},409);
+        }
         estimatedCompletionAt=date;
       }
     }
@@ -4612,6 +4629,20 @@ const route = async (request) => {
       await client.query('ROLLBACK').catch(()=>undefined);
       throw error;
     }finally{client.release();}
+
+    const previousEta=found.estimated_completion_at?new Date(found.estimated_completion_at):null;
+    const etaChanged=Boolean(estimatedCompletionAt)&&(!previousEta||previousEta.toISOString().slice(0,10)!==estimatedCompletionAt.toISOString().slice(0,10));
+    let etaNotification=null;
+    if(etaChanged){
+      etaNotification=await sendCustomerPortalEventEmail({
+        customerId:found.customer_id,
+        pointId:found.point_id,
+        preference:'serviceUpdates',
+        subject:'LockOn ServiceOS · zmiana przewidywanego terminu',
+        title:'Przewidywany termin Twojego zlecenia został zmieniony',
+        message:'Nowy przewidywany termin: '+estimatedCompletionAt.toLocaleDateString('pl-PL',{timeZone:'Europe/Warsaw'})+'. Aktualne informacje znajdziesz w panelu klienta.'
+      });
+    }
 
     await audit(session,'SERVICE_ORDER_DETAILS_UPDATED','service_order',found.id,found.point_id,{
       assignedTechnicianId,
@@ -4734,7 +4765,7 @@ const route = async (request) => {
     if(!canEditStatus&&!canCancelOnly)throw Object.assign(new Error('Brak uprawnień do zmiany statusu.'),{status:403});
     if(!SERVICE_STATUSES.has(next))return json(request,{error:'STATUS'},400);
 
-    const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
+    const found=(await q('SELECT id,order_number,point_id,home_point_id,current_point_id,status,handling_mode,customer_id,assigned_technician_id,created_by_user_id,final_cost,estimated_cost,currency,warranty_months,warranty_issued_at,warranty_expires_at,warranty_card_printed_at FROM service_orders WHERE id=$1 LIMIT 1',[statusMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
 
@@ -4768,6 +4799,9 @@ const route = async (request) => {
       await requirePoint(u,homePointId);
       if(next==='READY'&&found.status!=='REPAIR_DONE'){
         return json(request,{error:'REPAIR_DONE_REQUIRED',message:'Status „Gotowe do odbioru” można ustawić dopiero po zakończeniu naprawy.'},409);
+      }
+      if(next==='READY'&&(!found.warranty_months||!found.warranty_issued_at||!found.warranty_expires_at||!found.warranty_card_printed_at)){
+        return json(request,{error:'WARRANTY_CARD_REQUIRED',message:'Przed oznaczeniem urządzenia jako gotowego ustaw okres gwarancji i wydrukuj kartę gwarancyjną.'},409);
       }
       if(next==='COMPLETED'&&found.status!=='READY'){
         return json(request,{error:'READY_REQUIRED',message:'Zlecenie można zakończyć dopiero po oznaczeniu urządzenia jako gotowego do odbioru w punkcie macierzystym.'},409);
