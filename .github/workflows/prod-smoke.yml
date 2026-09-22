@@ -6,6 +6,8 @@ on:
     paths:
       - ".github/workflows/prod-smoke.yml"
       - ".github/workflows/ci.yml"
+      - "functions/lockon-api.mjs"
+      - "database/migrations/**"
   workflow_dispatch:
 
 permissions:
