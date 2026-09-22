@@ -367,7 +367,10 @@ const pushSplashProgress = (percent: number, label: string) => {
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const runStartupSequence = async () => {
-  await delay(90);
+  const startupStartedAt = Date.now();
+  const minimumStartupMs = 4_600;
+
+  await delay(120);
   pushSplashProgress(10, 'Uruchamiam bezpieczny silnik ServiceOS…');
 
   pushSplashProgress(22, 'Przygotowuję usługi aplikacji…');
@@ -394,8 +397,15 @@ const runStartupSequence = async () => {
   pushSplashProgress(90, 'Synchronizuję uprawnienia i widok startowy…');
 
   await delay(180);
+  pushSplashProgress(95, 'Sprawdzam gotowość modułów…');
+
+  const remainingStartupMs = minimumStartupMs - (Date.now() - startupStartedAt);
+  if (remainingStartupMs > 0) {
+    await delay(remainingStartupMs);
+  }
+
   pushSplashProgress(100, 'Wszystko gotowe. Miłej pracy!');
-  await delay(260);
+  await delay(420);
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
@@ -924,6 +934,16 @@ const registerIpc = () => {
       method:'POST',body:'{}'
     },token);
   });
+  secureHandle('customers:getNotificationPreferences', async (customerId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/customer-accounts/${encodeURIComponent(safeId(customerId,'cst'))}/notification-preferences`, {}, token);
+  });
+  secureHandle('customers:updateNotificationPreferences', async (customerId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/customer-accounts/${encodeURIComponent(safeId(customerId,'cst'))}/notification-preferences`, {
+      method:'POST', body:JSON.stringify(payload)
+    }, token);
+  });
   secureHandle('customers:block', async (customerId: string, blocked: boolean, reason?: string) => {
     const token = requireSessionToken();
     return backendRequest(`/customer-accounts/${encodeURIComponent(safeId(customerId,'cst'))}/block`, {
@@ -1128,15 +1148,18 @@ const registerIpc = () => {
     await fetchPdfToFile(intent.downloadUrl,save.filePath);
     return {cancelled:false,filePath:save.filePath};
   });
-  secureHandle('service:listInvoices', async (month: string) => {
+  secureHandle('service:listInvoices', async (month: string, pointId: string) => {
     const token=requireSessionToken();
     const period=String(month??'').trim().slice(0,7);
-    return backendRequest('/service/invoices?month='+encodeURIComponent(period),{},token);
+    const safePointId=String(pointId??'').trim().slice(0,80);
+    const params=new URLSearchParams({month:period,pointId:safePointId});
+    return backendRequest('/service/invoices?'+params.toString(),{},token);
   });
-  secureHandle('service:downloadInvoiceBatch', async (month: string) => {
+  secureHandle('service:downloadInvoiceBatch', async (month: string, pointId: string) => {
     const token=requireSessionToken();
     const period=String(month??'').trim().slice(0,7);
-    const batch=await backendRequest('/service/invoices/download-batch',{method:'POST',body:JSON.stringify({period})},token) as {files:Array<{fileName:string;orderNumber?:number|null;downloadUrl:string}>};
+    const safePointId=String(pointId??'').trim().slice(0,80);
+    const batch=await backendRequest('/service/invoices/download-batch',{method:'POST',body:JSON.stringify({period,pointId:safePointId})},token) as {files:Array<{fileName:string;orderNumber?:number|null;downloadUrl:string}>};
     if(!mainWindow||mainWindow.isDestroyed())throw new Error('Główne okno aplikacji nie jest dostępne.');
     const chosen=await dialog.showOpenDialog(mainWindow,{title:'Wybierz folder dla faktur '+period,properties:['openDirectory','createDirectory']});
     if(chosen.canceled||!chosen.filePaths[0])return {cancelled:true,downloaded:0};

@@ -91,7 +91,7 @@ export interface ServiceOrderPart {
   createdAt?:string; updatedAt?:string;
 }
 export interface ServiceInvoice {
-  id:string; orderId:string; orderNumber?:number|null; customerName?:string|null; device?:string|null;
+  id:string; orderId:string; orderNumber?:number|null; pointId?:string|null; pointName?:string|null; customerName?:string|null; device?:string|null;
   fileName:string; sizeBytes:number; invoiceNumber?:string|null; supplier?:string|null; invoiceDate?:string|null;
   grossAmount?:number|null; uploadedByUserId:string; uploadedByName?:string|null; createdAt:string; readyAt?:string|null;
 }
@@ -195,6 +195,8 @@ declare global {
         unlinkGoogle: (customerId:string) => Promise<{ok:true;unlinked:boolean;revoked:number}>;
         getCode: (customerId:string,rotate?:boolean) => Promise<{ok:true;code:string;created:boolean;rotated:boolean;revoked:number}>;
         sendCode: (customerId:string) => Promise<{ok:true;recipient:string;messageId:string}>;
+        getNotificationPreferences: (customerId:string) => Promise<CustomerNotificationPreferences>;
+        updateNotificationPreferences: (customerId:string,payload:Partial<CustomerNotificationPreferences>) => Promise<{ok:true;preferences:CustomerNotificationPreferences}>;
         block: (customerId:string,blocked:boolean,reason?:string) => Promise<{ok:true;blocked:boolean;revoked:number}>;
         logoutAll: (customerId:string) => Promise<{ok:true;revoked:number}>;
       };
@@ -225,8 +227,8 @@ declare global {
         saveCosting: (orderId:string,payload:{laborCostGross:number;otherCostGross:number;parts:Array<{description:string;quantity:number;unitCostGross:number;invoiceReceived:boolean;invoiceNumber?:string;supplier?:string;purchasedAt?:string}>}) => Promise<ServiceCosting>;
         uploadInvoice: (orderId:string,payload:{invoiceNumber?:string;supplier?:string;invoiceDate?:string;grossAmount?:number|string|null}) => Promise<{cancelled:boolean;invoice?:ServiceInvoice}>;
         downloadInvoice: (invoiceId:string) => Promise<{cancelled:boolean;filePath?:string}>;
-        listInvoices: (month:string) => Promise<{period:string;invoices:ServiceInvoice[]}>;
-        downloadInvoiceBatch: (month:string) => Promise<{cancelled:boolean;downloaded:number;folder?:string;failed?:number}>;
+        listInvoices: (month:string,pointId:string) => Promise<{period:string;pointId:string;invoices:ServiceInvoice[]}>;
+        downloadInvoiceBatch: (month:string,pointId:string) => Promise<{cancelled:boolean;downloaded:number;folder?:string;failed?:number}>;
         deleteInvoice: (invoiceId:string) => Promise<{ok:true}>;
         getInvoiceMonthlyPrompt: () => Promise<InvoiceMonthlyPrompt>;
         dismissInvoiceMonthlyPrompt: (period:string) => Promise<{ok:true;period:string}>;

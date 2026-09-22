@@ -107,6 +107,7 @@ const initialDb = () => ({
   serviceOrderParts: [],
   serviceOrderInvoices: [],
   technicianPrivateNotes: [],
+  customerNotificationPreferences: [],
   invoicePromptDismissals: [],
   notificationSettings: [],
   notificationHistory: [],
@@ -141,6 +142,7 @@ const loadDb = () => {
       serviceOrderParts: Array.isArray(raw.serviceOrderParts) ? raw.serviceOrderParts : [],
       serviceOrderInvoices: Array.isArray(raw.serviceOrderInvoices) ? raw.serviceOrderInvoices : [],
       technicianPrivateNotes: Array.isArray(raw.technicianPrivateNotes) ? raw.technicianPrivateNotes : [],
+      customerNotificationPreferences: Array.isArray(raw.customerNotificationPreferences) ? raw.customerNotificationPreferences : [],
       invoicePromptDismissals: Array.isArray(raw.invoicePromptDismissals) ? raw.invoicePromptDismissals : [],
       notificationSettings: Array.isArray(raw.notificationSettings) ? raw.notificationSettings : [],
       notificationHistory: Array.isArray(raw.notificationHistory) ? raw.notificationHistory : [],
@@ -774,6 +776,41 @@ const handle = async (req, res) => {
     return json(res,200,{ok:true,revoked,exceptCurrent:true});
   }
 
+  const localCustomerNotificationPrefs=url.pathname.match(/^\/customer-accounts\/([^/]+)\/notification-preferences$/);
+  if(localCustomerNotificationPrefs&&(method==='GET'||method==='POST')){
+    const user=requireActive(req,res);if(!user)return;
+    const customerId=localCustomerNotificationPrefs[1];
+    const customer=db.customers.find((item)=>item.id===customerId);
+    if(!customer)return json(res,404,{error:'NOT_FOUND'});
+    const visible=GLOBAL_ROLES.has(user.role)||db.serviceOrders.some((order)=>order.customerId===customerId&&canSeePoint(user,order.pointId));
+    if(!visible)return json(res,403,{error:'POINT'});
+    const current=db.customerNotificationPreferences.find((item)=>item.customerId===customerId)||{
+      customerId,serviceUpdates:true,readyForPickup:true,quoteUpdates:true,messages:true
+    };
+    if(method==='GET')return json(res,200,{
+      serviceUpdates:current.serviceUpdates!==false,
+      readyForPickup:current.readyForPickup!==false,
+      quoteUpdates:current.quoteUpdates!==false,
+      messages:current.messages!==false
+    });
+    const body=await readBody(req);
+    const preferences={
+      customerId,
+      serviceUpdates:body.serviceUpdates===undefined?current.serviceUpdates!==false:body.serviceUpdates===true,
+      readyForPickup:body.readyForPickup===undefined?current.readyForPickup!==false:body.readyForPickup===true,
+      quoteUpdates:body.quoteUpdates===undefined?current.quoteUpdates!==false:body.quoteUpdates===true,
+      messages:body.messages===undefined?current.messages!==false:body.messages===true
+    };
+    db.customerNotificationPreferences=db.customerNotificationPreferences.filter((item)=>item.customerId!==customerId);
+    db.customerNotificationPreferences.push(preferences);
+    localAudit(user,'CUSTOMER_NOTIFICATION_PREFERENCES_UPDATED','customer',customerId,null,{preferences});
+    saveDb();
+    return json(res,200,{ok:true,preferences:{
+      serviceUpdates:preferences.serviceUpdates,readyForPickup:preferences.readyForPickup,
+      quoteUpdates:preferences.quoteUpdates,messages:preferences.messages
+    }});
+  }
+
   if (method === 'GET' && url.pathname === '/service/customers/search') {
     const user = requireActive(req, res);
     if (!user) return;
@@ -1131,7 +1168,10 @@ const handle = async (req, res) => {
   if(method==='GET'&&url.pathname==='/service/invoices'){
     const user=requireActive(req,res);if(!user)return;
     if(!SERVICE_EDIT_ROLES.has(user.role))return json(res,403,{error:'SERVICE_FINANCE_FORBIDDEN'});
-    return json(res,200,{period:cleanText(url.searchParams.get('month')||new Date().toISOString().slice(0,7),7),invoices:[]});
+    const pointId=cleanText(url.searchParams.get('pointId'),80)||String(user.activePointId||user.pointIds?.[0]||''); 
+    if(!pointId)return json(res,400,{error:'INVOICE_POINT_REQUIRED',message:'Wybierz punkt dla magazynu faktur.'});
+    if(!canSeePoint(user,pointId))return json(res,403,{error:'POINT'});
+    return json(res,200,{period:cleanText(url.searchParams.get('month')||new Date().toISOString().slice(0,7),7),pointId,invoices:[]});
   }
   if(method==='GET'&&url.pathname==='/service/invoices/monthly-prompt'){
     const user=requireActive(req,res);if(!user)return;
@@ -1146,7 +1186,10 @@ const handle = async (req, res) => {
     const user=requireActive(req,res);if(!user)return;
     if(!SERVICE_EDIT_ROLES.has(user.role))return json(res,403,{error:'SERVICE_FINANCE_FORBIDDEN'});
     const body=await readBody(req);
-    return json(res,200,{period:cleanText(body.period,7),files:[],expiresInSeconds:0});
+    const pointId=cleanText(body.pointId,80)||String(user.activePointId||user.pointIds?.[0]||'');
+    if(!pointId)return json(res,400,{error:'INVOICE_POINT_REQUIRED'});
+    if(!canSeePoint(user,pointId))return json(res,403,{error:'POINT'});
+    return json(res,200,{period:cleanText(body.period,7),pointId,files:[],expiresInSeconds:0});
   }
   const localInvoiceUploadIntent=url.pathname.match(/^\/service\/orders\/([^/]+)\/invoices\/upload-intent$/);
   if(method==='POST'&&localInvoiceUploadIntent){

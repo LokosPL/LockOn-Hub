@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { Download, FileArchive, X } from 'lucide-react';
 import type { InvoiceMonthlyPrompt } from '../types/electron';
 
-interface Props { onOpenWarehouse:()=>void; }
+interface Props { onOpenWarehouse:()=>void; pointId:string; }
 
-export function MonthlyInvoicePrompt({onOpenWarehouse}:Props){
+export function MonthlyInvoicePrompt({onOpenWarehouse,pointId}:Props){
   const [prompt,setPrompt]=useState<InvoiceMonthlyPrompt|null>(null);
   const [busy,setBusy]=useState(false);
   const [message,setMessage]=useState('');
@@ -25,7 +25,7 @@ export function MonthlyInvoicePrompt({onOpenWarehouse}:Props){
     if(busy)return;
     setBusy(true);setMessage('');
     try{
-      const result=await window.lockOn.service.downloadInvoiceBatch(prompt.period!);
+      const result=await window.lockOn.service.downloadInvoiceBatch(prompt.period!,pointId);
       if(result.cancelled)return;
       setMessage('Pobrano '+result.downloaded+' PDF.');
       await window.lockOn.service.dismissInvoiceMonthlyPrompt(prompt.period!);
