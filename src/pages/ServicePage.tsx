@@ -134,6 +134,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [ordersBusy, setOrdersBusy] = useState(false);
   const [result, setResult] = useState<ServiceCreateOrderResult | null>(null);
   const [cardChoice, setCardChoice] = useState<{orderId:string;orderNumber:number}|null>(null);
+  const [notificationChoice, setNotificationChoice] = useState<{
+    customerId:string; orderId:string; orderNumber:number;
+    serviceUpdates:boolean; readyForPickup:boolean; quoteUpdates:boolean; messages:boolean;
+  }|null>(null);
+  const [notificationChoiceBusy, setNotificationChoiceBusy] = useState(false);
   const [cardBusy, setCardBusy] = useState(false);
   const [serviceCardBusyId, setServiceCardBusyId] = useState<string|null>(null);
   const [error, setError] = useState('');
@@ -164,6 +169,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   const pointOptions = useMemo(() => auth.points, [auth.points]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
+  useEffect(() => {
+    const nextPointId = auth.point?.id ?? auth.points[0]?.id ?? '';
+    setPointId(nextPointId);
+  }, [auth.point?.id, auth.points]);
   const canEditStatus = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
   const canCreateService = canEditStatus || effectiveRole === 'USER';
   const canSetIntakeEstimate = canCreateService;
@@ -467,8 +476,19 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           : undefined
       });
       setResult(created);
-      if(created.serviceCard?.required && created.order.orderNumber != null){
-        setCardChoice({orderId:created.order.id,orderNumber:created.order.orderNumber});
+      if(created.order.orderNumber != null){
+        let preferences = {serviceUpdates:true,readyForPickup:true,quoteUpdates:true,messages:true};
+        try{
+          preferences = await window.lockOn.customers.getNotificationPreferences(created.customer.id);
+        }catch{
+          // Nowe konto klienta ma domyślnie wszystkie powiadomienia włączone.
+        }
+        setNotificationChoice({
+          customerId:created.customer.id,
+          orderId:created.order.id,
+          orderNumber:created.order.orderNumber,
+          ...preferences
+        });
       }
       if (created.reusedDevice) {
         setNotice('Zlecenie utworzone. Rozpoznano istniejące urządzenie klienta i użyto jego karty.');
@@ -489,6 +509,27 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się utworzyć zlecenia.');
     } finally { submitBusyRef.current = false; setBusy(false); }
+  };
+
+  const saveCustomerNotificationChoice = async () => {
+    if(!notificationChoice||notificationChoiceBusy)return;
+    setNotificationChoiceBusy(true);setError('');
+    try{
+      await window.lockOn.customers.updateNotificationPreferences(notificationChoice.customerId,{
+        serviceUpdates:notificationChoice.serviceUpdates,
+        readyForPickup:notificationChoice.readyForPickup,
+        quoteUpdates:notificationChoice.quoteUpdates,
+        messages:notificationChoice.messages
+      });
+      const nextCard={orderId:notificationChoice.orderId,orderNumber:notificationChoice.orderNumber};
+      setNotificationChoice(null);
+      setNotice(notificationChoice.serviceUpdates||notificationChoice.readyForPickup
+        ? 'Preferencje powiadomień klienta zapisane.'
+        : 'Klient wybrał brak dodatkowych e-maili o przebiegu serwisu.');
+      setCardChoice(nextCard);
+    }catch(e){
+      setError(e instanceof Error?e.message:'Nie udało się zapisać preferencji powiadomień klienta.');
+    }finally{setNotificationChoiceBusy(false);}
   };
 
   const openCreatedServiceCard = async (printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY') => {
@@ -852,6 +893,34 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         </div>
       </section>
 
+      {notificationChoice && <div className="service-card-choice-backdrop service-notification-choice-backdrop" role="presentation">
+        <section className="service-notification-choice-dialog" role="dialog" aria-modal="true" aria-labelledby="service-notification-choice-title">
+          <div className="service-notification-choice-head">
+            <div className="service-card-choice-icon"><BellRing size={24}/></div>
+            <div><span>ZLECENIE #${notificationChoice.orderNumber}</span><h2 id="service-notification-choice-title">Jak klient chce dostawać informacje?</h2><p>Potwierdzenie przyjęcia z kartą PDF wysyłamy zawsze. Poniżej wybierasz dodatkowe wiadomości podczas dalszej obsługi.</p></div>
+          </div>
+          <div className="service-notification-presets">
+            <button type="button" onClick={()=>setNotificationChoice((current)=>current?{...current,serviceUpdates:true,readyForPickup:true}:current)}>
+              <MailCheck size={18}/><span><strong>Wszystkie aktualizacje</strong><small>Statusy naprawy + gotowe do odbioru.</small></span>
+            </button>
+            <button type="button" onClick={()=>setNotificationChoice((current)=>current?{...current,serviceUpdates:false,readyForPickup:true}:current)}>
+              <PackageCheck size={18}/><span><strong>Tylko gotowe do odbioru</strong><small>Bez wiadomości z każdego etapu.</small></span>
+            </button>
+            <button type="button" onClick={()=>setNotificationChoice((current)=>current?{...current,serviceUpdates:false,readyForPickup:false}:current)}>
+              <BellRing size={18}/><span><strong>Bez dodatkowych e-maili</strong><small>Tylko obowiązkowe potwierdzenie przyjęcia.</small></span>
+            </button>
+          </div>
+          <div className="service-notification-toggles">
+            <label><input type="checkbox" checked={notificationChoice.serviceUpdates} onChange={(e)=>setNotificationChoice((current)=>current?{...current,serviceUpdates:e.target.checked}:current)}/><span><strong>Postęp naprawy</strong><small>Diagnoza, części, naprawa i zmiany etapu.</small></span></label>
+            <label><input type="checkbox" checked={notificationChoice.readyForPickup} onChange={(e)=>setNotificationChoice((current)=>current?{...current,readyForPickup:e.target.checked}:current)}/><span><strong>Gotowe do odbioru</strong><small>Osobna wiadomość, gdy urządzenie czeka w punkcie.</small></span></label>
+          </div>
+          <div className="service-notification-choice-actions">
+            <small>Ustawienie zapisuje się na koncie klienta i może zostać później zmienione w jego portalu.</small>
+            <button className="button primary" disabled={notificationChoiceBusy} onClick={()=>void saveCustomerNotificationChoice()}>{notificationChoiceBusy?'Zapisywanie…':'Zapisz wybór i przejdź dalej'}</button>
+          </div>
+        </section>
+      </div>}
+
       {cardChoice && <div className="service-card-choice-backdrop" role="presentation">
         <section className="service-card-choice-dialog" role="dialog" aria-modal="true" aria-labelledby="service-card-choice-title">
           <div className="service-card-choice-icon"><Printer size={24}/></div>
@@ -1049,11 +1118,27 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       {error && <div className="service-error">{error}</div>}
 
       {tab === 'CALENDAR' && isActualTechnician && <TechnicianCalendar onOpenOrder={openOrderFromWorkspace}/>}
-      {tab === 'INVOICES' && canEditCosts && <InvoiceWarehouse/>}
+      {tab === 'INVOICES' && canEditCosts && <InvoiceWarehouse pointId={pointId} pointName={pointOptions.find((point)=>point.id===pointId)?.name ?? auth.point?.name ?? 'Punkt'}/>} 
       {tab === 'TECH_NOTES' && isActualTechnician && <TechnicianNotesRoom/>}
 
       {tab === 'NEW' && (
-        <div className="service-grid service-intake-layout">
+        <div className="service-intake-hotfix">
+          <section className="service-intake-type-top">
+            <div>
+              <span className="eyebrow"><ClipboardPlus size={13}/> KROK 1 · TYP ZLECENIA</span>
+              <h2>Co przyjmujesz?</h2>
+              <p>Najpierw wybierz typ. Potem wypełnij klienta i urządzenie tak samo prosto jak w szczegółach zlecenia.</p>
+            </div>
+            <div className="service-order-type-picker service-order-type-picker-top" role="group" aria-label="Typ zlecenia">
+              <button type="button" className={form.orderType==='REPAIR'?'active':''} onClick={()=>update('orderType','REPAIR')}>
+                <i><Wrench size={18}/></i><span><strong>Naprawa</strong><small>Standardowe przyjęcie telefonu do serwisu.</small></span>
+              </button>
+              <button type="button" className={form.orderType==='COMPLAINT'?'active':''} onClick={()=>update('orderType','COMPLAINT')}>
+                <i><RotateCcw size={18}/></i><span><strong>Reklamacja</strong><small>Reklamacja z osobnym oznaczeniem zlecenia.</small></span>
+              </button>
+            </div>
+          </section>
+          <div className="service-grid service-intake-layout service-intake-workspace-hotfix">
           <section className="panel-card service-card service-intake-panel service-intake-customer">
             <div className="panel-heading"><div><span className="eyebrow"><Search size={13}/> KLIENT</span><h2>Wyszukaj istniejącego</h2></div></div>
             <div className="service-search-row">
@@ -1104,17 +1189,6 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               <label><span>Model <em>opcjonalnie</em></span><input value={form.model} onChange={(e)=>update('model',e.target.value)} placeholder="Jeśli znasz, np. Galaxy S24"/></label>
               <label><span>IMEI <em>opcjonalnie</em></span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr, jeśli dostępny"/></label>
               <label><span>Numer seryjny <em>opcjonalnie</em></span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Jeśli dostępny"/></label>
-              <div className="service-order-type-field full">
-                <span>Typ zlecenia</span>
-                <div className="service-order-type-picker" role="group" aria-label="Typ zlecenia">
-                  <button type="button" className={form.orderType==='REPAIR'?'active':''} onClick={()=>update('orderType','REPAIR')}>
-                    <i><Wrench size={18}/></i><span><strong>Naprawa</strong><small>Standardowe przyjęcie urządzenia do serwisu.</small></span>
-                  </button>
-                  <button type="button" className={form.orderType==='COMPLAINT'?'active':''} onClick={()=>update('orderType','COMPLAINT')}>
-                    <i><RotateCcw size={18}/></i><span><strong>Reklamacja</strong><small>Obsługa reklamacyjna z właściwym przebiegiem zlecenia.</small></span>
-                  </button>
-                </div>
-              </div>
               {canSetIntakeEstimate && <label className="service-estimate-field"><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="Np. 349,00"/><small>Wstępna kwota dla klienta — można ją później doprecyzować.</small></label>}
               {canSetIntakeEta && <div className="service-intake-eta full">
                 <div className="service-field-heading"><span>Przewidywany termin</span><small>Domyślnie: do 3 dni</small></div>
@@ -1144,8 +1218,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               <label className="full"><span>Opis usterki <em>wymagane</em></span><textarea rows={6} required value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder="Np. ekran nie wyświetla obrazu, telefon dzwoni i reaguje na dotyk."/></label>
             </div>
             <button className="button primary wide service-submit" disabled={busy || !pointId} onClick={()=>void submit()}>{busy ? 'Zapisywanie…' : 'Utwórz zlecenie'}</button>
-            <small className="service-intake-email-note">Po przyjęciu klient zawsze otrzymuje e-mail z kartą serwisową PDF i bezpośrednim QR do swojego panelu.</small>
+            <small className="service-intake-email-note">Po kliknięciu „Utwórz zlecenie” wybierzesz, jakie dodatkowe powiadomienia klient chce dostawać podczas serwisu.</small>
           </section>
+          </div>
         </div>
       )}
 
