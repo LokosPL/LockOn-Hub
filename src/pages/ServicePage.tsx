@@ -161,6 +161,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
   const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
+  const [warrantyDrafts,setWarrantyDrafts]=useState<Record<string,string>>({});
+  const [orderVisibleLimit,setOrderVisibleLimit]=useState(30);
   const [servicePoints, setServicePoints] = useState<AdminPoint[]>([]);
   const [transfers, setTransfers] = useState<ServiceTransfer[]>([]);
   const [transferDrafts, setTransferDrafts] = useState<Record<string,{toPointId:string;note:string}>>({});
@@ -223,6 +225,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         : orders.filter((order)=>order.workflow?.flags.includes(orderFilter)),
     [orders,orderFilter]
   );
+  const renderedOrders = useMemo(()=>visibleOrders.slice(0,orderVisibleLimit),[visibleOrders,orderVisibleLimit]);
+  useEffect(()=>setOrderVisibleLimit(30),[orderFilter]);
 
   const brandSuggestions = useMemo(() => {
     const term = form.brand.trim().toLocaleLowerCase('pl-PL');
@@ -1230,7 +1234,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             ><span>{filter.label}</span><strong>{filter.count}</strong></button>)}
           </div>
           <div className="service-orders-list">
-            {visibleOrders.map((order) => {
+            {renderedOrders.map((order) => {
               const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
               const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
               const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
@@ -1300,6 +1304,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             })}
             {!ordersBusy && orders.length === 0 && <div className="service-empty">Brak zleceń w Twoim zakresie.</div>}
             {!ordersBusy && orders.length > 0 && visibleOrders.length === 0 && <div className="service-empty">Brak zleceń w wybranej sekcji.</div>}
+            {renderedOrders.length<visibleOrders.length&&<button className="button secondary service-load-more" onClick={()=>setOrderVisibleLimit((value)=>value+30)}>Pokaż kolejne 30 · pozostało {visibleOrders.length-renderedOrders.length}</button>}
           </div>
         </section>
       )}
