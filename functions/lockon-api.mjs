@@ -2608,9 +2608,10 @@ const conversationPayload = async (userId) => {
     [userId]
   )).rows[0] || await getOrCreateConversation(userId);
   const { rows } = await q(
-    'SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 200',
+    'SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at DESC LIMIT 200',
     [conversation.id]
   );
+  rows.reverse();
   return {
     id: conversation.id,
     status: conversation.status,
@@ -5674,7 +5675,7 @@ const route = async (request) => {
       : await q("SELECT sc.*,usr.name AS user_name,usr.email AS user_email,usr.role_code AS user_role,p.name AS point_name,ass.name AS assigned_name,ass.email AS assigned_email,ass.role_code AS assigned_role FROM support_conversations sc JOIN users usr ON usr.id=sc.user_id LEFT JOIN points p ON p.id=sc.point_id LEFT JOIN users ass ON ass.id=sc.assigned_support_user_id WHERE sc.consultant_requested_at IS NOT NULL AND sc.point_id=ANY($1::text[]) AND sc.user_id<>$2 ORDER BY CASE WHEN sc.status='OPEN' THEN 0 ELSE 1 END,sc.updated_at DESC LIMIT 200",[ids,u.id]);
     const tickets=[];
     for(const row of rows){
-      const messages=(await q("SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 AND (metadata->>'target'='CONSULTANT' OR sender_kind='SUPPORT' OR (sender_kind='USER' AND metadata->>'target' IS NULL AND $2::timestamptz IS NOT NULL AND created_at >= $2::timestamptz)) ORDER BY created_at ASC LIMIT 200",[row.id,row.consultant_joined_at||row.taken_at||null])).rows;
+      const messages=(await q("SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 AND (metadata->>'target'='CONSULTANT' OR sender_kind='SUPPORT' OR (sender_kind='USER' AND metadata->>'target' IS NULL AND $2::timestamptz IS NOT NULL AND created_at >= $2::timestamptz)) ORDER BY created_at DESC LIMIT 200",[row.id,row.consultant_joined_at||row.taken_at||null])).rows.reverse();
       tickets.push({id:row.id,userId:row.user_id,userName:supportIdentityName(row.user_name,row.user_email,row.user_role),userEmail:supportIdentityEmail(row.user_email,row.user_role),pointId:row.point_id,pointName:row.point_name||'Brak punktu',status:row.status,assignedSupportUserId:row.assigned_support_user_id||null,assignedSupportName:row.assigned_support_user_id?supportIdentityName(row.assigned_name,row.assigned_email,row.assigned_role):null,consultantRequestedAt:row.consultant_requested_at||null,consultantJoinedAt:row.consultant_joined_at||row.taken_at||null,createdAt:row.created_at,updatedAt:row.updated_at,messages:messages.map(supportMessageView)});
     }
     return json(request,tickets);
