@@ -662,6 +662,32 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     }
   };
 
+  const saveWarranty = async (order:ServiceOrderSummary) => {
+    if(orderBusyId)return;
+    const months=Number(warrantyDrafts[order.id] ?? order.warrantyMonths ?? '');
+    if(!Number.isInteger(months)||months<1||months>60){setError('Podaj okres gwarancji od 1 do 60 miesięcy.');return;}
+    setOrderBusyId(order.id);setError('');setNotice('');
+    try{
+      const updated=await window.lockOn.service.saveWarranty(order.id,months);
+      setOrders((current)=>current.map((item)=>item.id===order.id?updated:item));
+      setWarrantyDrafts((current)=>({...current,[order.id]:String(months)}));
+      setNotice('Okres gwarancji zapisany. Teraz wydrukuj kartę gwarancyjną.');
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się zapisać gwarancji.');}
+    finally{setOrderBusyId(null);}
+  };
+
+  const printWarrantyCard = async (order:ServiceOrderSummary) => {
+    if(orderBusyId)return;
+    setOrderBusyId(order.id);setError('');setNotice('');
+    try{
+      await window.lockOn.service.openWarrantyCard(order.id);
+      const refreshed=(await window.lockOn.service.listOrders()).find((item)=>item.id===order.id);
+      if(refreshed)setOrders((current)=>current.map((item)=>item.id===order.id?refreshed:item));
+      setNotice('Karta gwarancyjna została otwarta. Dołącz wydruk do urządzenia — zlecenie można teraz oznaczyć jako gotowe do odbioru.');
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się przygotować karty gwarancyjnej.');}
+    finally{setOrderBusyId(null);}
+  };
+
   const addOrderNote = async (orderId: string) => {
     if (orderBusyId) return;
     const body = (noteDrafts[orderId] ?? '').trim();
