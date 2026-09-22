@@ -9,6 +9,7 @@ import { MonthlyInvoicePrompt } from '../components/MonthlyInvoicePrompt';
 import { OrderCostingCard } from '../components/OrderCostingCard';
 import { TechnicianCalendar } from '../components/TechnicianCalendar';
 import { TechnicianNotesRoom } from '../components/TechnicianNotesRoom';
+import { useAppDialog } from '../components/AppDialog';
 import type {
   AdminPoint,
   AuthState,
@@ -119,6 +120,7 @@ const isTransferredToService = (order: ServiceOrderSummary) =>
 type ServiceTab = 'CALENDAR' | 'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAILS' | 'INVOICES' | 'TECH_NOTES';
 
 export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
+  const {confirm}=useAppDialog();
   const isActualTechnician = auth.role === 'TECHNICIAN';
   const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'NEW');
   const [form, setForm] = useState<ServiceIntakeForm>(() => makeEmptyForm());
@@ -133,6 +135,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [busy, setBusy] = useState(false);
   const submitBusyRef = useRef(false);
   const [ordersBusy, setOrdersBusy] = useState(false);
+  const ordersLoadedRef = useRef(false);
+  const [ordersVisibleLimit,setOrdersVisibleLimit]=useState(28);
   const [result, setResult] = useState<ServiceCreateOrderResult | null>(null);
   const [cardChoice, setCardChoice] = useState<{orderId:string;orderNumber:number}|null>(null);
   const [notificationChoice, setNotificationChoice] = useState<{
@@ -169,6 +173,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [quoteNoteDrafts, setQuoteNoteDrafts] = useState<Record<string,string>>({});
 
   const pointOptions = useMemo(() => auth.points, [auth.points]);
+  const pointAccessSet = useMemo(() => new Set(pointOptions.map((point)=>point.id)), [pointOptions]);
   const [pointId, setPointId] = useState(auth.point?.id ?? auth.points[0]?.id ?? '');
   useEffect(() => {
     const nextPointId = auth.point?.id ?? auth.points[0]?.id ?? '';
@@ -221,6 +226,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         : orders.filter((order)=>order.workflow?.flags.includes(orderFilter)),
     [orders,orderFilter]
   );
+  const renderedOrders=useMemo(()=>visibleOrders.slice(0,ordersVisibleLimit),[visibleOrders,ordersVisibleLimit]);
+  useEffect(()=>{setOrdersVisibleLimit(28);},[orderFilter]);
 
   const brandSuggestions = useMemo(() => {
     const term = form.brand.trim().toLocaleLowerCase('pl-PL');
@@ -240,6 +247,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     setOrdersBusy(true);
     try {
       setOrders(await window.lockOn.service.listOrders());
+      ordersLoadedRef.current=true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się pobrać zleceń.');
     } finally {
@@ -375,8 +383,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   useEffect(() => {
+    if(tab!=='ORDERS'||ordersLoadedRef.current)return;
     void loadOrders();
-  }, []);
+  }, [tab]);
+
+  useEffect(() => {
+    if(!focusOrderId||ordersLoadedRef.current)return;
+    void loadOrders();
+  }, [focusOrderId]);
 
   useEffect(() => {
     if (!canHandleCustomerQuotes || tab !== 'QUOTES') return;
@@ -953,7 +967,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const notes = orderNotes[order.id] ?? [];
         const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
         const pointTechnicians = currentServicePointId ? (techniciansByPoint[currentServicePointId] ?? []) : [];
-        const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
+        const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(currentServicePointId));
         const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
         const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
         const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
@@ -1140,7 +1154,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               <div className="service-order-type-picker service-order-type-picker-v3" role="group" aria-label="Typ zlecenia">
                 <button type="button" onClick={()=>{update('orderType','REPAIR');setIntakeStage('DETAILS');}}>
                   <i><Wrench size={22}/></i>
-                  <span><strong>Naprawa</strong><small>Standardowe przyjęcie urządzenia do serwisu.</small></span>
+                  <span><strong>Nowe zlecenie</strong><small>Standardowe przyjęcie urządzenia do naprawy.</small></span>
                   <b>→</b>
                 </button>
                 <button type="button" onClick={()=>{update('orderType','COMPLAINT');setIntakeStage('DETAILS');}}>
@@ -1226,7 +1240,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             ><span>{filter.label}</span><strong>{filter.count}</strong></button>)}
           </div>
           <div className="service-orders-list">
-            {visibleOrders.map((order) => {
+            {renderedOrders.map((order) => {
               const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
               const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointOptions.some((point)=>point.id===currentServicePointId));
               const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
@@ -1296,6 +1310,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             })}
             {!ordersBusy && orders.length === 0 && <div className="service-empty">Brak zleceń w Twoim zakresie.</div>}
             {!ordersBusy && orders.length > 0 && visibleOrders.length === 0 && <div className="service-empty">Brak zleceń w wybranej sekcji.</div>}
+            {!ordersBusy && renderedOrders.length < visibleOrders.length && <div className="service-orders-load-more"><button className="button secondary" onClick={()=>setOrdersVisibleLimit((value)=>value+28)}>Pokaż kolejne {Math.min(28,visibleOrders.length-renderedOrders.length)} zleceń</button><small>Wyświetlam {renderedOrders.length} z {visibleOrders.length}. Mniejszy pakiet odciąża słabsze komputery.</small></div>}
           </div>
         </section>
       )}
