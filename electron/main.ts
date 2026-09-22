@@ -1198,6 +1198,16 @@ const registerIpc = () => {
       body: JSON.stringify(payload)
     }, token);
   });
+  secureHandle('service:updatePlan', async (orderId: string, payload: any) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/plan`, {
+      method: 'POST',
+      body: JSON.stringify({
+        estimatedCompletionAt: payload?.estimatedCompletionAt == null ? null : String(payload.estimatedCompletionAt).slice(0,64),
+        targetIndex: Math.max(0, Math.min(500, Number(payload?.targetIndex) || 0))
+      })
+    }, token);
+  });
   secureHandle('service:updateStatus', async (orderId: string, status: string, note?: string, actingPointId?: string) => {
     const token = requireSessionToken();
     return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/status`, {
