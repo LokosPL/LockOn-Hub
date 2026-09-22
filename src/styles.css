@@ -4822,7 +4822,6 @@ input,textarea,select{line-height:1.45}
   border-bottom:1px solid var(--border);
   background:rgba(255,255,255,.018);
 }
-.service-order-more[open]>summary>b::after{content:"ęte"}
 .service-order-more-body{
   display:grid;
   grid-template-columns:minmax(0,1fr) minmax(0,1fr);
