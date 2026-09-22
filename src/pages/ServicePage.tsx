@@ -1205,7 +1205,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               </div>
             </section>
           ) : (
-            <section className="service-intake-details-card">
+            <div className="service-order-details-backdrop service-intake-details-backdrop" role="presentation" onMouseDown={()=>setIntakeStage('TYPE')}>
+            <section className="service-intake-details-card service-intake-details-dialog" role="dialog" aria-modal="true" aria-label={form.orderType==='COMPLAINT'?'Nowa reklamacja':'Nowe zlecenie'} onMouseDown={(event)=>event.stopPropagation()}>
               <header className="service-intake-details-head">
                 <div>
                   <button type="button" className="service-intake-back" onClick={()=>setIntakeStage('TYPE')}>← Zmień typ</button>
@@ -1259,6 +1260,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                 <button className="button primary service-submit service-submit-v2" disabled={busy||!pointId} onClick={()=>void submit()}>{busy?'Tworzę zlecenie…':'Utwórz zlecenie'}</button>
               </footer>
             </section>
+            </div>
           )}
         </div>
       )}
