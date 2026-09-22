@@ -1492,9 +1492,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         ) : canEditOrderHere && order.handlingMode === 'TRANSFER_ONLY' ? (
                           <div className="transfer-only-status"><span className="status-badge">Tylko przekazanie</span>{order.status !== 'CANCELLED' && <button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button>}</div>
                         ) : canEditOrderHere ? (
-                          <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e) => void changeStatus(order, e.target.value)}>
-                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && (order.canMarkReady===false || order.status!=='REPAIR_DONE' || !order.warrantyReady)) || (value==='COMPLETED' && order.status!=='READY')}>{label}</option>)}
-                          </select>
+                          <div className="service-status-readonly">
+                            <span className="status-badge">{order.statusLabel}</span>
+                            <small>Etap zmienisz w „Szczegółach”.</small>
+                          </div>
                         ) : (
                           <div className="service-status-readonly">
                             <span className="status-badge">{order.handlingMode==='TRANSFER_ONLY' && order.status!=='CANCELLED' ? 'Tylko przekazanie' : order.statusLabel}</span>
