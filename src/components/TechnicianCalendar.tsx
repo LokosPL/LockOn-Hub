@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import {
-  CalendarDays, ChevronLeft, ChevronRight, Clock3, GripVertical, PackageCheck,
+  CalendarDays, ChevronLeft, ChevronRight, Clock3, GripVertical, MailCheck, PackageCheck,
   RefreshCw, Smartphone, Wrench
 } from 'lucide-react';
 import type { ServiceOrderSummary, TechnicianWorkspace } from '../types/electron';
@@ -31,6 +31,7 @@ export function TechnicianCalendar({onOpenOrder}:Props){
   const [moving,setMoving]=useState('');
   const [dragging,setDragging]=useState('');
   const [dropTarget,setDropTarget]=useState('');
+  const [dropIndex,setDropIndex]=useState<number|null>(null);
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
 
@@ -53,7 +54,11 @@ export function TechnicianCalendar({onOpenOrder}:Props){
       const date=new Date(order.estimatedCompletionAt); if(Number.isNaN(date.getTime()))continue;
       const key=dayKey(date); const list=result.get(key)??[]; list.push(order); result.set(key,list);
     }
-    for(const list of result.values())list.sort((a,b)=>(a.workflow?.sortRank??50)-(b.workflow?.sortRank??50));
+    for(const list of result.values())list.sort((a,b)=>{
+      const aPos=Number(a.planPosition||0),bPos=Number(b.planPosition||0);
+      if(aPos||bPos)return (aPos||999999)-(bPos||999999);
+      return (a.workflow?.sortRank??50)-(b.workflow?.sortRank??50);
+    });
     return result;
   },[data]);
 
@@ -63,28 +68,59 @@ export function TechnicianCalendar({onOpenOrder}:Props){
   const waitingParts=(data?.orders??[]).filter((order)=>order.status==='WAITING_PARTS');
   const ready=(data?.orders??[]).filter((order)=>['REPAIR_DONE','READY'].includes(order.status));
 
-  const moveOrder=async(orderId:string,target:string|null)=>{
+  const moveOrder=async(orderId:string,target:string|null,targetIndex=999)=>{
     if(moving)return;
     const current=data?.orders.find((item)=>item.id===orderId); if(!current)return;
+    const oldDay=current.estimatedCompletionAt?dayKey(new Date(current.estimatedCompletionAt)):null;
+    const dateChanged=oldDay!==target;
     setMoving(orderId);setError('');setNotice('');
     try{
-      const updated=await window.lockOn.service.updateDetails(orderId,{estimatedCompletionAt:target?apiDate(target):null});
-      setData((state)=>state?{...state,orders:state.orders.map((item)=>item.id===orderId?{...item,...updated}:item)}:state);
+      const result=await window.lockOn.service.updatePlan(orderId,{
+        estimatedCompletionAt:target?apiDate(target):null,
+        targetIndex
+      });
+      const refreshed=await window.lockOn.service.getTechnicianWorkspace();
+      setData(refreshed);
       if(target)setSelected(target);
-      setNotice(target?`#${updated.orderNumber} przeniesiono na ${new Date(target+'T12:00:00').toLocaleDateString('pl-PL')}.`:`#${updated.orderNumber} przeniesiono do „Bez terminu”.`);
-    }catch(reason){setError(reason instanceof Error?reason.message:'Nie udało się zmienić terminu.');}
-    finally{setMoving('');setDragging('');setDropTarget('');}
+      const moved=result.order??current;
+      const dateLabel=target?new Date(target+'T12:00:00').toLocaleDateString('pl-PL',{weekday:'long',day:'2-digit',month:'long'}):'Bez terminu';
+      if(dateChanged){
+        const delivery=result.notification;
+        const mailSuffix=delivery?.sent
+          ? ' Klient dostał e-mail o nowym terminie.'
+          : delivery?.queued
+            ? ' Wiadomość do klienta została dodana do kolejki.'
+            : delivery?.reason==='NO_CUSTOMER_EMAIL'
+              ? ' Klient nie ma adresu e-mail.'
+              : delivery?.reason==='CUSTOMER_PREF_DISABLED'
+                ? ' Klient ma wyłączone aktualizacje e-mail.'
+                : '';
+        setNotice(`#${moved.orderNumber} przeniesiono: ${dateLabel}.${mailSuffix}`);
+      }else{
+        setNotice(`Kolejność na ${dateLabel} została zapisana.`);
+      }
+    }catch(reason){setError(reason instanceof Error?reason.message:'Nie udało się zmienić planu pracy.');}
+    finally{setMoving('');setDragging('');setDropTarget('');setDropIndex(null);}
   };
 
   const dropHandlers=(target:string|null)=>({
-    onDragOver:(event:DragEvent)=>{event.preventDefault();if(dragging)setDropTarget(target??'NO_DATE');},
-    onDragLeave:()=>{if(dropTarget===(target??'NO_DATE'))setDropTarget('');},
-    onDrop:(event:DragEvent)=>{event.preventDefault();void moveOrder(event.dataTransfer.getData('text/service-order')||dragging,target);}
+    onDragOver:(event:DragEvent)=>{event.preventDefault();if(dragging){setDropTarget(target??'NO_DATE');setDropIndex(null);}},
+    onDragLeave:()=>{if(dropTarget===(target??'NO_DATE')&&dropIndex===null)setDropTarget('');},
+    onDrop:(event:DragEvent)=>{
+      event.preventDefault();
+      const id=event.dataTransfer.getData('text/service-order')||dragging;
+      const endIndex=target?(byDay.get(target)??[]).filter((order)=>order.id!==id).length:0;
+      void moveOrder(id,target,endIndex);
+    }
+  });
+  const orderDropHandlers=(index:number)=>({
+    onDragOver:(event:DragEvent)=>{event.preventDefault();event.stopPropagation();if(dragging){setDropTarget(selected);setDropIndex(index);}},
+    onDrop:(event:DragEvent)=>{event.preventDefault();event.stopPropagation();const id=event.dataTransfer.getData('text/service-order')||dragging;void moveOrder(id,selected,index);}
   });
   const dragProps=(order:ServiceOrderSummary)=>({
     draggable:!moving,
     onDragStart:(event:DragEvent)=>{event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/service-order',order.id);setDragging(order.id);},
-    onDragEnd:()=>{setDragging('');setDropTarget('');}
+    onDragEnd:()=>{setDragging('');setDropTarget('');setDropIndex(null);}
   });
 
   const shiftWeek=(offset:number)=>setWeekStart((current)=>{const next=new Date(current);next.setDate(next.getDate()+offset);return next;});
@@ -95,8 +131,8 @@ export function TechnicianCalendar({onOpenOrder}:Props){
     <header className="workplan-head">
       <div>
         <span className="eyebrow"><CalendarDays size={13}/> PLAN PRACY</span>
-        <h2>Twój tydzień bez kombinowania.</h2>
-        <p>Kliknij dzień, zobacz kolejkę i przeciągnij zlecenie na inną datę. Bez dodatkowych okien.</p>
+        <h2>Twój tydzień — dokładnie w Twojej kolejności.</h2>
+        <p>Przeciągaj telefon między dniami, a w obrębie dnia złap za uchwyt i ułóż: co robisz pierwsze, drugie i następne. Zmiana dnia automatycznie aktualizuje termin i wysyła klientowi e-mail.</p>
       </div>
       <div className="workplan-head-actions">
         <button className="button small secondary" onClick={()=>shiftWeek(-7)} title="Poprzedni tydzień"><ChevronLeft size={15}/></button>
@@ -107,7 +143,7 @@ export function TechnicianCalendar({onOpenOrder}:Props){
     </header>
 
     {error&&<div className="service-inline-error">{error}</div>}
-    {notice&&<div className="service-inline-success">{notice}</div>}
+    {notice&&<div className="service-inline-success workplan-notice"><MailCheck size={15}/>{notice}</div>}
 
     <div className="workplan-kpis">
       <div><Smartphone size={16}/><span>Aktywne</span><strong>{data?.counts.active??0}</strong></div>
@@ -119,7 +155,7 @@ export function TechnicianCalendar({onOpenOrder}:Props){
     <div className="workplan-days">
       {days.map((day)=>{
         const key=dayKey(day), count=(byDay.get(key)??[]).length, isToday=key===todayKey, active=key===selected;
-        return <button key={key} className={(active?'active ':'')+(isToday?'today ':'')+(dropTarget===key?'drop-target':'')} onClick={()=>setSelected(key)} {...dropHandlers(key)}>
+        return <button key={key} className={(active?'active ':'')+(isToday?'today ':'')+(dropTarget===key&&dropIndex===null?'drop-target':'')} onClick={()=>setSelected(key)} {...dropHandlers(key)}>
           <span>{day.toLocaleDateString('pl-PL',{weekday:'short'})}</span>
           <strong>{day.toLocaleDateString('pl-PL',{day:'2-digit'})}</strong>
           <small>{count} {count===1?'zlecenie':'zleceń'}</small>
@@ -129,16 +165,20 @@ export function TechnicianCalendar({onOpenOrder}:Props){
 
     <div className="workplan-focus">
       <div className="workplan-focus-head">
-        <div><span>WYBRANY DZIEŃ</span><h3>{selectedDate.toLocaleDateString('pl-PL',{weekday:'long',day:'2-digit',month:'long'})}</h3></div>
+        <div><span>WYBRANY DZIEŃ · PRZECIĄGNIJ, ABY UŁOŻYĆ KOLEJNOŚĆ</span><h3>{selectedDate.toLocaleDateString('pl-PL',{weekday:'long',day:'2-digit',month:'long'})}</h3></div>
         <b>{selectedOrders.length}</b>
       </div>
       <div className="workplan-list" {...dropHandlers(selected)}>
-        {selectedOrders.map((order)=><button key={order.id} className={'workplan-order '+statusTone(order)+(dragging===order.id?' dragging':'')} onClick={()=>onOpenOrder(order)} disabled={moving===order.id} {...dragProps(order)}>
-          <GripVertical size={15}/>
-          <span className="workplan-order-no">#{order.orderNumber}</span>
-          <span className="workplan-order-copy"><strong>{device(order)}</strong><small>{order.customerName}</small></span>
-          <span className="workplan-order-state"><strong>{order.workflow?.attentionLabel||order.statusLabel}</strong><small>{order.workflow?.nextAction||'Otwórz szczegóły'}</small></span>
-        </button>)}
+        {selectedOrders.map((order,index)=><div key={order.id} className={dropIndex===index&&dragging!==order.id?'workplan-drop-slot active':'workplan-drop-slot'} {...orderDropHandlers(index)}>
+          <button className={'workplan-order '+statusTone(order)+(dragging===order.id?' dragging':'')} onClick={()=>onOpenOrder(order)} disabled={moving===order.id} {...dragProps(order)}>
+            <GripVertical className="workplan-drag-handle" size={16}/>
+            <span className="workplan-order-position">{index+1}</span>
+            <span className="workplan-order-no">#{order.orderNumber}</span>
+            <span className="workplan-order-copy"><strong>{device(order)}</strong><small>{order.customerName}</small></span>
+            <span className="workplan-order-state"><strong>{order.workflow?.attentionLabel||order.statusLabel}</strong><small>{order.workflow?.nextAction||'Otwórz szczegóły'}</small></span>
+          </button>
+        </div>)}
+        {dragging&&selectedOrders.length>0&&<div className={dropIndex===selectedOrders.length?'workplan-drop-end active':'workplan-drop-end'} onDragOver={(event)=>{event.preventDefault();event.stopPropagation();setDropTarget(selected);setDropIndex(selectedOrders.length);}} onDrop={(event)=>{event.preventDefault();event.stopPropagation();const id=event.dataTransfer.getData('text/service-order')||dragging;void moveOrder(id,selected,selectedOrders.filter((order)=>order.id!==id).length);}}>Upuść tutaj, aby zrobić na końcu</div>}
         {!selectedOrders.length&&<div className="workplan-empty"><CalendarDays size={25}/><strong>Ten dzień jest wolny</strong><span>Upuść tutaj zlecenie albo wybierz inny dzień.</span></div>}
       </div>
     </div>
