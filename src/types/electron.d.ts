@@ -55,7 +55,7 @@ export interface TechnicianSettlementSettings { configured:boolean; technicianPe
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
 export interface WeatherData { city:string; region?:string|null; country?:string|null; temperature:number; apparentTemperature:number; minTemperature:number; maxTemperature:number; windSpeed:number; weatherCode:number; condition:string; fetchedAt:string; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
-export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; handlingMode:'STANDARD'|'COMPLAINT_FLOW'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
+export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; originalOrderId?:string|null; handlingMode:'STANDARD'|'COMPLAINT_FLOW'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
 export interface ServiceWorkflow {
   stageNumber:number; stageTotal:number; stageLabel:string;
   nextActionCode:string; nextAction:string;
@@ -66,7 +66,7 @@ export interface ServiceWorkflow {
 export interface ServiceOrderSummary extends ServiceOrder {
   pointName:string; homePointName?:string; currentPointName?:string|null; currentLocationLabel?:string|null;
   returnRequired?:boolean; canMarkReady?:boolean; openTransfer?:ServiceTransfer|null;
-  customerName:string; customerEmail?:string|null; customerPhone?:string|null;
+  customerName:string; customerFirstName?:string; customerLastName?:string; customerEmail?:string|null; customerPhone?:string|null;
   brand:string; model:string; imei?:string|null; serialNumber?:string|null; deviceNotes?:string|null;
   statusLabel:string; assignedTechnicianId?:string|null; assignedTechnicianName?:string|null; assignedTechnicianEmail?:string|null;
   estimatedCost?:number|null; finalCost?:number|null; currency?:string; estimatedCompletionAt?:string|null; planPosition?:number;
@@ -213,13 +213,14 @@ declare global {
       data: { getDashboard: () => Promise<DashboardData>; getWeather: (city:string) => Promise<WeatherData>; };
       service: {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
+        searchOrders: (query:string) => Promise<ServiceOrderSummary[]>;
         getCustomer: (customerId:string) => Promise<ServiceCustomerDetail>;
         listTechnicians: (pointId:string) => Promise<ServiceTechnician[]>;
         listServicePoints: () => Promise<AdminPoint[]>;
         listTransfers: (incoming?:boolean,status?:string) => Promise<ServiceTransfer[]>;
         transferOrder: (orderId:string,payload:{toPointId?:string;note?:string;kind?:ServiceTransfer['kind']}) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
         updateTransferStatus: (transferId:string,status:ServiceTransfer['status'],note?:string) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
-        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand?:string;model?:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string|null}) => Promise<ServiceCreateOrderResult>;
+        createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand?:string;model?:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';originalOrderId?:string;assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string|null}) => Promise<ServiceCreateOrderResult>;
         openServiceCard: (orderId:string,printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY') => Promise<ServiceCardOpenResult>;
         updateWarranty: (orderId:string,payload:{months:number;repairSummary:string}) => Promise<ServiceWarrantyUpdateResult>;
         openWarrantyCard: (orderId:string) => Promise<ServiceWarrantyCardOpenResult>;
