@@ -1161,7 +1161,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               </div>
               <button className="button secondary small service-order-details-back" title="Wróć do listy" onClick={()=>setExpandedOrderId(null)}>← Wróć do zleceń</button>
             </header>
-            <div className="service-order-workspace">
+            <div className={`service-order-workspace ${effectiveRole==='USER'?'service-order-workspace-frontdesk':''}`}>
                       {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
 
                       <section className="service-order-keyfacts">
