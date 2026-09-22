@@ -1168,7 +1168,7 @@ const handle = async (req, res) => {
   if(method==='GET'&&url.pathname==='/service/invoices'){
     const user=requireActive(req,res);if(!user)return;
     if(!SERVICE_EDIT_ROLES.has(user.role))return json(res,403,{error:'SERVICE_FINANCE_FORBIDDEN'});
-    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    const pointId=cleanText(url.searchParams.get('pointId'),80)||String(user.activePointId||user.pointIds?.[0]||''); 
     if(!pointId)return json(res,400,{error:'INVOICE_POINT_REQUIRED',message:'Wybierz punkt dla magazynu faktur.'});
     if(!canSeePoint(user,pointId))return json(res,403,{error:'POINT'});
     return json(res,200,{period:cleanText(url.searchParams.get('month')||new Date().toISOString().slice(0,7),7),pointId,invoices:[]});
@@ -1186,7 +1186,7 @@ const handle = async (req, res) => {
     const user=requireActive(req,res);if(!user)return;
     if(!SERVICE_EDIT_ROLES.has(user.role))return json(res,403,{error:'SERVICE_FINANCE_FORBIDDEN'});
     const body=await readBody(req);
-    const pointId=cleanText(body.pointId,80);
+    const pointId=cleanText(body.pointId,80)||String(user.activePointId||user.pointIds?.[0]||'');
     if(!pointId)return json(res,400,{error:'INVOICE_POINT_REQUIRED'});
     if(!canSeePoint(user,pointId))return json(res,403,{error:'POINT'});
     return json(res,200,{period:cleanText(body.period,7),pointId,files:[],expiresInSeconds:0});
