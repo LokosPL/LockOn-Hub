@@ -1140,7 +1140,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           </section>
           <div className="service-grid service-intake-layout service-intake-workspace-hotfix">
           <section className="panel-card service-card service-intake-panel service-intake-customer">
-            <div className="panel-heading"><div><span className="eyebrow"><Search size={13}/> KLIENT</span><h2>Wyszukaj istniejącego</h2></div></div>
+            <div className="panel-heading"><div><span className="eyebrow"><Search size={13}/> KROK 2 · KLIENT</span><h2>Klient</h2><p>Wyszukaj istniejącego albo wpisz dane nowego klienta.</p></div></div>
             <div className="service-search-row">
               <input value={query} onChange={(e)=>setQuery(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') void search(); }} placeholder="Nazwisko, email lub telefon"/>
               <button className="button secondary" disabled={searchBusy||query.trim().length<2} onClick={()=>void search()}><Search className={searchBusy?'spin':''} size={14}/>{searchBusy?' Szukam…':' Szukaj'}</button>
@@ -1159,7 +1159,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           </section>
 
           <section className="panel-card service-card service-intake-panel service-intake-device">
-            <div className="panel-heading"><div><span className="eyebrow"><Smartphone size={13}/> URZĄDZENIE I ZLECENIE</span><h2>Telefon, usterka i ustalenia</h2><p>Wpisz tylko to, co wiesz. Marka, model i numery są opcjonalne — opis usterki jest najważniejszy.</p></div></div>
+            <div className="panel-heading"><div><span className="eyebrow"><Smartphone size={13}/> KROK 3 · URZĄDZENIE</span><h2>Telefon, usterka i ustalenia</h2><p>Wpisz tylko to, co wiesz. Marka, model i numery są opcjonalne — opis usterki jest najważniejszy.</p></div></div>
             <div className="service-form-grid service-intake-grid">
               <label className="service-brand-field">
                 <span>Marka <em>opcjonalnie</em></span>
