@@ -434,11 +434,33 @@ jobs:
           api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-outbound.json
           node -e "const d=require('./scan-outbound.json');if(d.scanAction!=='SERVICE_ACCEPTED')throw new Error('Outbound transfer was not accepted by scan')"
 
+          # 1.0.0.15: gwarancja pozostaje zablokowana aż do fizycznego powrotu urządzenia.
           api POST "/service/orders/$order_id/status" '{"status":"REPAIR_DONE","note":"CI temp smoke"}' > repair-done.json
           node -e "const d=require('./repair-done.json');if(d.order?.status!=='REPAIR_DONE')throw new Error('Could not mark repair done at service point')"
 
+          set +e
+          warranty_before_return_http="$(curl --silent --show-error --output warranty-before-return.json --write-out '%{http_code}' \
+            --request POST "$TEMP_API_URL/service/orders/$order_id/warranty" \
+            --header "Authorization: Bearer $token" \
+            --header "Content-Type: application/json" \
+            --data '{"months":6,"repairSummary":"Nie wolno przed fizycznym powrotem"}')"
+          set -e
+          [ "$warranty_before_return_http" = "409" ] || { echo "::error::Warranty was allowed before physical return: HTTP $warranty_before_return_http"; cat warranty-before-return.json; exit 1; }
+          node -e "const d=require('./warranty-before-return.json');if(d.error!=='RETURN_REQUIRED')throw new Error('Warranty before return did not use RETURN_REQUIRED: '+JSON.stringify(d))"
+
           api POST "/service/orders/$order_id/transfer" '{"kind":"RETURN_HOME","note":"CI temp smoke return before warranty"}' > return-home.json
           api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
+
+          set +e
+          warranty_in_transit_http="$(curl --silent --show-error --output warranty-in-transit.json --write-out '%{http_code}' \
+            --request POST "$TEMP_API_URL/service/orders/$order_id/warranty" \
+            --header "Authorization: Bearer $token" \
+            --header "Content-Type: application/json" \
+            --data '{"months":6,"repairSummary":"Nie wolno w transporcie"}')"
+          set -e
+          [ "$warranty_in_transit_http" = "409" ] || { echo "::error::Warranty was allowed during transfer: HTTP $warranty_in_transit_http"; cat warranty-in-transit.json; exit 1; }
+          node -e "const d=require('./warranty-in-transit.json');if(d.error!=='DEVICE_IN_TRANSFER')throw new Error('Warranty in transfer did not use DEVICE_IN_TRANSFER: '+JSON.stringify(d))"
+
           api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-return-before-warranty.json
           node - <<'NODE'
           const d=require('./scan-return-before-warranty.json');
