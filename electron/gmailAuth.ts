@@ -262,7 +262,7 @@ const performGmailConnect = async (pointId: string): Promise<GmailConnectionStat
         code_challenge_method: 'S256',
         access_type: 'offline',
         prompt: 'consent',
-        include_granted_scopes: 'true'
+        include_granted_scopes: 'false'
       });
       if (preferredEmail) params.set('login_hint', preferredEmail);
       authUrl.search = params.toString();
