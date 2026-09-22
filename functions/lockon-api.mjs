@@ -4471,7 +4471,7 @@ const route = async (request) => {
       notification=await sendCustomerPortalEventEmail({
         customerId:found.customer_id,
         pointId:found.point_id,
-        preference:'serviceUpdates',
+        preference:'mandatory',
         subject:'LockOn ServiceOS · zmiana przewidywanego terminu',
         title:'Przewidywany termin Twojego zlecenia został zmieniony',
         message:'Nowy przewidywany termin zlecenia #'+found.order_number+': '+target.toLocaleDateString('pl-PL',{timeZone:'Europe/Warsaw'})+'. Aktualny status zawsze sprawdzisz w panelu klienta.'
@@ -4637,7 +4637,7 @@ const route = async (request) => {
       etaNotification=await sendCustomerPortalEventEmail({
         customerId:found.customer_id,
         pointId:found.point_id,
-        preference:'serviceUpdates',
+        preference:'mandatory',
         subject:'LockOn ServiceOS · zmiana przewidywanego terminu',
         title:'Przewidywany termin Twojego zlecenia został zmieniony',
         message:'Nowy przewidywany termin: '+estimatedCompletionAt.toLocaleDateString('pl-PL',{timeZone:'Europe/Warsaw'})+'. Aktualne informacje znajdziesz w panelu klienta.'
