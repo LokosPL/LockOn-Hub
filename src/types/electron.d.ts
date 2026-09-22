@@ -69,7 +69,8 @@ export interface ServiceOrderSummary extends ServiceOrder {
   customerName:string; customerEmail?:string|null; customerPhone?:string|null;
   brand:string; model:string; imei?:string|null; serialNumber?:string|null; deviceNotes?:string|null;
   statusLabel:string; assignedTechnicianId?:string|null; assignedTechnicianName?:string|null; assignedTechnicianEmail?:string|null;
-  estimatedCost?:number|null; finalCost?:number|null; currency?:string; estimatedCompletionAt?:string|null;
+  estimatedCost?:number|null; finalCost?:number|null; currency?:string; estimatedCompletionAt?:string|null; workQueuePosition?:number;
+  warrantyMonths?:number|null; warrantyIssuedAt?:string|null; warrantyExpiresAt?:string|null; warrantyCardPrintedAt?:string|null; warrantyReady?:boolean;
   completedAt?:string|null; createdAt?:string; updatedAt?:string;
   workflow?:ServiceWorkflow;
   latestTransfer?:ServiceTransfer|null; transfers?:ServiceTransfer[];
@@ -236,6 +237,11 @@ declare global {
         listTechnicianNotes: () => Promise<TechnicianPrivateNote[]>;
         addTechnicianNote: (payload:{title?:string;body:string;pinned?:boolean}) => Promise<TechnicianPrivateNote>;
         deleteTechnicianNote: (noteId:string) => Promise<{ok:true}>;
+        updateTechnicianNote: (noteId:string,payload:{title?:string;body:string;pinned?:boolean}) => Promise<TechnicianPrivateNote>;
+        updateSchedule: (orderId:string,payload:{estimatedCompletionAt:string;position?:number}) => Promise<{order:ServiceOrderSummary;notification?:NotificationRetryResult}>;
+        reorderTechnicianDay: (date:string,orderIds:string[]) => Promise<{ok:true;orderIds:string[]}>;
+        saveWarranty: (orderId:string,months:number) => Promise<ServiceOrderSummary>;
+        openWarrantyCard: (orderId:string) => Promise<{opened:boolean;filePath:string;fileName:string;warranty?:{months:number;issuedAt:string;expiresAt:string}}>;
         updateDetails: (orderId:string,payload:{imei?:string;serialNumber?:string;deviceNotes?:string;assignedTechnicianId?:string|null;estimatedCost?:number|string|null;finalCost?:number|string|null;estimatedCompletionAt?:string|null}) => Promise<ServiceOrderSummary>;
         updateStatus: (orderId:string,status:string,note?:string,actingPointId?:string) => Promise<ServiceStatusResult>;
         listCustomerQuotes: (pointId?:string) => Promise<CustomerQuoteRequest[]>;

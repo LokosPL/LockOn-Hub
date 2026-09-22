@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { appConfirm, appPrompt } from '../appDialog';
 import {
   Activity,
   AlertTriangle,
@@ -363,9 +364,12 @@ export function AdministrationPage({ focusUserId = null }: AdministrationPagePro
   };
 
   const blockUser = async (user: AdminUser, blocked: boolean) => {
-    const confirmed = window.confirm(blocked
-      ? `Zablokować konto ${user.name} (${user.email})? Użytkownik zostanie natychmiast wylogowany ze wszystkich urządzeń.`
-      : `Odblokować konto ${user.name} (${user.email})?`);
+    const confirmed = await appConfirm({
+      title: blocked ? 'Zablokować konto?' : 'Odblokować konto?',
+      message: blocked ? `${user.name} (${user.email}) zostanie natychmiast wylogowany ze wszystkich urządzeń.` : `${user.name} (${user.email}) odzyska dostęp zgodnie z przypisaną rolą.`,
+      confirmLabel: blocked ? 'Zablokuj konto' : 'Odblokuj konto',
+      tone: blocked ? 'danger' : 'default'
+    });
     if (!confirmed) return;
     const reason = blocked ? 'Ręczna blokada konta przez właściciela' : '';
     setBusy(true); setNotice('');
@@ -381,7 +385,7 @@ export function AdministrationPage({ focusUserId = null }: AdministrationPagePro
   };
 
   const logoutUser = async (user: AdminUser) => {
-    if (!window.confirm(`Wylogować konto ${user.email} ze wszystkich urządzeń?`)) return;
+    if (!await appConfirm({title:'Wylogować konto?',message:`Wszystkie aktywne sesje ${user.email} zostaną unieważnione.`,confirmLabel:'Wyloguj wszędzie',tone:'danger'})) return;
     setBusy(true); setNotice('');
     try {
       const result = await window.lockOn.admin.logoutUserSessions(user.id);
@@ -393,7 +397,7 @@ export function AdministrationPage({ focusUserId = null }: AdministrationPagePro
   };
 
   const logoutEveryone = async () => {
-    if (!window.confirm('Wylogować wszystkich użytkowników ze wszystkich urządzeń? Twoja bieżąca sesja pozostanie aktywna.')) return;
+    if (!await appConfirm({title:'Wylogować wszystkich użytkowników?',message:'Wszystkie aktywne sesje poza Twoją bieżącą sesją OWNER zostaną unieważnione.',confirmLabel:'Wyloguj wszystkich',tone:'danger'})) return;
     setBusy(true); setNotice('');
     try {
       const result = await window.lockOn.admin.logoutAllSessions(true);
@@ -456,14 +460,10 @@ export function AdministrationPage({ focusUserId = null }: AdministrationPagePro
         `rozliczenia: ${counts.revenues ?? 0}`,
         `sesje: ${counts.sessions ?? 0}`
       ].join('\n');
-      if (!window.confirm('Factory reset usunie wszystkie dane biznesowe z produkcyjnej bazy ServiceOS.\n\nAktualny stan:\n' + summary + '\n\nSchemat, role, migracje, wiedza systemowa i dziennik resetów pozostaną. Kontynuować?')) return;
-      const phrase = window.prompt('Wpisz dokładnie frazę:\n\nUSUŃ WSZYSTKIE DANE');
+      if (!await appConfirm({title:'Factory reset danych produkcyjnych',message:'Ta operacja usunie dane biznesowe z produkcyjnej bazy ServiceOS. Aktualny stan:\n'+summary+'\n\nSchemat, role, migracje, wiedza systemowa i dziennik resetów pozostaną.',confirmLabel:'Przejdź dalej',tone:'danger'})) return;
+      const phrase = await appPrompt({title:'Potwierdzenie factory reset',message:'To zabezpieczenie przed przypadkowym usunięciem danych.',confirmLabel:'Potwierdź frazę',tone:'danger',input:{label:'Wpisz dokładnie',requiredText:'USUŃ WSZYSTKIE DANE',placeholder:'USUŃ WSZYSTKIE DANE'}});
       if (phrase === null) return;
-      if (phrase !== 'USUŃ WSZYSTKIE DANE') {
-        setNotice('Reset anulowany: fraza potwierdzająca nie jest identyczna.');
-        return;
-      }
-      if (!window.confirm('OSTATECZNE POTWIERDZENIE\n\nPo kliknięciu OK dane pokazane powyżej zostaną nieodwracalnie usunięte.')) return;
+      if (!await appConfirm({title:'Ostateczne potwierdzenie',message:'Dane pokazane w podsumowaniu zostaną nieodwracalnie usunięte. Tej operacji nie można cofnąć.',confirmLabel:'Usuń dane produkcyjne',tone:'danger'})) return;
       const result = await window.lockOn.admin.factoryReset({
         phrase,
         confirmed:true,

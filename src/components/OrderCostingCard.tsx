@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { appConfirm } from '../appDialog';
 import { Calculator, Download, FileText, PackagePlus, ReceiptText, Save, Trash2, Upload } from 'lucide-react';
 import type { ServiceCosting, ServiceInvoice, ServiceOrderPart, ServiceOrderSummary } from '../types/electron';
 
@@ -134,7 +135,7 @@ export function OrderCostingCard({ order, disabled=false }:Props) {
 
   const removeInvoice=async(invoice:ServiceInvoice)=>{
     if(busy||disabled)return;
-    if(!window.confirm('Usunąć fakturę „'+invoice.fileName+'” z magazynu?'))return;
+    if(!await appConfirm({title:'Usunąć fakturę?',message:'„'+invoice.fileName+'” zostanie usunięta z magazynu.',confirmLabel:'Usuń fakturę',tone:'danger'}))return;
     setBusy('delete:'+invoice.id);setError('');setNotice('');
     try{
       await window.lockOn.service.deleteInvoice(invoice.id);

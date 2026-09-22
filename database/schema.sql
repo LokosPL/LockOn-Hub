@@ -124,6 +124,11 @@ CREATE TABLE IF NOT EXISTS service_orders (
   currency char(3) NOT NULL DEFAULT 'PLN',
   received_at timestamptz NOT NULL DEFAULT now(),
   completed_at timestamptz,
+  warranty_months integer CHECK (warranty_months IS NULL OR warranty_months BETWEEN 1 AND 60),
+  warranty_issued_at timestamptz,
+  warranty_expires_at timestamptz,
+  warranty_card_printed_at timestamptz,
+  work_queue_position integer NOT NULL DEFAULT 1000,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );

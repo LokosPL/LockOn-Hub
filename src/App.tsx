@@ -18,6 +18,7 @@ import { ServicePage } from './pages/ServicePage';
 import type { AuthState, HelpAction } from './types/electron';
 import { ROLE_DEFINITIONS, roleCanNavigate, type UserRole } from './config/roles';
 import { applyStoredUiPreferences } from './uiPreferences';
+import { AppDialogHost } from './components/AppDialogHost';
 
 const view = new URLSearchParams(window.location.search).get('view');
 
@@ -133,6 +134,7 @@ export default function App() {
     || '';
 
   return (
+    <>
     <div className="app-shell">
       <TitleBar pointName={pointName} />
       <div className="app-body">
@@ -186,5 +188,7 @@ export default function App() {
         <UpdatePrompt />
       </div>
     </div>
+    <AppDialogHost />
+    </>
   );
 }

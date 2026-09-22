@@ -2,7 +2,7 @@ name: Temp Neon integration smoke
 
 on:
   push:
-    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "feature/service-intake-automation-*", "fix/service-card-*"]
+    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "feature/service-intake-automation-*", "feature/service-warranty-workflow-*", "fix/service-card-*"]
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
@@ -388,6 +388,45 @@ jobs:
             --header "Content-Type: application/json" \
             --data "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$customer_code")" > customer-login.json
           customer_token="$(node -e "const d=require('./customer-login.json');if(!d.sessionToken)throw new Error('Customer portal login failed');process.stdout.write(d.sessionToken)")"
+
+          # Warranty workflow: READY must be blocked until period is saved and card is rendered.
+          api POST "/service/orders/$order_id/status" '{"status":"DIAGNOSIS"}' > warranty-status-1.json
+          api POST "/service/orders/$order_id/status" '{"status":"IN_REPAIR"}' > warranty-status-2.json
+          api POST "/service/orders/$order_id/status" '{"status":"REPAIR_DONE"}' > warranty-status-3.json
+          ready_code="$(curl --silent --show-error --output warranty-ready-blocked.json --write-out '%{http_code}' \
+            --request POST "$TEMP_API_URL/service/orders/$order_id/status" \
+            --header "Authorization: Bearer $token" --header "Content-Type: application/json" \
+            --data '{"status":"READY"}')"
+          test "$ready_code" = "409"
+          node -e "const d=require('./warranty-ready-blocked.json');if(d.error!=='WARRANTY_CARD_REQUIRED')throw new Error('READY was not gated by warranty card')"
+
+          api POST "/service/orders/$order_id/warranty" '{"months":6}' > warranty-save.json
+          node -e "const d=require('./warranty-save.json');if(d.warrantyMonths!==6||d.warrantyReady!==false)throw new Error('Warranty period was not staged correctly')"
+          api POST "/service/orders/$order_id/warranty-card" '{}' > warranty-card.json
+          node - <<'NODE'
+          const fs=require('fs'),d=require('./warranty-card.json');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Warranty card is not a real PDF');
+          if(!d.warranty?.expiresAt||d.warranty?.months!==6)throw new Error('Warranty dates missing');
+          fs.writeFileSync('warranty-card.pdf',pdf);
+          NODE
+          pdfinfo warranty-card.pdf > warranty-pdfinfo.txt
+          grep -q '^Pages:[[:space:]]*1' warranty-pdfinfo.txt || { echo "::error::Warranty card is not one page"; exit 1; }
+          pdftotext -layout warranty-card.pdf warranty-card.txt
+          grep -Fqi 'Karta gwarancyjna' warranty-card.txt || { echo "::error::Warranty card title missing"; exit 1; }
+          grep -Fqi '6 mies.' warranty-card.txt || { echo "::error::Warranty period missing from PDF"; exit 1; }
+          grep -Fqi 'Kod klienta' warranty-card.txt || { echo "::error::Customer code missing from warranty PDF"; exit 1; }
+
+          api POST "/service/orders/$order_id/status" '{"status":"READY"}' > warranty-ready.json
+          node -e "const d=require('./warranty-ready.json');if(d.order?.status!=='READY'||d.order?.warrantyReady!==true)throw new Error('READY did not unlock after warranty card')"
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/public/customer-portal/me" \
+            --header "Authorization: Bearer $customer_token" > warranty-portal.json
+          node - <<'NODE' "$order_id"
+          const d=require('./warranty-portal.json'),id=process.argv[2];
+          const order=d.orders.find(x=>x.id===id);
+          if(!order?.warranty||order.warranty.months!==6||typeof order.warranty.daysRemaining!=='number')throw new Error('Customer portal warranty status missing');
+          NODE
+
           curl --silent --show-error --fail-with-body \
             "$TEMP_API_URL/public/customer-portal/orders/$order_id/service-card" \
             --header "Authorization: Bearer $customer_token" > customer-card.json

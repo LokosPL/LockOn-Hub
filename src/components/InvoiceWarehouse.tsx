@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { appConfirm } from '../appDialog';
 import {
   Building2, CalendarDays, ChevronLeft, ChevronRight, Download, FileArchive,
   FileText, RefreshCw, Search, Trash2
@@ -53,7 +54,7 @@ export function InvoiceWarehouse({pointId,pointName,points=[],onPointChange}:Pro
     finally{setBusy('');}
   };
   const remove=async(invoice:ServiceInvoice)=>{
-    if(busy||!window.confirm(`Usunąć fakturę „${invoice.fileName}” z magazynu punktu ${pointName}?`))return;
+    if(busy)return; if(!await appConfirm({title:'Usunąć fakturę?',message:`„${invoice.fileName}” zostanie usunięta z magazynu punktu ${pointName}.`,confirmLabel:'Usuń fakturę',tone:'danger'}))return;
     setBusy('delete:'+invoice.id);setError('');
     try{await window.lockOn.service.deleteInvoice(invoice.id);setInvoices((current)=>current.filter((item)=>item.id!==invoice.id));setNotice('Faktura usunięta.');}
     catch(reason){setError(reason instanceof Error?reason.message:'Nie udało się usunąć faktury.');}
