@@ -4667,3 +4667,28 @@ input,textarea,select{line-height:1.45}
   .service-warranty-controls{grid-template-columns:1fr}
   .service-stage-select{grid-template-columns:1fr}
 }
+
+
+/* ServiceOS 1.0.14 — unified intake, repair stages, warranty and lightweight notes */
+.service-intake-type-dialog{max-width:920px;width:min(920px,calc(100vw - 44px))}
+.service-intake-type-dialog .service-intake-type-screen{padding:18px 22px 28px}
+.service-repair-stage-rail{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:12px 0}
+.service-repair-stage-rail span{border:1px solid var(--border);border-radius:10px;padding:7px 8px;font-size:11px;font-weight:700;line-height:1.2;color:var(--muted);background:var(--surface-2)}
+.service-repair-stage-rail span.done{border-color:rgba(34,197,94,.34);color:var(--text);background:rgba(34,197,94,.08)}
+.service-repair-stage-rail span.current{border-color:rgba(59,130,246,.6);color:var(--text);background:rgba(59,130,246,.12);box-shadow:0 0 0 1px rgba(59,130,246,.12) inset}
+.service-repair-stage-rail span.next{border-style:dashed;color:var(--text)}
+.service-warranty-controls{align-items:end}
+.service-warranty-repair-summary{grid-column:1/-1;min-width:0}
+.service-warranty-repair-summary textarea{width:100%;resize:vertical;min-height:76px}
+.notes-details-editor{display:grid;gap:12px}
+.notes-details-editor label{display:grid;gap:6px}
+.notes-details-editor label>span{font-size:11px;font-weight:800;letter-spacing:.02em;color:var(--muted)}
+.notes-details-editor input,.notes-details-editor textarea{width:100%}
+.notes-details-editor textarea{resize:vertical;min-height:220px}
+.notes-details-editor .notes-pin{display:flex;align-items:center;gap:8px;width:max-content}
+.notes-details-editor .notes-pin input{width:auto}
+.notes-details-actions>div{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+@media (max-width:760px){
+  .service-repair-stage-rail{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .service-intake-type-dialog{width:min(96vw,920px)}
+}
