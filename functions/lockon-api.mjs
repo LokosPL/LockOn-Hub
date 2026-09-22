@@ -954,6 +954,8 @@ const serviceInvoiceView = (row) => ({
   id:row.id,
   orderId:row.service_order_id,
   orderNumber:row.order_number==null?null:Number(row.order_number),
+  pointId:row.point_id||null,
+  pointName:row.point_name||null,
   customerName:row.customer_name||null,
   device:row.device_label||null,
   fileName:row.file_name,
@@ -1042,21 +1044,21 @@ const monthlyInvoicePromptPeriod = () => {
   return null;
 };
 
-const listAccessibleInvoices = async (user, period) => {
+const listAccessibleInvoices = async (user, period, pointId) => {
   if(!SERVICE_EDIT_ROLES.has(user.role_code)) throw Object.assign(new Error('Brak dostępu do magazynu faktur.'),{status:403,code:'SERVICE_FINANCE_FORBIDDEN'});
   const bounds=invoicePeriodBounds(period);
   if(!bounds) throw Object.assign(new Error('Nieprawidłowy miesiąc.'),{status:400,code:'INVOICE_PERIOD'});
-  const params=[bounds.start,bounds.end];
-  let access='';
+  const safePointId=cleanText(pointId,80);
+  if(!safePointId) throw Object.assign(new Error('Wybierz punkt dla magazynu faktur.'),{status:400,code:'INVOICE_POINT_REQUIRED'});
+  await requirePoint(user,safePointId);
+  const params=[bounds.start,bounds.end,safePointId];
+  let access=' AND s.point_id=$3';
   if(user.role_code==='TECHNICIAN'){
     params.push(user.id);
-    access=' AND s.assigned_technician_id=$3';
-  }else if(!GLOBAL_ROLES.has(user.role_code)){
-    params.push(user.id);
-    access=" AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$3 AND a.point_id=s.point_id) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$3 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id))";
+    access+=' AND s.assigned_technician_id=$4';
   }
   const {rows}=await q(
-    "SELECT i.*,s.order_number,(c.first_name||' '||c.last_name) AS customer_name,(d.brand||' '||d.model) AS device_label,u.name AS uploaded_by_name,u.email AS uploaded_by_email,u.role_code AS uploaded_by_role FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.status='READY' AND COALESCE(i.invoice_date,i.created_at::date)>=$1::date AND COALESCE(i.invoice_date,i.created_at::date)<$2::date"+access+" ORDER BY COALESCE(i.invoice_date,i.created_at::date) DESC,i.created_at DESC LIMIT 300",
+    "SELECT i.*,s.order_number,s.point_id,p.name AS point_name,(c.first_name||' '||c.last_name) AS customer_name,(d.brand||' '||d.model) AS device_label,u.name AS uploaded_by_name,u.email AS uploaded_by_email,u.role_code AS uploaded_by_role FROM service_order_invoices i JOIN service_orders s ON s.id=i.service_order_id JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users u ON u.id=i.uploaded_by_user_id WHERE i.status='READY' AND COALESCE(i.invoice_date,i.created_at::date)>=$1::date AND COALESCE(i.invoice_date,i.created_at::date)<$2::date"+access+" ORDER BY COALESCE(i.invoice_date,i.created_at::date) DESC,i.created_at DESC LIMIT 300",
     params
   );
   return rows.map(serviceInvoiceView);
@@ -3227,6 +3229,27 @@ const route = async (request) => {
     return json(request,{ok:true,recipient:customer.email,messageId:sent.id});
   }
 
+  const customerNotificationPrefsMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/notification-preferences$/);
+  if((method==='GET'||method==='POST')&&customerNotificationPrefsMatch){
+    const session=await requireActive(request),u=session.user;
+    const customer=await requireCustomerAccountAccess(u,customerNotificationPrefsMatch[1]);
+    const current=await customerNotificationPreferences(customer.id);
+    if(method==='GET')return json(request,current);
+    const body=await readJson(request);
+    const preferences={
+      serviceUpdates:body.serviceUpdates===undefined?current.serviceUpdates:body.serviceUpdates===true,
+      readyForPickup:body.readyForPickup===undefined?current.readyForPickup:body.readyForPickup===true,
+      quoteUpdates:body.quoteUpdates===undefined?current.quoteUpdates:body.quoteUpdates===true,
+      messages:body.messages===undefined?current.messages:body.messages===true
+    };
+    await q(
+      "INSERT INTO customer_portal_accounts(customer_id,notify_service_updates,notify_ready_for_pickup,notify_quote_updates,notify_messages,updated_at) VALUES($1,$2,$3,$4,$5,now()) ON CONFLICT(customer_id) DO UPDATE SET notify_service_updates=EXCLUDED.notify_service_updates,notify_ready_for_pickup=EXCLUDED.notify_ready_for_pickup,notify_quote_updates=EXCLUDED.notify_quote_updates,notify_messages=EXCLUDED.notify_messages,updated_at=now()",
+      [customer.id,preferences.serviceUpdates,preferences.readyForPickup,preferences.quoteUpdates,preferences.messages]
+    );
+    await audit(session,'CUSTOMER_NOTIFICATION_PREFERENCES_UPDATED','customer',customer.id,null,{preferences});
+    return json(request,{ok:true,preferences});
+  }
+
   const customerAccountProfileMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/profile$/);
   if(method==='POST'&&customerAccountProfileMatch){
     const session=await requireActive(request),u=session.user;
@@ -4237,7 +4260,8 @@ const route = async (request) => {
   if(method==='GET'&&url.pathname==='/service/invoices'){
     const session=await requireActive(request),u=session.user;
     const period=cleanText(url.searchParams.get('month'),7)||nowIso().slice(0,7);
-    return json(request,{period,invoices:await listAccessibleInvoices(u,period)});
+    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    return json(request,{period,pointId,invoices:await listAccessibleInvoices(u,period,pointId)});
   }
 
   if(method==='GET'&&url.pathname==='/service/invoices/monthly-prompt'){
@@ -4245,7 +4269,9 @@ const route = async (request) => {
     if(u.role_code!=='TECHNICIAN')return json(request,{show:false,period:null,count:0,dismissed:false});
     const period=monthlyInvoicePromptPeriod();
     if(!period)return json(request,{show:false,period:null,count:0,dismissed:false});
-    const invoices=await listAccessibleInvoices(u,period);
+    const activePointId=session.activePointId||u.point_ids?.[0]||null;
+    if(!activePointId)return json(request,{show:false,period,count:0,dismissed:false});
+    const invoices=await listAccessibleInvoices(u,period,activePointId);
     const bounds=invoicePeriodBounds(period);
     const dismissed=(await q('SELECT 1 FROM invoice_monthly_prompt_dismissals WHERE user_id=$1 AND period_month=$2::date LIMIT 1',[u.id,bounds.start])).rowCount>0;
     return json(request,{show:invoices.length>0&&!dismissed,period,count:invoices.length,dismissed});
@@ -4264,7 +4290,8 @@ const route = async (request) => {
   if(method==='POST'&&url.pathname==='/service/invoices/download-batch'){
     const session=await requireActive(request),u=session.user,body=await readJson(request);
     const period=cleanText(body.period,7);
-    const invoices=await listAccessibleInvoices(u,period);
+    const pointId=cleanText(body.pointId,80);
+    const invoices=await listAccessibleInvoices(u,period,pointId);
     const storage=requireInvoiceStorage();
     const files=[];
     for(const invoice of invoices){
@@ -4277,8 +4304,8 @@ const route = async (request) => {
       }),{expiresIn:SERVICE_INVOICE_URL_TTL_SECONDS});
       files.push({...invoice,downloadUrl:url});
     }
-    await audit(session,'SERVICE_INVOICE_BATCH_DOWNLOADED','invoice_period',period,null,{count:files.length});
-    return json(request,{period,files,expiresInSeconds:SERVICE_INVOICE_URL_TTL_SECONDS});
+    await audit(session,'SERVICE_INVOICE_BATCH_DOWNLOADED','invoice_period',period,pointId,{count:files.length,pointId});
+    return json(request,{period,pointId,files,expiresInSeconds:SERVICE_INVOICE_URL_TTL_SECONDS});
   }
 
   const invoiceDownloadMatch=url.pathname.match(/^\/service\/invoices\/([^/]+)\/download-intent$/);
