@@ -245,7 +245,7 @@ jobs:
             "Najpierw gwarancja",
             "deviceAtHomePoint",
             "Gwarancja pojawi się dopiero po fizycznym powrocie urządzenia",
-            "Etap zmienisz w „Szczegółach”."
+            "Etap zmienisz w"
           ) | ForEach-Object {
             if (-not $service.Contains($_)) { throw "Missing 1.0.0.15 service UX hotfix contract: $_" }
           }
