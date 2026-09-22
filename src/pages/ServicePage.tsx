@@ -122,7 +122,7 @@ type ServiceTab = 'CALENDAR' | 'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAI
 export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
   const {confirm}=useAppDialog();
   const isActualTechnician = auth.role === 'TECHNICIAN';
-  const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'NEW');
+  const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'ORDERS');
   const [form, setForm] = useState<ServiceIntakeForm>(() => makeEmptyForm());
   const [intakeStage, setIntakeStage] = useState<'TYPE'|'DETAILS'>('TYPE');
   const [brandOpen, setBrandOpen] = useState(false);
@@ -157,6 +157,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryItem[]>([]);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const [stageMenuOrderId, setStageMenuOrderId] = useState<string | null>(null);
   const [orderHistories, setOrderHistories] = useState<Record<string, ServiceStatusHistoryItem[]>>({});
   const [orderNotes, setOrderNotes] = useState<Record<string, ServiceOrderNote[]>>({});
   const [customerCards, setCustomerCards] = useState<Record<string, ServiceCustomerDetail>>({});
@@ -311,6 +312,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     }
 
     setExpandedOrderId(order.id);
+    setStageMenuOrderId(null);
     setDetailsDrafts((current) => ({
       ...current,
       [order.id]: current[order.id] ?? {
@@ -664,6 +666,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     try {
       const updated = await window.lockOn.service.updateStatus(order.id, status, undefined, pointId);
       setOrders((current) => current.map((item) => item.id === order.id ? updated.order : item));
+      setStageMenuOrderId(null);
       if (orderHistories[order.id]) {
         const history = await window.lockOn.service.getHistory(order.id);
         setOrderHistories((current) => ({ ...current, [order.id]: history }));
@@ -1076,14 +1079,27 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const card = customerCards[order.customerId];
         const notes = orderNotes[order.id] ?? [];
         const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
+        const homePointId = order.homePointId || order.pointId;
         const pointTechnicians = currentServicePointId ? (techniciansByPoint[currentServicePointId] ?? []) : [];
         const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(currentServicePointId));
         const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
         const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
         const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
         const canUseOrderFinance = canEditCosts && (!isActualTechnician || order.assignedTechnicianId === auth.user?.id);
-        const stageSteps=['Przyjęto','Diagnoza','Oczekiwanie na decyzję / części','Naprawa','Testy','Zakończono naprawę','Gotowe do odbioru','Wydano'];
-        const stageIndex=({RECEIVED:0,DIAGNOSIS:1,WAITING_PARTS:2,IN_REPAIR:3,REPAIR_DONE:5,READY:6,COMPLETED:7} as Record<string,number>)[order.status] ?? 0;
+        const deviceAtHomePoint = Boolean(currentServicePointId) && currentServicePointId === homePointId && !order.openTransfer;
+        const canHandleWarrantyHere = canEditOrderHere && deviceAtHomePoint;
+        const primaryNextStatus = ({
+          RECEIVED:'DIAGNOSIS',
+          DIAGNOSIS:'IN_REPAIR',
+          WAITING_PARTS:'IN_REPAIR',
+          IN_REPAIR:'REPAIR_DONE',
+          REPAIR_DONE:'READY',
+          READY:'COMPLETED'
+        } as Record<string,string|undefined>)[order.status] ?? null;
+        const primaryNextLabel = primaryNextStatus
+          ? statuses.find(([value])=>value===primaryNextStatus)?.[1] ?? 'Następny etap'
+          : null;
+        const readyBlocked = primaryNextStatus==='READY' && (!order.warrantyReady || !canHandleWarrantyHere);
         return <div className="service-order-details-backdrop" role="presentation" onMouseDown={()=>setExpandedOrderId(null)}>
           <section className="service-order-details-dialog" role="dialog" aria-modal="true" aria-label={`Szczegóły zlecenia #${order.orderNumber}`} onMouseDown={(event)=>event.stopPropagation()}>
             <header className="service-order-details-header">
@@ -1098,28 +1114,42 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
 
                       <section className="service-workspace-card service-stage-card">
-                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Etap naprawy</strong><span>Naprawa, testy, gwarancja i wydanie w jednym czytelnym przebiegu.</span></div></div>
+                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Etap naprawy</strong><span>Widzisz tylko to, co trzeba zrobić teraz. Pozostałe etapy są pod „Inny etap”.</span></div></div>
                         <div className="service-stage-overview">
                           <div className="service-stage-progress"><span style={{width:`${order.workflow?.progressPercent ?? 10}%`}}/></div>
-                          <div className="service-repair-stage-rail">
-                            {stageSteps.map((label,index)=><span key={label} className={index<stageIndex?'done':index===stageIndex?'current':index===stageIndex+1?'next':''}>{label}</span>)}
-                          </div>
-                          <div className="service-stage-meta">
-                            <div><span>Aktualny status</span><strong>{order.statusLabel}</strong></div>
-                            <div><span>Następny krok</span><strong>{order.workflow?.nextAction || 'Sprawdź szczegóły zlecenia.'}</strong></div>
-                            <div><span>Termin</span><strong>{order.estimatedCompletionAt?new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL'):'Nie podano'}</strong></div>
-                            <div><span>Lokalizacja</span><strong>{order.currentLocationLabel || order.currentPointName || order.pointName}</strong></div>
+                          <div className="service-stage-focus">
+                            <div className="current">
+                              <span>Teraz</span>
+                              <strong>{order.statusLabel}</strong>
+                              <small><MapPin size={12}/>{order.currentLocationLabel || order.currentPointName || order.pointName}</small>
+                            </div>
+                            <div className="next">
+                              <span>Następny krok</span>
+                              <strong>{order.workflow?.nextAction || primaryNextLabel || 'Brak kolejnego etapu.'}</strong>
+                              <small><CalendarClock size={12}/>{order.estimatedCompletionAt?new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL'):'Bez ustalonego terminu'}</small>
+                            </div>
                           </div>
                         </div>
-                        {canEditOrderHere ? <label className="service-stage-select">
-                          <span>Zmień etap</span>
-                          <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e)=>void changeStatus(order,e.target.value)}>
-                            {statuses.map(([value,label])=><option key={value} value={value} disabled={(value==='READY'&&(order.status!=='REPAIR_DONE'||order.canMarkReady===false||!order.warrantyReady))||(value==='COMPLETED'&&order.status!=='READY')}>{label}</option>)}
-                          </select>
-                        </label> : <div className="service-history-empty">Etap może zmienić użytkownik obsługujący aktualny punkt urządzenia.</div>}
+                        {canEditOrderHere ? <div className="service-stage-actions">
+                          {primaryNextStatus && <button
+                            type="button"
+                            className="button primary service-stage-primary"
+                            disabled={Boolean(orderBusyId)||readyBlocked}
+                            onClick={()=>void changeStatus(order,primaryNextStatus)}
+                          ><CheckCircle2 size={14}/>{readyBlocked?'Najpierw gwarancja':primaryNextLabel}</button>}
+                          {order.status==='DIAGNOSIS' && <button type="button" className="button secondary" disabled={Boolean(orderBusyId)} onClick={()=>void changeStatus(order,'WAITING_PARTS')}><Clock3 size={14}/> Czekamy na decyzję / części</button>}
+                          <button type="button" className="button secondary service-stage-more-button" disabled={Boolean(orderBusyId)} onClick={()=>setStageMenuOrderId((current)=>current===order.id?null:order.id)}><Settings2 size={14}/> Inny etap</button>
+                        </div> : <div className="service-stage-location-lock"><MapPin size={14}/><span>Etap zmienisz dopiero w punkcie, w którym fizycznie znajduje się urządzenie.</span></div>}
+                        {order.status==='REPAIR_DONE' && !deviceAtHomePoint && <div className="service-stage-location-lock warranty-lock"><ShieldCheck size={14}/><span>Gwarancja pojawi się dopiero po fizycznym powrocie urządzenia do punktu macierzystego.</span></div>}
+                        {stageMenuOrderId===order.id && canEditOrderHere && <div className="service-stage-choice-grid" aria-label="Inne etapy zlecenia">
+                          {statuses.filter(([value])=>value!==order.status).map(([value,label])=>{
+                            const disabled=(value==='READY'&&(order.status!=='REPAIR_DONE'||order.canMarkReady===false||!order.warrantyReady||!deviceAtHomePoint))||(value==='COMPLETED'&&order.status!=='READY');
+                            return <button type="button" key={value} className={value==='CANCELLED'||value==='REJECTED'?'danger':''} disabled={disabled||Boolean(orderBusyId)} onClick={()=>void changeStatus(order,value)}>{label}</button>;
+                          })}
+                        </div>}
                       </section>
 
-                      {order.handlingMode!=='TRANSFER_ONLY' && (
+                      {order.handlingMode!=='TRANSFER_ONLY' && deviceAtHomePoint && ['REPAIR_DONE','READY','COMPLETED'].includes(order.status) && (
                         <section className={`service-workspace-card service-warranty-card ${order.warrantyReady?'ready':''}`}>
                           <div className="service-workspace-title"><ShieldCheck size={15}/><div><strong>Gwarancja po naprawie</strong><span>Wymagana przed oznaczeniem urządzenia jako gotowe do odbioru.</span></div></div>
                           <div className="service-warranty-status">
@@ -1132,8 +1162,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             <div className="service-warranty-controls">
                               <label><span>Gwarancja (miesiące)</span><input type="number" min="1" max="60" step="1" value={warrantyDrafts[order.id]??''} onChange={(e)=>setWarrantyDrafts((current)=>({...current,[order.id]:e.target.value.replace(/\D/g,'').slice(0,2)}))} placeholder="np. 3 lub 6"/></label>
                               <label className="service-warranty-repair-summary"><span>Wykonana naprawa</span><textarea rows={3} maxLength={2000} value={warrantyRepairDrafts[order.id]??''} onChange={(e)=>setWarrantyRepairDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="Np. wymiana wyświetlacza, czyszczenie i test funkcjonalny"/></label>
-                              <button className="button secondary small" disabled={warrantyBusyId===order.id||!(warrantyRepairDrafts[order.id]??'').trim()} onClick={()=>void saveWarranty(order)}><Save size={13}/> Zapisz gwarancję</button>
-                              <button className="button primary small" disabled={warrantyBusyId===order.id||!order.warrantyMonths||!order.repairSummary} onClick={()=>void openWarrantyCard(order)}><Printer size={13}/> Wygeneruj / drukuj kartę</button>
+                              <button className="button secondary small" disabled={!canHandleWarrantyHere||warrantyBusyId===order.id||!(warrantyRepairDrafts[order.id]??'').trim()} onClick={()=>void saveWarranty(order)}><Save size={13}/> Zapisz gwarancję</button>
+                              <button className="button primary small" disabled={!canHandleWarrantyHere||warrantyBusyId===order.id||!order.warrantyMonths||!order.repairSummary} onClick={()=>void openWarrantyCard(order)}><Printer size={13}/> Wygeneruj / drukuj kartę</button>
                             </div>
                             <small className="service-warranty-hint">{order.warrantyReady
                               ? 'Gotowe — karta została przygotowana. Możesz teraz ustawić „Gotowe do odbioru”.'
@@ -1146,6 +1176,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </section>
                       )}
 
+                      <details className="service-order-more">
+                        <summary><Settings2 size={16}/><div><strong>Więcej szczegółów zlecenia</strong><span>Urządzenie, koszty, logistyka, dokumenty, klient, notatki i historia.</span></div><b>Rozwiń</b></summary>
+                        <div className="service-order-more-body">
                       {draft && (
                         <section className="service-workspace-card">
                           <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
@@ -1262,6 +1295,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         ))}
                         {(orderHistories[order.id] ?? []).length === 0 && <div className="service-history-empty">Brak zapisanych zmian statusu.</div>}
                       </section>
+                        </div>
+                      </details>
                     </div>
           </section>
         </div>;
