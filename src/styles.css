@@ -4536,3 +4536,8 @@ input,textarea,select{line-height:1.45}
   .notes-details-dialog{width:calc(100vw - 20px)}
   .notes-details-actions{align-items:stretch;flex-direction:column}
 }
+
+.workplan-drop-slot>.workplan-order{width:100%}
+.workplan-drop-slot>.workplan-order{
+  grid-template-columns:17px 24px 48px minmax(150px,1fr) minmax(180px,.85fr)
+}
