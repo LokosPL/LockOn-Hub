@@ -443,11 +443,13 @@ jobs:
           [ "$ready_without_warranty_http" = "409" ] || { echo "::error::READY was not blocked before warranty: HTTP $ready_without_warranty_http"; cat ready-without-warranty.json; exit 1; }
           node -e "const d=require('./ready-without-warranty.json');if(d.error!=='WARRANTY_REQUIRED')throw new Error('READY rejection did not use WARRANTY_REQUIRED')"
 
-          api POST "/service/orders/$order_id/warranty" '{"months":6}' > warranty.json
+          api POST "/service/orders/$order_id/warranty" '{"months":6,"repairSummary":"Wymiana modułu wyświetlacza i test funkcjonalny CI"}' > warranty.json
           node - <<'NODE'
           const d=require('./warranty.json');
           if(d.warranty?.months!==6)throw new Error('Warranty months were not saved');
           if(!d.warranty?.startedAt||!d.warranty?.expiresAt)throw new Error('Warranty dates were not created');
+          if(d.warranty?.repairSummary!=='Wymiana modułu wyświetlacza i test funkcjonalny CI')throw new Error('Repair summary was not saved with warranty');
+          if(!d.warranty?.warrantyCardNumber?.startsWith('GW-'))throw new Error('Warranty card number missing');
           if(d.order?.warrantyReady!==false)throw new Error('Warranty must not be ready before card print');
           NODE
 
@@ -467,12 +469,28 @@ jobs:
           grep -Fqi 'Karta gwarancyjna naprawy' warranty-card.txt || { echo "::error::Warranty title missing from PDF"; exit 1; }
           grep -Fqi 'Kod klienta' warranty-card.txt || { echo "::error::Customer code missing from warranty PDF"; exit 1; }
           grep -Fqi '6 mies.' warranty-card.txt || { echo "::error::Warranty duration missing from PDF"; exit 1; }
+          grep -Fqi 'Wykonana naprawa' warranty-card.txt || { echo "::error::Performed repair heading missing from warranty PDF"; exit 1; }
+          grep -Fqi 'Wymiana modułu wyświetlacza' warranty-card.txt || { echo "::error::Performed repair content missing from warranty PDF"; exit 1; }
+          grep -Eq 'GW-[0-9]{4}-[0-9]{6}' warranty-card.txt || { echo "::error::Warranty card number missing from PDF"; exit 1; }
 
           curl --silent --show-error --fail-with-body             "$TEMP_API_URL/public/customer-portal/me"             --header "Authorization: Bearer $customer_token" > customer-warranty.json
           node - <<'NODE' "$order_id"
           const d=require('./customer-warranty.json'), orderId=process.argv[2];
           const order=d.orders?.find((item)=>item.id===orderId);
           if(!order?.warranty||order.warranty.months!==6||!order.warranty.expiresAt)throw new Error('Customer portal does not expose warranty');
+          if(order.warranty.status!=='ACTIVE'||order.warranty.active!==true||order.warranty.daysRemaining<1)throw new Error('Customer warranty status is not active');
+          if(order.warranty.cardAvailable!==true||!order.warranty.cardNumber?.startsWith('GW-'))throw new Error('Customer warranty card metadata missing');
+          if(!order.warranty.repairSummary?.includes('Wymiana modułu'))throw new Error('Customer warranty repair summary missing');
+          NODE
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/public/customer-portal/orders/$order_id/warranty-card"             --header "Authorization: Bearer $customer_token" > customer-warranty-card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./customer-warranty-card.json');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Customer warranty card download is not a PDF');
+          if(!d.warrantyCardNumber?.startsWith('GW-'))throw new Error('Customer warranty card number missing');
+          fs.writeFileSync('customer-warranty-card.pdf',pdf);
           NODE
 
           api POST "/service/orders/$order_id/transfer" '{"kind":"RETURN_HOME","note":"CI temp smoke return"}' > return-home.json
@@ -485,6 +503,9 @@ jobs:
           NODE
 
           api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
+
+          api GET "/service/orders?limit=1&offset=0" > orders-page-one.json
+          node -e "const d=require('./orders-page-one.json');if(!Array.isArray(d)||d.length>1)throw new Error('Service orders pagination limit failed')"
 
           api GET /service/orders > owner-orders-after-transfer.json
           node - <<'NODE' "$owner_id" "$order_id"
@@ -567,6 +588,9 @@ jobs:
           const notes=require('./tech-notes.json'), marker=process.argv[2], id=process.argv[3];
           if(!notes.some(x=>x.id===id&&x.body===marker&&x.pinned===true)) throw new Error('Technician cannot read own private note');
           NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/technician-notes/$note_id"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data '{"title":"TEMP E2E edited","body":"Edytowana prywatna notatka CI","pinned":false}' > tech-note-edited.json
+          node -e "const d=require('./tech-note-edited.json');if(d.title!=='TEMP E2E edited'||d.body!=='Edytowana prywatna notatka CI'||d.pinned!==false)throw new Error('Private note edit failed')"
 
           owner_code="$(curl --silent --show-error --output owner-private-note.json --write-out '%{http_code}'             "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $owner_token")"
           [ "$owner_code" = "403" ] || { echo "::error::OWNER unexpectedly read technician private notes: HTTP $owner_code"; cat owner-private-note.json; exit 1; }
