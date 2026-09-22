@@ -1183,8 +1183,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       )}
 
                       {draft && (
-                        <section className="service-workspace-card">
-                          <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
+                        <details className="service-workspace-card service-workspace-collapse">
+                          <summary><Smartphone size={15}/><span><strong>Dane urządzenia i realizacja</strong><small>IMEI, numer seryjny, termin, technik i ceny.</small></span></summary>
+                          <div className="service-collapse-body">
                           <div className="service-details-grid">
                             <label><span>IMEI</span><input disabled={!canEditIntakeHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
                             <label><span>Numer seryjny</span><input disabled={!canEditIntakeHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
@@ -1195,13 +1196,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditIntakeHere} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
                           </div>
                           {canEditIntakeHere && <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
-                        </section>
+                          </div>
+                        </details>
                       )}
 
-                      {canUseOrderFinance && <OrderCostingCard order={order}/>}
+                      {canUseOrderFinance && <details className="service-workspace-card service-workspace-collapse">
+                        <summary><BadgeDollarSign size={15}/><span><strong>Koszty, części i faktury</strong><small>Rozwiń tylko podczas rozliczania naprawy.</small></span></summary>
+                        <div className="service-collapse-body service-finance-collapse"><OrderCostingCard order={order}/></div>
+                      </details>}
 
-                      <section className="service-workspace-card service-transfer-card">
-                        <div className="service-workspace-title"><Truck size={15}/><div><strong>Logistyka urządzenia</strong><span>Punkt macierzysty jest stały, a transport jest prowadzony niezależnie od statusu naprawy.</span></div></div>
+                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" open={Boolean(order.openTransfer||order.returnRequired||order.handlingMode==='TRANSFER_ONLY')}>
+                        <summary><Truck size={15}/><span><strong>Logistyka urządzenia</strong><small>{order.openTransfer||order.returnRequired?'Wymaga uwagi — sprawdź transport lub powrót.':'Przekazanie do innego punktu, gdy jest potrzebne.'}</small></span></summary>
+                        <div className="service-collapse-body">
                         <div className="active-transfer-summary">
                           <div><MapPin size={15}/><span>Macierzysty: {order.homePointName || order.pointName}</span><b>·</b><strong>Teraz: {order.currentLocationLabel || order.currentPointName || 'W transporcie'}</strong></div>
                           <small>{order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
@@ -1249,7 +1255,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
                           {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót: ':'Do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
                         </div>}
-                      </section>
+                        </div>
+                      </details>
 
                       <details className="service-workspace-card service-workspace-collapse service-print-card">
                         <summary><Printer size={15}/><span><strong>Dokumenty i wydruk</strong><small>Karta serwisowa, QR i wydruk A4.</small></span></summary>
