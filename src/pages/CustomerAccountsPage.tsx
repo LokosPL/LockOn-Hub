@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { appConfirm, appPrompt } from '../appDialog';
 import {
   ArrowLeft,
   Ban,
@@ -186,7 +187,7 @@ export function CustomerAccountsPage() {
 
   const getCode=async(customer:CustomerAccountSummary,rotate=false)=>{
     if(busyRef.current)return;
-    if(rotate&&!window.confirm(`Wygenerować nowy kod dla ${customer.name}? Stary kod i sesje kodowe przestaną działać.`))return;
+    if(rotate&&!await appConfirm({title:'Wygenerować nowy kod?',message:`Stary kod klienta ${customer.name} i aktywne sesje kodowe przestaną działać.`,confirmLabel:'Wygeneruj nowy kod'}))return;
     setBusySafe(customer.id+':code');setNotice(null);
     try{
       const result=await window.lockOn.customers.getCode(customer.id,rotate);
@@ -211,10 +212,8 @@ export function CustomerAccountsPage() {
   const toggleBlock=async(customer:CustomerAccountSummary)=>{
     if(busyRef.current)return;
     const next=!customer.blocked;
-    if(!window.confirm(next
-      ? `Zablokować portal klienta ${customer.name}? Wszystkie aktywne sesje zostaną zamknięte.`
-      : `Odblokować portal klienta ${customer.name}?`))return;
-    const reason=next ? (window.prompt('Powód blokady (opcjonalnie):','')||'') : '';
+    if(!await appConfirm({title:next?'Zablokować portal klienta?':'Odblokować portal klienta?',message:next?`Portal ${customer.name} zostanie zablokowany, a wszystkie aktywne sesje zamknięte.`:`Portal ${customer.name} zostanie ponownie odblokowany.`,confirmLabel:next?'Zablokuj':'Odblokuj',tone:next?'danger':'default'}))return;
+    const reason=next ? ((await appPrompt({title:'Powód blokady',message:'Możesz dodać krótką informację widoczną w obsłudze konta klienta.',confirmLabel:'Zapisz blokadę',tone:'danger',input:{label:'Powód (opcjonalnie)',placeholder:'Np. zgłoszenie klienta'}}))||'') : '';
     setBusySafe(customer.id+':block');setNotice(null);
     try{
       await window.lockOn.customers.block(customer.id,next,reason);
@@ -226,7 +225,7 @@ export function CustomerAccountsPage() {
 
   const logoutAll=async(customer:CustomerAccountSummary)=>{
     if(busyRef.current)return;
-    if(!window.confirm(`Wylogować ${customer.name} ze wszystkich aktywnych sesji portalu?`))return;
+    if(!await appConfirm({title:'Wylogować klienta?',message:`Wszystkie aktywne sesje portalu ${customer.name} zostaną zamknięte.`,confirmLabel:'Wyloguj wszędzie',tone:'danger'}))return;
     setBusySafe(customer.id+':logout');setNotice(null);
     try{
       const result=await window.lockOn.customers.logoutAll(customer.id);
@@ -239,7 +238,7 @@ export function CustomerAccountsPage() {
   const unlinkGoogle=async(customer:CustomerAccountSummary)=>{
     if(busyRef.current)return;
     if(!customer.googleLinked)return;
-    if(!window.confirm(`Odłączyć konto Google klienta ${customer.name}? Klient nadal będzie mógł wejść kodem i ponownie połączyć Google.`))return;
+    if(!await appConfirm({title:'Odłączyć konto Google?',message:`Konto Google klienta ${customer.name} zostanie odłączone. Klient nadal będzie mógł wejść kodem i ponownie połączyć Google.`,confirmLabel:'Odłącz Google',tone:'danger'}))return;
     setBusySafe(customer.id+':unlink');setNotice(null);
     try{
       const result=await window.lockOn.customers.unlinkGoogle(customer.id);
@@ -254,7 +253,7 @@ export function CustomerAccountsPage() {
     if(busyRef.current||!selectedId||!selected)return;
     if(!profile.firstName.trim()){setNotice({tone:'error',text:'Podaj imię klienta.'});return;}
     const emailChanged=(detail?.customer.email||'').trim().toLowerCase()!==profile.email.trim().toLowerCase();
-    if(emailChanged&&selected.googleLinked&&!window.confirm('Zmiana e-mailu odłączy obecne konto Google klienta dla bezpieczeństwa. Kontynuować?'))return;
+    if(emailChanged&&selected.googleLinked&&!await appConfirm({title:'Zmienić e-mail klienta?',message:'Dla bezpieczeństwa obecne konto Google klienta zostanie odłączone.',confirmLabel:'Zmień e-mail i odłącz Google'}))return;
     setBusySafe(selectedId+':profile');setNotice(null);
     try{
       const result=await window.lockOn.customers.updateProfile(selectedId,{
