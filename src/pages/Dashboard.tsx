@@ -94,8 +94,17 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, w
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setClock(new Date()), 1_000);
-    return () => window.clearInterval(timer);
+    let interval: number | undefined;
+    const syncClock = () => setClock(new Date());
+    const untilNextMinute = 60_000 - (Date.now() % 60_000) + 40;
+    const timeout = window.setTimeout(() => {
+      syncClock();
+      interval = window.setInterval(syncClock, 60_000);
+    }, untilNextMinute);
+    return () => {
+      window.clearTimeout(timeout);
+      if (interval !== undefined) window.clearInterval(interval);
+    };
   }, []);
 
   const loadWeather = async () => {
@@ -223,7 +232,15 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, w
 
         <div className="start-time-column">
           <div className="start-date-line">{dateText}</div>
-          <div className="start-clock">{timeText}</div>
+          <div className="start-clock start-clock-animated" aria-label={timeText}>
+            {timeText.split('').map((character, index) => character === ':' ? (
+              <span className="start-clock-separator" aria-hidden="true" key={'separator-'+index}>:</span>
+            ) : (
+              <span className="start-clock-slot" aria-hidden="true" key={'slot-'+index}>
+                <span className="start-clock-digit" key={character}>{character}</span>
+              </span>
+            ))}
+          </div>
           <div className="start-time-note">
             <CalendarDays size={18} />
             <div>
