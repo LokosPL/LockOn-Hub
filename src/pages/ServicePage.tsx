@@ -1082,6 +1082,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
         const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
         const canUseOrderFinance = canEditCosts && (!isActualTechnician || order.assignedTechnicianId === auth.user?.id);
+        const stageSteps=['Przyjęto','Diagnoza','Oczekiwanie na decyzję / części','Naprawa','Testy','Zakończono naprawę','Gotowe do odbioru','Wydano'];
+        const stageIndex=({RECEIVED:0,DIAGNOSIS:1,WAITING_PARTS:2,IN_REPAIR:3,REPAIR_DONE:5,READY:6,COMPLETED:7} as Record<string,number>)[order.status] ?? 0;
         return <div className="service-order-details-backdrop" role="presentation" onMouseDown={()=>setExpandedOrderId(null)}>
           <section className="service-order-details-dialog" role="dialog" aria-modal="true" aria-label={`Szczegóły zlecenia #${order.orderNumber}`} onMouseDown={(event)=>event.stopPropagation()}>
             <header className="service-order-details-header">
@@ -1096,12 +1098,17 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
 
                       <section className="service-workspace-card service-stage-card">
-                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Etap zlecenia</strong><span>Najpierw zakończ naprawę, przygotuj gwarancję, a dopiero potem ustaw „Gotowe do odbioru”.</span></div></div>
+                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Etap naprawy</strong><span>Naprawa, testy, gwarancja i wydanie w jednym czytelnym przebiegu.</span></div></div>
                         <div className="service-stage-overview">
                           <div className="service-stage-progress"><span style={{width:`${order.workflow?.progressPercent ?? 10}%`}}/></div>
+                          <div className="service-repair-stage-rail">
+                            {stageSteps.map((label,index)=><span key={label} className={index<stageIndex?'done':index===stageIndex?'current':index===stageIndex+1?'next':''}>{label}</span>)}
+                          </div>
                           <div className="service-stage-meta">
-                            <div><span>Aktualnie</span><strong>{order.statusLabel}</strong></div>
+                            <div><span>Aktualny status</span><strong>{order.statusLabel}</strong></div>
                             <div><span>Następny krok</span><strong>{order.workflow?.nextAction || 'Sprawdź szczegóły zlecenia.'}</strong></div>
+                            <div><span>Termin</span><strong>{order.estimatedCompletionAt?new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL'):'Nie podano'}</strong></div>
+                            <div><span>Lokalizacja</span><strong>{order.currentLocationLabel || order.currentPointName || order.pointName}</strong></div>
                           </div>
                         </div>
                         {canEditOrderHere ? <label className="service-stage-select">
@@ -1118,13 +1125,15 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="service-warranty-status">
                             <div><span>Okres</span><strong>{order.warrantyMonths ? `${order.warrantyMonths} mies.` : 'Nie ustawiono'}</strong></div>
                             <div><span>Ważna do</span><strong>{order.warrantyExpiresAt ? new Date(order.warrantyExpiresAt).toLocaleDateString('pl-PL') : '—'}</strong></div>
-                            <div><span>Karta</span><strong>{order.warrantyCardPrintedAt ? 'Wydrukowana' : 'Do wydruku'}</strong></div>
+                            <div><span>Karta</span><strong>{order.warrantyCardPrintedAt ? 'Wygenerowana' : 'Do wygenerowania'}</strong></div>
+                            <div><span>Numer</span><strong>{order.warrantyCardNumber || '—'}</strong></div>
                           </div>
                           {order.status==='REPAIR_DONE' ? <>
                             <div className="service-warranty-controls">
                               <label><span>Gwarancja (miesiące)</span><input type="number" min="1" max="60" step="1" value={warrantyDrafts[order.id]??''} onChange={(e)=>setWarrantyDrafts((current)=>({...current,[order.id]:e.target.value.replace(/\D/g,'').slice(0,2)}))} placeholder="np. 3 lub 6"/></label>
-                              <button className="button secondary small" disabled={warrantyBusyId===order.id} onClick={()=>void saveWarranty(order)}><Save size={13}/> Zapisz gwarancję</button>
-                              <button className="button primary small" disabled={warrantyBusyId===order.id||!order.warrantyMonths} onClick={()=>void openWarrantyCard(order)}><Printer size={13}/> Wydrukuj kartę gwarancyjną</button>
+                              <label className="service-warranty-repair-summary"><span>Wykonana naprawa</span><textarea rows={3} maxLength={2000} value={warrantyRepairDrafts[order.id]??''} onChange={(e)=>setWarrantyRepairDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="Np. wymiana wyświetlacza, czyszczenie i test funkcjonalny"/></label>
+                              <button className="button secondary small" disabled={warrantyBusyId===order.id||!(warrantyRepairDrafts[order.id]??'').trim()} onClick={()=>void saveWarranty(order)}><Save size={13}/> Zapisz gwarancję</button>
+                              <button className="button primary small" disabled={warrantyBusyId===order.id||!order.warrantyMonths||!order.repairSummary} onClick={()=>void openWarrantyCard(order)}><Printer size={13}/> Wygeneruj / drukuj kartę</button>
                             </div>
                             <small className="service-warranty-hint">{order.warrantyReady
                               ? 'Gotowe — karta została przygotowana. Możesz teraz ustawić „Gotowe do odbioru”.'
@@ -1297,25 +1306,32 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       {tab === 'NEW' && (
         <div className="service-intake-hotfix service-intake-v3">
           {intakeStage === 'TYPE' ? (
-            <section className="service-intake-type-screen">
-              <div className="service-intake-type-copy">
-                <span className="eyebrow"><ClipboardPlus size={13}/> NOWE ZLECENIE</span>
-                <h2>Co przyjmujesz?</h2>
-                <p>Najpierw wybierz typ. Potem otworzy się jeden czytelny formularz — taki sam styl jak szczegóły zlecenia.</p>
-              </div>
-              <div className="service-order-type-picker service-order-type-picker-v3" role="group" aria-label="Typ zlecenia">
-                <button type="button" onClick={()=>{update('orderType','REPAIR');setIntakeStage('DETAILS');}}>
-                  <i><Wrench size={22}/></i>
-                  <span><strong>Nowe zlecenie</strong><small>Standardowe przyjęcie urządzenia do naprawy.</small></span>
-                  <b>→</b>
-                </button>
-                <button type="button" onClick={()=>{update('orderType','COMPLAINT');setIntakeStage('DETAILS');}}>
-                  <i><RotateCcw size={22}/></i>
-                  <span><strong>Reklamacja</strong><small>Przyjęcie reklamacji z osobnym oznaczeniem zlecenia.</small></span>
-                  <b>→</b>
-                </button>
-              </div>
-            </section>
+            <div className="service-order-details-backdrop service-intake-details-backdrop" role="presentation" onMouseDown={()=>setTab(isActualTechnician?'CALENDAR':'ORDERS')}>
+              <section className="service-intake-details-card service-intake-details-dialog service-intake-type-dialog" role="dialog" aria-modal="true" aria-label="Wybierz typ nowego zlecenia" onMouseDown={(event)=>event.stopPropagation()}>
+                <header className="service-intake-details-head">
+                  <div>
+                    <span className="eyebrow"><ClipboardPlus size={13}/> NOWE ZLECENIE</span>
+                    <h2>Co przyjmujesz?</h2>
+                    <p>Wybierz typ, a formularz pozostanie w tym samym dużym panelu ServiceOS.</p>
+                  </div>
+                  <button className="service-order-details-close" title="Zamknij" onClick={()=>setTab(isActualTechnician?'CALENDAR':'ORDERS')}><XCircle size={20}/></button>
+                </header>
+                <section className="service-intake-type-screen">
+                  <div className="service-order-type-picker service-order-type-picker-v3" role="group" aria-label="Typ zlecenia">
+                    <button type="button" onClick={()=>{update('orderType','REPAIR');setIntakeStage('DETAILS');}}>
+                      <i><Wrench size={22}/></i>
+                      <span><strong>Nowe zlecenie / Naprawa</strong><small>Standardowe przyjęcie urządzenia do naprawy.</small></span>
+                      <b>→</b>
+                    </button>
+                    <button type="button" onClick={()=>{update('orderType','COMPLAINT');setIntakeStage('DETAILS');}}>
+                      <i><RotateCcw size={22}/></i>
+                      <span><strong>Reklamacja</strong><small>Przyjęcie reklamacji z osobnym oznaczeniem zlecenia.</small></span>
+                      <b>→</b>
+                    </button>
+                  </div>
+                </section>
+              </section>
+            </div>
           ) : (
             <div className="service-order-details-backdrop service-intake-details-backdrop" role="presentation" onMouseDown={()=>setIntakeStage('TYPE')}>
             <section className="service-intake-details-card service-intake-details-dialog" role="dialog" aria-modal="true" aria-label={form.orderType==='COMPLAINT'?'Nowa reklamacja':'Nowe zlecenie'} onMouseDown={(event)=>event.stopPropagation()}>
