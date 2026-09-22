@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import {
   CalendarDays, ChevronLeft, ChevronRight, Clock3, GripVertical, PackageCheck,
   RefreshCw, Smartphone, Wrench
@@ -114,9 +114,9 @@ export function TechnicianCalendar({onOpenOrder}:Props){
   };
 
   const dropHandlers=(target:string|null)=>({
-    onDragOver:(event:React.DragEvent)=>{event.preventDefault();if(draggingId)setDropKey(target??'NO_DATE');},
+    onDragOver:(event:DragEvent)=>{event.preventDefault();if(draggingId)setDropKey(target??'NO_DATE');},
     onDragLeave:()=>{if(dropKey===(target??'NO_DATE'))setDropKey('');},
-    onDrop:(event:React.DragEvent)=>{
+    onDrop:(event:DragEvent)=>{
       event.preventDefault();
       const id=event.dataTransfer.getData('text/service-order')||draggingId;
       void moveOrder(id,target);
