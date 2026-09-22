@@ -1058,11 +1058,14 @@ const registerIpc = () => {
     if(openError)throw new Error('Nie udało się otworzyć karty serwisowej: '+openError);
     return {opened:true,filePath,fileName:result.fileName,printMode:mode,staffScanCode:result.staffScanCode};
   });
-  secureHandle('service:updateWarranty', async (orderId: string, months: number) => {
+  secureHandle('service:updateWarranty', async (orderId: string, payload: any) => {
     const token=requireSessionToken();
     return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/warranty`,{
       method:'POST',
-      body:JSON.stringify({months:Math.max(1,Math.min(60,Math.trunc(Number(months)||0)))})
+      body:JSON.stringify({
+        months:Math.max(1,Math.min(60,Math.trunc(Number(payload?.months)||0))),
+        repairSummary:String(payload?.repairSummary??'').trim().slice(0,2000)
+      })
     },token);
   });
   secureHandle('service:openWarrantyCard', async (orderId: string) => {
@@ -1087,9 +1090,11 @@ const registerIpc = () => {
       })
     },token);
   });
-  secureHandle('service:listOrders', async () => {
+  secureHandle('service:listOrders', async (limit = 40, offset = 0) => {
     const token = requireSessionToken();
-    return backendRequest('/service/orders', {}, token);
+    const safeLimit=Math.max(1,Math.min(60,Math.trunc(Number(limit)||40)));
+    const safeOffset=Math.max(0,Math.min(5000,Math.trunc(Number(offset)||0)));
+    return backendRequest(`/service/orders?limit=${safeLimit}&offset=${safeOffset}`, {}, token);
   });
   secureHandle('service:getHistory', async (orderId: string) => {
     const token = requireSessionToken();
@@ -1201,6 +1206,14 @@ const registerIpc = () => {
   secureHandle('service:getTechnicianWorkspace', async () => backendRequest('/service/technician-workspace',{},requireSessionToken()));
   secureHandle('service:listTechnicianNotes', async () => backendRequest('/service/technician-notes',{},requireSessionToken()));
   secureHandle('service:addTechnicianNote', async (payload: any) => backendRequest('/service/technician-notes',{
+    method:'POST',
+    body:JSON.stringify({
+      title:String(payload?.title??'').trim().slice(0,120),
+      body:String(payload?.body??'').trim().slice(0,4000),
+      pinned:payload?.pinned===true
+    })
+  },requireSessionToken()));
+  secureHandle('service:updateTechnicianNote', async (noteId: string, payload: any) => backendRequest(`/service/technician-notes/${encodeURIComponent(safeId(noteId,'tnn'))}`,{
     method:'POST',
     body:JSON.stringify({
       title:String(payload?.title??'').trim().slice(0,120),
