@@ -576,8 +576,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   const changeStatus = async (order: ServiceOrderSummary, status: string) => {
     if (orderBusyId || status === order.status) return;
-    if (status === 'CANCELLED' && !window.confirm(`Anulować zlecenie #${order.orderNumber}? Tej zmiany nie należy używać zamiast zwykłego etapu naprawy.`)) return;
-    if (status === 'COMPLETED' && !window.confirm(`Zakończyć zlecenie #${order.orderNumber}? ServiceOS zapisze rozliczenie na podstawie kosztu końcowego.`)) return;
+    if (status === 'CANCELLED' && !await confirm({
+      title:`Anulować zlecenie #${order.orderNumber}?`,
+      message:'Zlecenie zostanie oznaczone jako anulowane.',
+      detail:'Tej operacji używaj tylko wtedy, gdy zlecenie faktycznie ma zostać anulowane — nie zamiast zwykłego etapu naprawy.',
+      confirmLabel:'Anuluj zlecenie',tone:'danger'
+    })) return;
+    if (status === 'COMPLETED' && !await confirm({
+      title:`Zakończyć zlecenie #${order.orderNumber}?`,
+      message:'ServiceOS zamknie obsługę tego urządzenia.',
+      detail:'Rozliczenie zostanie zapisane na podstawie kosztu końcowego. Upewnij się, że urządzenie zostało wydane klientowi.',
+      confirmLabel:'Zakończ zlecenie'
+    })) return;
     setOrderBusyId(order.id);
     setError('');
     setNotice('');
@@ -691,7 +701,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     const draft = transferDrafts[order.id] ?? {toPointId:'',note:''};
     if (!draft.toPointId) { setError('Wybierz docelowy punkt serwisowy.'); return; }
     const destination=servicePoints.find((point)=>point.id===draft.toPointId);
-    if (!window.confirm(`Przekazać urządzenie ze zlecenia #${order.orderNumber} do ${destination?.name || 'wybranego punktu'}?`)) return;
+    if (!await confirm({
+      title:'Przekazać urządzenie do serwisu?',
+      message:`Zlecenie #${order.orderNumber} → ${destination?.name || 'wybrany punkt'}`,
+      detail:'Po potwierdzeniu rozpocznie się proces logistyczny, a klient może otrzymać automatyczną wiadomość.',
+      confirmLabel:'Rozpocznij przekazanie'
+    })) return;
     setOrderBusyId(order.id); setError(''); setNotice('');
     try {
       const currentPointId = order.currentPointId || order.homePointId || order.pointId;
@@ -713,7 +728,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const sendReturnHome = async (order: ServiceOrderSummary) => {
     if (orderBusyId) return;
     const draft = transferDrafts[order.id] ?? {toPointId:'',note:''};
-    if (!window.confirm(`Odesłać urządzenie ze zlecenia #${order.orderNumber} do punktu macierzystego?`)) return;
+    if (!await confirm({
+      title:'Odesłać urządzenie do punktu macierzystego?',
+      message:`Zlecenie #${order.orderNumber}`,
+      detail:'ServiceOS rozpocznie przekazanie zwrotne i zaktualizuje lokalizację urządzenia zgodnie z kolejnymi potwierdzeniami.',
+      confirmLabel:'Rozpocznij powrót'
+    })) return;
     setOrderBusyId(order.id); setError(''); setNotice('');
     try {
       const result = await window.lockOn.service.transferOrder(order.id, {
@@ -733,8 +753,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   const changeTransferStatus = async (transfer: ServiceTransfer, status: ServiceTransfer['status']) => {
     if (orderBusyId) return;
-    if (status === 'CANCELLED' && !window.confirm(`Anulować przekazanie zlecenia #${transfer.orderNumber}? Urządzenie wróci logicznie do punktu źródłowego.`)) return;
-    if (status === 'REJECTED' && !window.confirm(`Odrzucić przekazanie zlecenia #${transfer.orderNumber}? Potwierdź tylko, jeśli punkt docelowy faktycznie odmawia przyjęcia.`)) return;
+    if (status === 'CANCELLED' && !await confirm({
+      title:'Anulować przekazanie?',
+      message:`Zlecenie #${transfer.orderNumber}`,
+      detail:'Urządzenie wróci logicznie do punktu źródłowego. Potwierdź tylko, jeśli transport faktycznie został anulowany.',
+      confirmLabel:'Anuluj przekazanie',tone:'danger'
+    })) return;
+    if (status === 'REJECTED' && !await confirm({
+      title:'Odrzucić przekazanie?',
+      message:`Zlecenie #${transfer.orderNumber}`,
+      detail:'Potwierdź tylko, jeśli punkt docelowy faktycznie odmawia przyjęcia urządzenia.',
+      confirmLabel:'Odrzuć przekazanie',tone:'danger'
+    })) return;
     setOrderBusyId(transfer.id); setError(''); setNotice('');
     try {
       const result = await window.lockOn.service.updateTransferStatus(transfer.id,status);
@@ -792,7 +822,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   const closeCustomerQuote = async (requestId: string) => {
     if (quoteBusyId) return;
-    if (!window.confirm('Zamknąć tę rozmowę o wycenie? Klient nie będzie mógł kontynuować tego wątku.')) return;
+    if (!await confirm({
+      title:'Zamknąć rozmowę o wycenie?',
+      message:'Klient nie będzie mógł kontynuować tego wątku.',
+      detail:'Historia rozmowy i przygotowana wycena pozostaną zapisane.',
+      confirmLabel:'Zamknij rozmowę',tone:'warning'
+    })) return;
     setQuoteBusyId(requestId); setError(''); setNotice('');
     try {
       await window.lockOn.service.closeCustomerQuote(requestId);
@@ -820,7 +855,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   const disconnectGmail = async () => {
     if (!pointId || gmailBusy) return;
-    if (!window.confirm('Odłączyć Gmail od tego punktu? Automatyczne wiadomości przestaną być wysyłane do ponownego połączenia konta.')) return;
+    if (!await confirm({
+      title:'Odłączyć Gmail od punktu?',
+      message:'Automatyczne wiadomości przestaną być wysyłane.',
+      detail:'Wysyłkę można przywrócić przez ponowne połączenie konta Google.',
+      confirmLabel:'Odłącz Gmail',tone:'warning'
+    })) return;
     setGmailBusy(true); setError(''); setNotice('');
     try {
       await window.lockOn.gmail.disconnect(pointId);
