@@ -127,6 +127,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [intakeStage, setIntakeStage] = useState<'TYPE'|'DETAILS'>('TYPE');
   const [brandOpen, setBrandOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [complaintQuery, setComplaintQuery] = useState('');
+  const [complaintMatches, setComplaintMatches] = useState<ServiceOrderSummary[]>([]);
+  const [complaintSearchBusy, setComplaintSearchBusy] = useState(false);
+  const [complaintOriginal, setComplaintOriginal] = useState<ServiceOrderSummary | null>(null);
   const [orderFilter, setOrderFilter] = useState('ALL');
   const [matches, setMatches] = useState<ServiceCustomer[]>([]);
   const [searchBusy, setSearchBusy] = useState(false);
@@ -480,10 +484,50 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     }));
   };
 
+  const searchComplaintOrders = async () => {
+    const clean = complaintQuery.trim();
+    if (clean.length < 2) { setComplaintMatches([]); return; }
+    setComplaintSearchBusy(true);
+    setError('');
+    try {
+      setComplaintMatches(await window.lockOn.service.searchOrders(clean));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się znaleźć wcześniejszej naprawy.');
+    } finally {
+      setComplaintSearchBusy(false);
+    }
+  };
+
+  const useComplaintOrder = (order: ServiceOrderSummary) => {
+    const fallbackParts = order.customerName.trim().split(/\s+/);
+    const firstName = order.customerFirstName || fallbackParts[0] || '';
+    const lastName = order.customerLastName || fallbackParts.slice(1).join(' ') || '';
+    setComplaintOriginal(order);
+    setComplaintMatches([]);
+    setComplaintQuery('#' + String(order.orderNumber ?? ''));
+    setForm((current) => ({
+      ...current,
+      orderType:'COMPLAINT',
+      firstName,
+      lastName,
+      email:order.customerEmail || '',
+      phone:order.customerPhone || '',
+      brand:order.brand || '',
+      model:order.model || '',
+      imei:order.imei || '',
+      serialNumber:order.serialNumber || '',
+      deviceNotes:order.deviceNotes || 'Brak uwag'
+    }));
+  };
+
   const submit = async () => {
     if (submitBusyRef.current) return;
     const cleanEmail = form.email.trim();
     const cleanPhone = form.phone.replace(/\D/g, '');
+    if (form.orderType === 'COMPLAINT' && !complaintOriginal) {
+      setError('Najpierw znajdź i wybierz wcześniejsze zlecenie, którego dotyczy reklamacja.');
+      return;
+    }
     if (!form.firstName.trim() || !form.lastName.trim() || !form.issueDescription.trim()) {
       setError('Uzupełnij imię, nazwisko i opis usterki. Marka, model oraz uwagi mogą pozostać niepodane.');
       return;
@@ -516,6 +560,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         deviceNotes: form.deviceNotes.trim() || 'Brak uwag',
         imei: cleanImei,
         pointId,
+        originalOrderId: form.orderType === 'COMPLAINT' ? complaintOriginal?.id : undefined,
         estimatedCost: canSetIntakeEstimate && form.estimatedCost !== '' ? Number(form.estimatedCost) : undefined,
         estimatedCompletionAt: canSetIntakeEta
           ? (form.estimatedCompletionAt ? toApiDateTime(form.estimatedCompletionAt) : null)
@@ -551,6 +596,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       setForm(makeEmptyForm());
       setMatches([]);
       setQuery('');
+      setComplaintQuery('');
+      setComplaintMatches([]);
+      setComplaintOriginal(null);
       setIntakeStage('TYPE');
       await loadOrders();
     } catch (e) {
@@ -1080,6 +1128,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const operatingPointId = auth.point?.id ?? '';
         const canOperateCurrentPoint = Boolean(currentServicePointId) && operatingPointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(currentServicePointId));
         const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
+        const canCompletePickupHere = effectiveRole === 'USER' && order.status === 'READY' && canOperateCurrentPoint && !order.openTransfer;
         const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
         const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
         const canUseOrderFinance = canEditCosts && (!isActualTechnician || order.assignedTechnicianId === auth.user?.id);
@@ -1102,18 +1151,31 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const primaryStageBlocked = primaryStageAction?.status==='READY' && (order.canMarkReady===false || !order.warrantyReady);
         const stageSteps=['Przyjęto','Diagnoza','Części','Naprawa','Zakończono','Gotowe','Wydano'];
         const stageIndex=({RECEIVED:0,DIAGNOSIS:1,WAITING_PARTS:2,IN_REPAIR:3,REPAIR_DONE:4,READY:5,COMPLETED:6} as Record<string,number>)[order.status] ?? 0;
-        return <div className="service-order-details-backdrop" role="presentation" onMouseDown={()=>setExpandedOrderId(null)}>
-          <section className="service-order-details-dialog" role="dialog" aria-modal="true" aria-label={`Szczegóły zlecenia #${order.orderNumber}`} onMouseDown={(event)=>event.stopPropagation()}>
+        return <div className="service-order-details-page">
+          <section className="service-order-details-dialog service-order-details-inline" aria-label={`Szczegóły zlecenia #${order.orderNumber}`}>
             <header className="service-order-details-header">
               <div>
                 <span>ZLECENIE #{order.orderNumber}</span>
                 <h2>{order.customerName} · {formatDeviceLabel(order.brand,order.model)}</h2>
                 <small>{order.statusLabel} · {order.currentLocationLabel || order.currentPointName || order.pointName}</small>
               </div>
-              <button className="service-order-details-close" title="Zamknij szczegóły" onClick={()=>setExpandedOrderId(null)}><XCircle size={20}/></button>
+              <button className="button secondary small service-order-details-back" title="Wróć do listy" onClick={()=>setExpandedOrderId(null)}>← Wróć do zleceń</button>
             </header>
             <div className="service-order-workspace">
                       {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
+
+                      <section className="service-order-keyfacts">
+                        <article><span>Klient</span><strong>{order.customerName}</strong><small>{order.customerPhone || order.customerEmail || 'Brak kontaktu'}</small></article>
+                        <article><span>Telefon</span><strong>{formatDeviceLabel(order.brand,order.model)}</strong><small>{order.imei ? 'IMEI ' + order.imei : order.serialNumber ? 'S/N ' + order.serialNumber : 'Brak IMEI / S/N'}</small></article>
+                        <article><span>Zgłoszenie</span><strong>{order.issueDescription}</strong><small>{order.assignedTechnicianName ? 'Serwisant: ' + order.assignedTechnicianName : 'Serwisant jeszcze nieprzypisany'}</small></article>
+                        <article><span>Termin</span><strong>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL') : 'Nie podano'}</strong><small>{order.repairSummary || 'Opis wykonanej naprawy pojawi się po zakończeniu.'}</small></article>
+                      </section>
+
+                      {effectiveRole === 'USER' && <section className="service-frontdesk-card">
+                        <div><PackageCheck size={18}/><span><strong>Obsługa klienta przy ladzie</strong><small>{order.status === 'READY' ? 'Telefon jest gotowy. Sprawdź dane klienta i wydaj urządzenie.' : 'Tu zobaczysz tylko informacje potrzebne do rozmowy z klientem.'}</small></span></div>
+                        <div className="service-frontdesk-meta"><span>{order.statusLabel}</span><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span>{order.warrantyExpiresAt&&<span>Gwarancja do {new Date(order.warrantyExpiresAt).toLocaleDateString('pl-PL')}</span>}</div>
+                        {canCompletePickupHere && <button className="button primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeStatus(order,'COMPLETED')}>Wydaj telefon klientowi</button>}
+                      </section>}
 
                       <section className="service-workspace-card service-stage-card">
                         <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Co teraz ze zleceniem?</strong><span>Najważniejsza akcja jest na wierzchu. Pełna korekta etapu jest schowana niżej.</span></div></div>
@@ -1128,21 +1190,21 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             <div><span>Telefon jest</span><strong>{order.currentLocationLabel || order.currentPointName || order.pointName}</strong></div>
                           </div>
                         </div>
-                        {canEditOrderHere ? <div className="service-stage-actions">
-                          {primaryStageAction && <button
+                        {(canEditOrderHere || canCompletePickupHere) ? <div className="service-stage-actions">
+                          {primaryStageAction && (canEditOrderHere || (primaryStageAction.status==='COMPLETED' && canCompletePickupHere)) && <button
                             type="button"
                             className="button primary service-stage-primary"
                             disabled={Boolean(orderBusyId)||primaryStageBlocked}
                             onClick={()=>void changeStatus(order,primaryStageAction.status)}
                           >{primaryStageAction.label}</button>}
-                          {(order.status==='DIAGNOSIS'||order.status==='IN_REPAIR') && <button
+                          {canEditOrderHere && (order.status==='DIAGNOSIS'||order.status==='IN_REPAIR') && <button
                             type="button"
                             className="button secondary"
                             disabled={Boolean(orderBusyId)}
                             onClick={()=>void changeStatus(order,'WAITING_PARTS')}
                           >Czekam na części</button>}
                           {order.status==='REPAIR_DONE' && !order.warrantyReady && <small className="service-stage-gate">Aby oznaczyć „Gotowe do odbioru”, przygotuj gwarancję poniżej.</small>}
-                          <details className="service-stage-more">
+                          {canEditOrderHere && <details className="service-stage-more">
                             <summary>Inna zmiana / korekta etapu</summary>
                             <label className="service-stage-select">
                               <span>Status</span>
@@ -1150,9 +1212,16 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                                 {statuses.map(([value,label])=><option key={value} value={value} disabled={(value==='READY'&&(order.status!=='REPAIR_DONE'||order.canMarkReady===false||!order.warrantyReady))||(value==='COMPLETED'&&order.status!=='READY')}>{label}</option>)}
                               </select>
                             </label>
-                          </details>
+                          </details>}
                         </div> : <div className="service-history-empty">{!operatingPointId?'Wybierz konkretny aktywny punkt zamiast „Wszystkie punkty”, aby obsługiwać ten telefon.':'Etap może zmienić tylko punkt, w którym fizycznie znajduje się telefon.'}</div>}
                       </section>
+
+                      {canUseOrderFinance && ['WAITING_PARTS','IN_REPAIR'].includes(order.status) && (
+                        <section className="service-stage-task-card">
+                          <div className="service-workspace-title"><PackageCheck size={16}/><div><strong>{order.status==='WAITING_PARTS'?'Części do tej naprawy':'Części i koszt naprawy'}</strong><span>{order.status==='WAITING_PARTS'?'Dodaj część i fakturę tutaj — bez szukania sekcji niżej.':'Sprawdź części i koszty przed zakończeniem naprawy.'}</span></div></div>
+                          <OrderCostingCard order={order} guided />
+                        </section>
+                      )}
 
                       {canShowWarranty && (
                         <section className={`service-workspace-card service-warranty-card ${order.warrantyReady?'ready':''}`}>
@@ -1201,7 +1270,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </details>
                       )}
 
-                      {canUseOrderFinance && <details className="service-workspace-card service-workspace-collapse">
+                      {canUseOrderFinance && !['WAITING_PARTS','IN_REPAIR'].includes(order.status) && <details className="service-workspace-card service-workspace-collapse">
                         <summary><BadgeDollarSign size={15}/><span><strong>Koszty, części i faktury</strong><small>Rozwiń tylko podczas rozliczania naprawy.</small></span></summary>
                         <div className="service-collapse-body service-finance-collapse"><OrderCostingCard order={order}/></div>
                       </details>}
@@ -1356,8 +1425,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       {tab === 'NEW' && (
         <div className="service-intake-hotfix service-intake-v3">
           {intakeStage === 'TYPE' ? (
-            <div className="service-order-details-backdrop service-intake-details-backdrop" role="presentation" onMouseDown={()=>setTab(isActualTechnician?'CALENDAR':'ORDERS')}>
-              <section className="service-intake-details-card service-intake-details-dialog service-intake-type-dialog" role="dialog" aria-modal="true" aria-label="Wybierz typ nowego zlecenia" onMouseDown={(event)=>event.stopPropagation()}>
+            <div className="service-intake-page-shell">
+              <section className="service-intake-details-card service-intake-details-dialog service-intake-type-dialog service-intake-inline" aria-label="Wybierz typ nowego zlecenia">
                 <header className="service-intake-details-head">
                   <div>
                     <span className="eyebrow"><ClipboardPlus size={13}/> NOWE ZLECENIE</span>
@@ -1368,36 +1437,54 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                 </header>
                 <section className="service-intake-type-screen">
                   <div className="service-order-type-picker service-order-type-picker-v3" role="group" aria-label="Typ zlecenia">
-                    <button type="button" onClick={()=>{update('orderType','REPAIR');setIntakeStage('DETAILS');}}>
+                    <button type="button" onClick={()=>{setComplaintOriginal(null);setComplaintQuery('');setComplaintMatches([]);update('orderType','REPAIR');setIntakeStage('DETAILS');}}>
                       <i><Wrench size={22}/></i>
                       <span><strong>Nowe zlecenie / Naprawa</strong><small>Standardowe przyjęcie urządzenia do naprawy.</small></span>
                       <b>→</b>
                     </button>
-                    <button type="button" onClick={()=>{update('orderType','COMPLAINT');setIntakeStage('DETAILS');}}>
+                    <button type="button" onClick={()=>{setComplaintOriginal(null);setComplaintQuery('');setComplaintMatches([]);update('orderType','COMPLAINT');setIntakeStage('DETAILS');}}>
                       <i><RotateCcw size={22}/></i>
-                      <span><strong>Reklamacja</strong><small>Przyjęcie reklamacji z osobnym oznaczeniem zlecenia.</small></span>
+                      <span><strong>Reklamacja naprawy</strong><small>Znajdź wcześniejsze zlecenie i przyjmij reklamację w kilka kroków.</small></span>
                       <b>→</b>
+                    </button>
+                    <button type="button" className="service-order-type-disabled" disabled>
+                      <i><Smartphone size={22}/></i>
+                      <span><strong>Reklamacja telefonu ze sprzedaży</strong><small>Ta funkcja będzie dostępna później.</small></span>
+                      <b>Wkrótce</b>
                     </button>
                   </div>
                 </section>
               </section>
             </div>
           ) : (
-            <div className="service-order-details-backdrop service-intake-details-backdrop" role="presentation" onMouseDown={()=>setIntakeStage('TYPE')}>
-            <section className="service-intake-details-card service-intake-details-dialog" role="dialog" aria-modal="true" aria-label={form.orderType==='COMPLAINT'?'Nowa reklamacja':'Nowe zlecenie'} onMouseDown={(event)=>event.stopPropagation()}>
+            <div className="service-intake-page-shell">
+            <section className="service-intake-details-card service-intake-details-dialog service-intake-inline" aria-label={form.orderType==='COMPLAINT'?'Nowa reklamacja':'Nowe zlecenie'}>
               <header className="service-intake-details-head">
                 <div>
                   <button type="button" className="service-intake-back" onClick={()=>setIntakeStage('TYPE')}>← Zmień typ</button>
                   <span className="eyebrow"><ClipboardPlus size={13}/> {form.orderType==='COMPLAINT'?'REKLAMACJA':'NAPRAWA'}</span>
-                  <h2>Nowe zlecenie</h2>
-                  <p>Klient i urządzenie w jednym miejscu. Uzupełnij tylko to, co potrzebne do przyjęcia.</p>
+                  <h2>{form.orderType==='COMPLAINT'?'Reklamacja naprawy':'Nowe zlecenie'}</h2>
+                  <p>{form.orderType==='COMPLAINT'?'Najpierw wskaż wcześniejszą naprawę. Dane klienta i telefonu uzupełnią się automatycznie.':'Klient i urządzenie w jednym miejscu. Uzupełnij tylko to, co potrzebne do przyjęcia.'}</p>
                 </div>
                 <div className="service-intake-type-chip">{form.orderType==='COMPLAINT'?<RotateCcw size={16}/>:<Wrench size={16}/>}<span>{form.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'}</span></div>
               </header>
 
               <div className="service-intake-details-body">
+                {form.orderType==='COMPLAINT' && <section className="service-intake-section service-complaint-lookup">
+                  <div className="service-intake-section-title"><RotateCcw size={16}/><div><strong>Znajdź wcześniejszą naprawę</strong><small>Numer zlecenia, nazwisko, telefon, e-mail, IMEI albo numer seryjny.</small></div></div>
+                  <div className="service-search-row service-search-row-v3">
+                    <input value={complaintQuery} onChange={(e)=>{setComplaintQuery(e.target.value);setComplaintOriginal(null);}} onKeyDown={(e)=>{if(e.key==='Enter')void searchComplaintOrders();}} placeholder="Np. #123, nazwisko klienta lub IMEI"/>
+                    <button className="button primary" disabled={complaintSearchBusy||complaintQuery.trim().length<2} onClick={()=>void searchComplaintOrders()}><Search size={14}/>{complaintSearchBusy?'Szukam…':'Znajdź naprawę'}</button>
+                  </div>
+                  {complaintMatches.length>0&&<div className="service-complaint-results">{complaintMatches.map((item)=><button type="button" key={item.id} onClick={()=>useComplaintOrder(item)}>
+                    <span><strong>#{item.orderNumber} · {item.customerName}</strong><small>{formatDeviceLabel(item.brand,item.model)} · {new Date(item.receivedAt).toLocaleDateString('pl-PL')}</small></span>
+                    <b>{item.statusLabel}</b>
+                  </button>)}</div>}
+                  {complaintOriginal&&<div className="service-complaint-selected"><CheckCircle2 size={17}/><div><strong>Reklamacja do zlecenia #{complaintOriginal.orderNumber}</strong><span>{complaintOriginal.customerName} · {formatDeviceLabel(complaintOriginal.brand,complaintOriginal.model)}</span></div><button type="button" className="button tiny secondary" onClick={()=>{setComplaintOriginal(null);setComplaintQuery('');}}>Zmień</button></div>}
+                  {!complaintOriginal&&<small className="service-complaint-hint">Reklamacja naprawy wymaga wskazania wcześniejszego zlecenia. Reklamacje telefonów sprzedanych przez sklep będą dodane osobno później.</small>}
+                </section>}
                 <section className="service-intake-section service-intake-customer-v3">
-                  <div className="service-intake-section-title"><UserRound size={16}/><div><strong>Klient</strong><small>Wyszukaj istniejącego albo wpisz nowego.</small></div></div>
+                  <div className="service-intake-section-title"><UserRound size={16}/><div><strong>Klient</strong><small>{form.orderType==='COMPLAINT'&&complaintOriginal?'Dane pobrane z wcześniejszego zlecenia — możesz je poprawić, jeśli klient podał nowe.':'Wyszukaj istniejącego albo wpisz nowego.'}</small></div></div>
                   <div className="service-search-row service-search-row-v3">
                     <input value={query} onChange={(e)=>setQuery(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter')void search();}} placeholder="Nazwisko, email lub telefon"/>
                     <button className="button secondary" disabled={searchBusy||query.trim().length<2} onClick={()=>void search()}><Search size={14}/>{searchBusy?'Szukam…':'Szukaj'}</button>
@@ -1443,10 +1530,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         </div>
       )}
 
-      {tab === 'ORDERS' && (
+      {tab === 'ORDERS' && !expandedOrderId && (
         <section className="panel-card service-orders-card">
           <div className="panel-heading">
-            <div><span className="eyebrow"><ClipboardList size={13}/> ZLECENIA</span><h2>Ostatnie naprawy</h2><p>Lista jest lekka — pełne szczegóły otwierają się dopiero po kliknięciu, w osobnym oknie.</p></div>
+            <div><span className="eyebrow"><ClipboardList size={13}/> ZLECENIA</span><h2>Ostatnie naprawy</h2><p>Kliknij zlecenie, aby przejść do prostego ekranu obsługi i następnej wymaganej czynności.</p></div>
             <div className="service-orders-heading-actions">
               <div className="service-transferred-counter"><Truck size={16}/><span>Przekazane do serwisu</span><strong>{transferredToServiceCount}</strong></div>
               <button className="button small secondary" disabled={ordersBusy} onClick={() => void loadOrders()}><RefreshCw className={ordersBusy ? 'spin' : ''} size={14}/> Odśwież</button>
