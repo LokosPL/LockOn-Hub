@@ -1552,10 +1552,10 @@ const serviceCardInfoTable = (rows,{labelWidth=94,labelFontSize=7,valueFontSize=
 
 const serviceCardTerms = [
   'Klient oświadcza, że jest właścicielem urządzenia albo jest uprawniony do zlecenia jego serwisu.',
-  'Urządzenie wydawane jest na podstawie karty serwisowej albo po potwierdzeniu uprawnienia do odbioru w panelu klienta lub na podstawie danych zlecenia.',
-  'Przed oddaniem urządzenia wykonaj kopię zapasową. Diagnostyka lub naprawa może wymagać usunięcia, przywrócenia albo ponownej instalacji danych. Serwis nie gwarantuje zachowania danych i nie odpowiada za szkody będące następstwem ich utraty w zakresie, w jakim utrata wynika z usterki urządzenia, wcześniejszego stanu nośnika albo czynności niezbędnych do wykonania uzgodnionej usługi; nie ogranicza to odpowiedzialności, której nie można wyłączyć zgodnie z prawem.',
-  'Cena orientacyjna jest szacunkiem. Wady ukryte lub dodatkowe uszkodzenia mogą wymagać zmiany zakresu i kosztu. Przed pracami wykraczającymi poza zaakceptowaną wycenę klient otrzyma informację do akceptacji.',
-  'Urządzenie należy odebrać w ciągu 90 dni od powiadomienia o gotowości do odbioru telefonicznie lub e-mailem. Po tym terminie serwis może ponownie wezwać do odbioru i naliczyć uzasadnione koszty przechowania, jeżeli wynika to z zaakceptowanego regulaminu lub cennika. Nieodebranie urządzenia samo w sobie nie oznacza porzucenia ani przeniesienia własności na sklep; dalsze postępowanie odbywa się zgodnie z obowiązującym prawem.'
+  'Urządzenie wydawane jest po okazaniu karty serwisowej albo potwierdzeniu uprawnienia do odbioru w panelu klienta lub na podstawie danych zlecenia.',
+  'Przed oddaniem urządzenia wykonaj kopię zapasową. Diagnostyka lub naprawa może spowodować utratę danych. Serwis nie gwarantuje ich zachowania i nie odpowiada za szkody będące następstwem utraty, jeśli wynika ona z usterki, stanu nośnika lub niezbędnych czynności serwisowych; nie ogranicza to odpowiedzialności, której nie można wyłączyć prawem.',
+  'Cena orientacyjna jest szacunkiem. Wady ukryte lub dodatkowe uszkodzenia mogą zmienić zakres i koszt. Prace poza zaakceptowaną wyceną wymagają poinformowania klienta i jego akceptacji.',
+  'Urządzenie należy odebrać w ciągu 90 dni od powiadomienia o gotowości telefonicznie lub e-mailem. Po tym terminie serwis może ponownie wezwać do odbioru i naliczyć uzasadnione koszty przechowania przewidziane w zaakceptowanym regulaminie lub cenniku. Nieodebranie urządzenia nie oznacza porzucenia ani przeniesienia własności na sklep; dalsze postępowanie odbywa się zgodnie z prawem.'
 ];
 
 const serviceCardTermsBlock = ({titleFontSize=8,fontSize=5.8,marginTop=8}={}) => ({
@@ -1659,14 +1659,14 @@ const customerServiceCardPortraitContent = (context) => ({
       ['Punkt przyjęcia',context.pointName+(context.pointCity?' · '+context.pointCity:'')],
       ['Typ zlecenia',context.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'],
       ['Przyjęto',formatServiceCardDateTime(context.receivedAt)]
-    ],{labelWidth:124,labelFontSize:10.2,valueFontSize:11.2,rowMargin:4}),
+    ],{labelWidth:122,labelFontSize:10,valueFontSize:11,rowMargin:3}),
     {text:'Obsługa serwisowa',fontSize:13,bold:true,color:'#000000',margin:[0,13,0,7]},
     serviceCardInfoTable([
       ['Cena orientacyjna',formatServiceCardMoney(context.estimatedCost,context.currency)],
       ['Przewidywany termin',formatServiceCardDate(context.estimatedCompletionAt)],
       ['Opis usterki',context.issueDescription],
       ['Uwagi',context.deviceNotes||'Brak uwag']
-    ],{labelWidth:124,labelFontSize:10.2,valueFontSize:11.2,rowMargin:4}),
+    ],{labelWidth:122,labelFontSize:10,valueFontSize:11,rowMargin:3}),
     {
       table:{
         widths:['*'],
@@ -1682,13 +1682,13 @@ const customerServiceCardPortraitContent = (context) => ({
                   {text:'Adres WWW',fontSize:9,bold:true,color:'#111827',margin:[0,0,0,3]},
                   {text:context.customerPortalBaseUrl,fontSize:10.5,bold:true,color:'#000000',margin:[0,0,0,9]},
                   {text:'Kod klienta',fontSize:9,bold:true,color:'#111827',margin:[0,0,0,3]},
-                  {text:context.customerPortalCode,fontSize:20,bold:true,color:'#000000',characterSpacing:1}
+                  {text:context.customerPortalCode,fontSize:18,bold:true,color:'#000000',characterSpacing:1}
                 ]
               },
               {
-                width:132,
+                width:124,
                 stack:[
-                  {qr:context.customerPortalUrl,fit:116,alignment:'center'},
+                  {qr:context.customerPortalUrl,fit:108,alignment:'center'},
                   {text:'Zeskanuj QR',fontSize:9,bold:true,color:'#000000',alignment:'center',margin:[0,6,0,0]}
                 ]
               }
@@ -1704,8 +1704,8 @@ const customerServiceCardPortraitContent = (context) => ({
       },
       margin:[0,13,0,0]
     },
-    serviceCardTermsBlock({titleFontSize:12,fontSize:9.4,marginTop:13}),
-    {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:10.5,bold:true,color:'#000000',margin:[0,10,0,0]}
+    serviceCardTermsBlock({titleFontSize:11.5,fontSize:8.8,marginTop:10}),
+    {text:'Zachowaj kartę do czasu odbioru urządzenia.',fontSize:10,bold:true,color:'#000000',margin:[0,7,0,0]}
   ]
 });
 
@@ -1736,7 +1736,7 @@ const renderServiceCardPdf = async (orderId,variant='CUSTOMER') => {
   }else if(normalized==='CUSTOMER'){
     definition={
       ...common,
-      pageSize:'A4',pageOrientation:'portrait',pageMargins:[34,32,34,32],
+      pageSize:'A4',pageOrientation:'portrait',pageMargins:[30,24,30,24],
       defaultStyle:{font:'Roboto',fontSize:10,color:'#000000'},
       content:[customerServiceCardPortraitContent(context)]
     };
