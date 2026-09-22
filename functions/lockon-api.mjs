@@ -1768,6 +1768,70 @@ const renderServiceCardPdf = async (orderId,variant='CUSTOMER') => {
   };
 };
 
+const renderWarrantyCardPdf = async (orderId) => {
+  const context=await loadServiceCardContext(orderId);
+  if(!context.warrantyMonths||!context.warrantyIssuedAt||!context.warrantyExpiresAt){
+    throw Object.assign(new Error('Najpierw ustaw okres gwarancji.'),{status:409,code:'WARRANTY_REQUIRED'});
+  }
+  const definition={
+    pageSize:'A4',
+    pageOrientation:'portrait',
+    pageMargins:[36,34,36,34],
+    defaultStyle:{font:'Roboto',fontSize:10,color:'#111827'},
+    info:{title:'LockOn ServiceOS · karta gwarancyjna · '+context.serviceCardNumber,author:'LockOn ServiceOS'},
+    content:[
+      {columns:[
+        {stack:[
+          {text:[{text:'LockOn',bold:true},{text:'  ServiceOS',color:'#4b5563'}],fontSize:18},
+          {text:'Karta gwarancyjna',fontSize:25,bold:true,margin:[0,8,0,3]},
+          {text:'Dokument gwarancji serwisowej do wykonanego zlecenia.',fontSize:10,color:'#4b5563'}
+        ],width:'*'},
+        {stack:[
+          {text:'ZLECENIE',fontSize:8,bold:true,color:'#6b7280',alignment:'right'},
+          {text:'#'+context.orderNumber,fontSize:17,bold:true,alignment:'right',margin:[0,3,0,4]},
+          {text:context.serviceCardNumber,fontSize:9,color:'#4b5563',alignment:'right'}
+        ],width:170}
+      ]},
+      {canvas:[{type:'line',x1:0,y1:0,x2:515,y2:0,lineWidth:1.2,lineColor:'#4b5563'}],margin:[0,14,0,16]},
+      {text:'Urządzenie i klient',fontSize:13,bold:true,margin:[0,0,0,7]},
+      serviceCardInfoTable([
+        ['Klient',context.customerName],
+        ['Urządzenie',context.device],
+        ['IMEI',context.imei||'Nie podano'],
+        ['Numer seryjny',context.serialNumber||'Nie podano'],
+        ['Punkt serwisowy',context.pointName+(context.pointCity?' · '+context.pointCity:'')]
+      ],{labelWidth:130,labelFontSize:10,valueFontSize:11,rowMargin:4}),
+      {text:'Gwarancja po naprawie',fontSize:13,bold:true,margin:[0,16,0,7]},
+      serviceCardInfoTable([
+        ['Okres gwarancji',String(context.warrantyMonths)+' mies.'],
+        ['Początek gwarancji',formatServiceCardDate(context.warrantyIssuedAt)],
+        ['Gwarancja ważna do',formatServiceCardDate(context.warrantyExpiresAt)],
+        ['Zlecenie','#'+context.orderNumber]
+      ],{labelWidth:130,labelFontSize:10,valueFontSize:11,rowMargin:4}),
+      {margin:[0,16,0,0],table:{widths:['*'],body:[[{margin:[14,12,14,12],columns:[
+        {width:'*',stack:[
+          {text:'PANEL KLIENTA',fontSize:10,bold:true},
+          {text:'Aktualny status gwarancji, datę ważności i pozostałą liczbę dni sprawdzisz w panelu klienta.',fontSize:10,color:'#374151',lineHeight:1.25,margin:[0,5,14,10]},
+          {text:context.customerPortalBaseUrl,fontSize:10.5,bold:true},
+          {text:'Kod klienta',fontSize:9,bold:true,color:'#4b5563',margin:[0,10,0,3]},
+          {text:context.customerPortalCode,fontSize:18,bold:true,characterSpacing:1}
+        ]},
+        {width:130,stack:[
+          {qr:context.customerPortalUrl,fit:112,alignment:'center'},
+          {text:'Zeskanuj QR',fontSize:9,bold:true,alignment:'center',margin:[0,6,0,0]}
+        ]}
+      ],columnGap:14}]]},layout:{hLineWidth:()=>1,vLineWidth:()=>1,hLineColor:()=> '#6b7280',vLineColor:()=> '#6b7280'}},
+      {text:'Gwarancja serwisowa dotyczy zakresu wykonanej naprawy. Dokument zachowaj razem z urządzeniem.',fontSize:10,bold:true,margin:[0,16,0,0]},
+      {text:'Status gwarancji w panelu klienta jest aktualizowany automatycznie na podstawie danych zlecenia.',fontSize:9,color:'#4b5563',margin:[0,5,0,0]}
+    ]
+  };
+  return {
+    context,
+    fileName:'Karta-gwarancyjna-'+context.serviceCardNumber+'.pdf',
+    buffer:await pdfToBuffer(definition)
+  };
+};
+
 const rotateCustomerPortalCode = async (customerId) => {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const code = generateCustomerPortalCode();
