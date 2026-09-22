@@ -244,9 +244,13 @@ jobs:
             "Inny etap",
             "Najpierw gwarancja",
             "deviceAtHomePoint",
-            "Gwarancja pojawi się dopiero po fizycznym powrocie urządzenia"
+            "Gwarancja pojawi się dopiero po fizycznym powrocie urządzenia",
+            "Etap zmienisz w „Szczegółach”."
           ) | ForEach-Object {
             if (-not $service.Contains($_)) { throw "Missing 1.0.0.15 service UX hotfix contract: $_" }
+          }
+          if ($service.Contains('select value={order.status}')) {
+            throw "Native order-status select must not return to the service list/details workflow."
           }
           $costing = Get-Content src/components/OrderCostingCard.tsx -Raw
           @("Mam FV zakupu","Kwota za robociznę","Dodaj FV w PDF","Marża informacyjna") | ForEach-Object {
