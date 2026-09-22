@@ -112,6 +112,18 @@ jobs:
           }
           $service = Get-Content src/pages/ServicePage.tsx -Raw
           if (-not $service.Contains("searchRequestRef")) { throw "Missing service search race guard." }
+          @(
+            "isActualTechnician ? 'CALENDAR' : 'ORDERS'",
+            "service-stage-actions",
+            "canShowWarranty",
+            "canManageWarrantyHere"
+          ) | ForEach-Object {
+            if (-not $service.Contains($_)) { throw "Missing service hotfix UX contract: $_" }
+          }
+          $central = Get-Content functions/lockon-api.mjs -Raw
+          @("WARRANTY_ACTIVE_POINT_REQUIRED","WARRANTY_WRONG_ACTIVE_POINT","WARRANTY_DEVICE_IN_TRANSFER") | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing warranty physical-location contract: $_" }
+          }
           $browser = Get-Content src/pages/BrowserPage.tsx -Raw
           @("actionBusy","browser-action-error") | ForEach-Object {
             if (-not $browser.Contains($_)) { throw "Missing browser action guard: $_" }

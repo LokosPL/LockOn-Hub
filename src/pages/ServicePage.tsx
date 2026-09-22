@@ -122,7 +122,7 @@ type ServiceTab = 'CALENDAR' | 'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAI
 export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
   const {confirm}=useAppDialog();
   const isActualTechnician = auth.role === 'TECHNICIAN';
-  const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'NEW');
+  const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'ORDERS');
   const [form, setForm] = useState<ServiceIntakeForm>(() => makeEmptyForm());
   const [intakeStage, setIntakeStage] = useState<'TYPE'|'DETAILS'>('TYPE');
   const [brandOpen, setBrandOpen] = useState(false);
@@ -1077,13 +1077,31 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const notes = orderNotes[order.id] ?? [];
         const currentServicePointId = order.openTransfer ? '' : (order.currentPointId || order.homePointId || order.pointId);
         const pointTechnicians = currentServicePointId ? (techniciansByPoint[currentServicePointId] ?? []) : [];
-        const canOperateCurrentPoint = Boolean(currentServicePointId) && pointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(currentServicePointId));
+        const operatingPointId = auth.point?.id ?? '';
+        const canOperateCurrentPoint = Boolean(currentServicePointId) && operatingPointId === currentServicePointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(currentServicePointId));
         const canEditOrderHere = canEditStatus && canOperateCurrentPoint && !order.openTransfer;
         const canEditIntakeHere = canEditIntake && canOperateCurrentPoint && !order.openTransfer;
         const canTransferHere = canTransferService && canOperateCurrentPoint && !order.openTransfer;
         const canUseOrderFinance = canEditCosts && (!isActualTechnician || order.assignedTechnicianId === auth.user?.id);
-        const stageSteps=['Przyjęto','Diagnoza','Oczekiwanie na decyzję / części','Naprawa','Testy','Zakończono naprawę','Gotowe do odbioru','Wydano'];
-        const stageIndex=({RECEIVED:0,DIAGNOSIS:1,WAITING_PARTS:2,IN_REPAIR:3,REPAIR_DONE:5,READY:6,COMPLETED:7} as Record<string,number>)[order.status] ?? 0;
+        const physicalPointId = order.currentPointId || order.homePointId || order.pointId;
+        const canManageWarrantyHere = canEditOrderHere && Boolean(operatingPointId) && physicalPointId === operatingPointId;
+        const canShowWarranty = order.handlingMode!=='TRANSFER_ONLY' && (
+          canManageWarrantyHere ||
+          Boolean(order.warrantyMonths) ||
+          order.status==='READY' ||
+          order.status==='COMPLETED'
+        );
+        const primaryStageAction = ({
+          RECEIVED:{status:'DIAGNOSIS',label:'Rozpocznij diagnozę'},
+          DIAGNOSIS:{status:'IN_REPAIR',label:'Rozpocznij naprawę'},
+          WAITING_PARTS:{status:'IN_REPAIR',label:'Części są — rozpocznij naprawę'},
+          IN_REPAIR:{status:'REPAIR_DONE',label:'Zakończ naprawę'},
+          REPAIR_DONE:{status:'READY',label:'Gotowe do odbioru'},
+          READY:{status:'COMPLETED',label:'Wydaj klientowi'}
+        } as Record<string,{status:string;label:string}>)[order.status];
+        const primaryStageBlocked = primaryStageAction?.status==='READY' && (order.canMarkReady===false || !order.warrantyReady);
+        const stageSteps=['Przyjęto','Diagnoza','Części','Naprawa','Zakończono','Gotowe','Wydano'];
+        const stageIndex=({RECEIVED:0,DIAGNOSIS:1,WAITING_PARTS:2,IN_REPAIR:3,REPAIR_DONE:4,READY:5,COMPLETED:6} as Record<string,number>)[order.status] ?? 0;
         return <div className="service-order-details-backdrop" role="presentation" onMouseDown={()=>setExpandedOrderId(null)}>
           <section className="service-order-details-dialog" role="dialog" aria-modal="true" aria-label={`Szczegóły zlecenia #${order.orderNumber}`} onMouseDown={(event)=>event.stopPropagation()}>
             <header className="service-order-details-header">
@@ -1098,28 +1116,45 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
 
                       <section className="service-workspace-card service-stage-card">
-                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Etap naprawy</strong><span>Naprawa, testy, gwarancja i wydanie w jednym czytelnym przebiegu.</span></div></div>
+                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Co teraz ze zleceniem?</strong><span>Najważniejsza akcja jest na wierzchu. Pełna korekta etapu jest schowana niżej.</span></div></div>
                         <div className="service-stage-overview">
                           <div className="service-stage-progress"><span style={{width:`${order.workflow?.progressPercent ?? 10}%`}}/></div>
-                          <div className="service-repair-stage-rail">
+                          <div className="service-repair-stage-rail service-repair-stage-rail-compact">
                             {stageSteps.map((label,index)=><span key={label} className={index<stageIndex?'done':index===stageIndex?'current':index===stageIndex+1?'next':''}>{label}</span>)}
                           </div>
-                          <div className="service-stage-meta">
-                            <div><span>Aktualny status</span><strong>{order.statusLabel}</strong></div>
-                            <div><span>Następny krok</span><strong>{order.workflow?.nextAction || 'Sprawdź szczegóły zlecenia.'}</strong></div>
-                            <div><span>Termin</span><strong>{order.estimatedCompletionAt?new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL'):'Nie podano'}</strong></div>
-                            <div><span>Lokalizacja</span><strong>{order.currentLocationLabel || order.currentPointName || order.pointName}</strong></div>
+                          <div className="service-stage-meta service-stage-meta-simple">
+                            <div><span>Teraz</span><strong>{order.statusLabel}</strong></div>
+                            <div><span>Następnie</span><strong>{order.workflow?.nextAction || 'Sprawdź szczegóły zlecenia.'}</strong></div>
+                            <div><span>Telefon jest</span><strong>{order.currentLocationLabel || order.currentPointName || order.pointName}</strong></div>
                           </div>
                         </div>
-                        {canEditOrderHere ? <label className="service-stage-select">
-                          <span>Zmień etap</span>
-                          <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e)=>void changeStatus(order,e.target.value)}>
-                            {statuses.map(([value,label])=><option key={value} value={value} disabled={(value==='READY'&&(order.status!=='REPAIR_DONE'||order.canMarkReady===false||!order.warrantyReady))||(value==='COMPLETED'&&order.status!=='READY')}>{label}</option>)}
-                          </select>
-                        </label> : <div className="service-history-empty">Etap może zmienić użytkownik obsługujący aktualny punkt urządzenia.</div>}
+                        {canEditOrderHere ? <div className="service-stage-actions">
+                          {primaryStageAction && <button
+                            type="button"
+                            className="button primary service-stage-primary"
+                            disabled={Boolean(orderBusyId)||primaryStageBlocked}
+                            onClick={()=>void changeStatus(order,primaryStageAction.status)}
+                          >{primaryStageAction.label}</button>}
+                          {(order.status==='DIAGNOSIS'||order.status==='IN_REPAIR') && <button
+                            type="button"
+                            className="button secondary"
+                            disabled={Boolean(orderBusyId)}
+                            onClick={()=>void changeStatus(order,'WAITING_PARTS')}
+                          >Czekam na części</button>}
+                          {order.status==='REPAIR_DONE' && !order.warrantyReady && <small className="service-stage-gate">Aby oznaczyć „Gotowe do odbioru”, przygotuj gwarancję poniżej.</small>}
+                          <details className="service-stage-more">
+                            <summary>Inna zmiana / korekta etapu</summary>
+                            <label className="service-stage-select">
+                              <span>Status</span>
+                              <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e)=>void changeStatus(order,e.target.value)}>
+                                {statuses.map(([value,label])=><option key={value} value={value} disabled={(value==='READY'&&(order.status!=='REPAIR_DONE'||order.canMarkReady===false||!order.warrantyReady))||(value==='COMPLETED'&&order.status!=='READY')}>{label}</option>)}
+                              </select>
+                            </label>
+                          </details>
+                        </div> : <div className="service-history-empty">{!operatingPointId?'Wybierz konkretny aktywny punkt zamiast „Wszystkie punkty”, aby obsługiwać ten telefon.':'Etap może zmienić tylko punkt, w którym fizycznie znajduje się telefon.'}</div>}
                       </section>
 
-                      {order.handlingMode!=='TRANSFER_ONLY' && (
+                      {canShowWarranty && (
                         <section className={`service-workspace-card service-warranty-card ${order.warrantyReady?'ready':''}`}>
                           <div className="service-workspace-title"><ShieldCheck size={15}/><div><strong>Gwarancja po naprawie</strong><span>Wymagana przed oznaczeniem urządzenia jako gotowe do odbioru.</span></div></div>
                           <div className="service-warranty-status">
@@ -1128,7 +1163,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             <div><span>Karta</span><strong>{order.warrantyCardPrintedAt ? 'Wygenerowana' : 'Do wygenerowania'}</strong></div>
                             <div><span>Numer</span><strong>{order.warrantyCardNumber || '—'}</strong></div>
                           </div>
-                          {order.status==='REPAIR_DONE' ? <>
+                          {order.status==='REPAIR_DONE' && canManageWarrantyHere ? <>
                             <div className="service-warranty-controls">
                               <label><span>Gwarancja (miesiące)</span><input type="number" min="1" max="60" step="1" value={warrantyDrafts[order.id]??''} onChange={(e)=>setWarrantyDrafts((current)=>({...current,[order.id]:e.target.value.replace(/\D/g,'').slice(0,2)}))} placeholder="np. 3 lub 6"/></label>
                               <label className="service-warranty-repair-summary"><span>Wykonana naprawa</span><textarea rows={3} maxLength={2000} value={warrantyRepairDrafts[order.id]??''} onChange={(e)=>setWarrantyRepairDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="Np. wymiana wyświetlacza, czyszczenie i test funkcjonalny"/></label>
@@ -1142,13 +1177,16 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                                 : 'Wpisz liczbę miesięcy gwarancji. Po zapisaniu wydrukuj kartę z QR i kodem klienta.'}</small>
                           </> : <small className="service-warranty-hint">{order.status==='READY'||order.status==='COMPLETED'
                             ? 'Gwarancja została przygotowana przed odbiorem urządzenia.'
-                            : 'Sekcja odblokuje zapis gwarancji po ustawieniu etapu „Naprawa zakończona”.'}</small>}
+                            : order.status==='REPAIR_DONE'
+                              ? 'Gwarancję wystawia się w aktywnym punkcie, w którym fizycznie znajduje się telefon.'
+                              : 'Gwarancja została zapisana dla tego zlecenia.'}</small>}
                         </section>
                       )}
 
                       {draft && (
-                        <section className="service-workspace-card">
-                          <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
+                        <details className="service-workspace-card service-workspace-collapse">
+                          <summary><Smartphone size={15}/><span><strong>Dane urządzenia i realizacja</strong><small>IMEI, numer seryjny, termin, technik i ceny.</small></span></summary>
+                          <div className="service-collapse-body">
                           <div className="service-details-grid">
                             <label><span>IMEI</span><input disabled={!canEditIntakeHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
                             <label><span>Numer seryjny</span><input disabled={!canEditIntakeHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
@@ -1159,13 +1197,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             <label className="full"><span>Uwagi do urządzenia</span><textarea disabled={!canEditIntakeHere} rows={3} maxLength={1000} value={draft.deviceNotes} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],deviceNotes:e.target.value}}))}/></label>
                           </div>
                           {canEditIntakeHere && <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void saveOrderDetails(order)}><Save size={13}/>{orderBusyId===order.id?'Zapisywanie…':'Zapisz szczegóły'}</button>}
-                        </section>
+                          </div>
+                        </details>
                       )}
 
-                      {canUseOrderFinance && <OrderCostingCard order={order}/>}
+                      {canUseOrderFinance && <details className="service-workspace-card service-workspace-collapse">
+                        <summary><BadgeDollarSign size={15}/><span><strong>Koszty, części i faktury</strong><small>Rozwiń tylko podczas rozliczania naprawy.</small></span></summary>
+                        <div className="service-collapse-body service-finance-collapse"><OrderCostingCard order={order}/></div>
+                      </details>}
 
-                      <section className="service-workspace-card service-transfer-card">
-                        <div className="service-workspace-title"><Truck size={15}/><div><strong>Logistyka urządzenia</strong><span>Punkt macierzysty jest stały, a transport jest prowadzony niezależnie od statusu naprawy.</span></div></div>
+                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" open={Boolean(order.openTransfer||order.returnRequired||order.handlingMode==='TRANSFER_ONLY')}>
+                        <summary><Truck size={15}/><span><strong>Logistyka urządzenia</strong><small>{order.openTransfer||order.returnRequired?'Wymaga uwagi — sprawdź transport lub powrót.':'Przekazanie do innego punktu, gdy jest potrzebne.'}</small></span></summary>
+                        <div className="service-collapse-body">
                         <div className="active-transfer-summary">
                           <div><MapPin size={15}/><span>Macierzysty: {order.homePointName || order.pointName}</span><b>·</b><strong>Teraz: {order.currentLocationLabel || order.currentPointName || 'W transporcie'}</strong></div>
                           <small>{order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
@@ -1213,18 +1256,20 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
                           {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót: ':'Do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
                         </div>}
-                      </section>
+                        </div>
+                      </details>
 
-                      <section className="service-workspace-card service-print-card">
-                        <div className="service-workspace-title"><Printer size={15}/><div><strong>Karta serwisowa</strong><span>QR klienta otwiera portal bez wpisywania kodu; QR urządzenia obsługuje logistykę pracownika.</span></div></div>
-                        <div className="service-print-card-actions">
+                      <details className="service-workspace-card service-workspace-collapse service-print-card">
+                        <summary><Printer size={15}/><span><strong>Dokumenty i wydruk</strong><small>Karta serwisowa, QR i wydruk A4.</small></span></summary>
+                        <div className="service-print-card-actions service-collapse-body">
                           <button className="button secondary small" disabled={Boolean(serviceCardBusyId)} onClick={()=>void reopenServiceCard(order,'PHYSICAL_AND_ONLINE')}><Printer size={13}/> A4: klient + urządzenie</button>
                           <button className="button secondary small" disabled={Boolean(serviceCardBusyId)} onClick={()=>void reopenServiceCard(order,'ONLINE_ONLY')}><Printer size={13}/> Tylko karta urządzenia</button>
                         </div>
-                      </section>
+                      </details>
 
-                      <section className="service-workspace-card">
-                        <div className="service-workspace-title"><IdCard size={15}/><div><strong>Karta klienta</strong><span>Historia widoczna tylko w Twoim zakresie punktów.</span></div></div>
+                      <details className="service-workspace-card service-workspace-collapse">
+                        <summary><IdCard size={15}/><span><strong>Klient i jego wcześniejsze zlecenia</strong><small>Rozwiń tylko, gdy potrzebujesz historii klienta.</small></span></summary>
+                        <div className="service-collapse-body">
                         {card ? <>
                           <div className="service-customer-card-head">
                             <div><strong>{card.customer.firstName} {card.customer.lastName}</strong><span>{card.customer.email || 'brak e-maila'} · {card.customer.phone || 'brak telefonu'}</span></div>
@@ -1234,10 +1279,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             {card.orders.slice(0,5).map((item)=><div key={item.id}><span>#{item.orderNumber} · {item.brand} {item.model}</span><small>{item.statusLabel} · {new Date(item.receivedAt).toLocaleDateString('pl-PL')}</small></div>)}
                           </div>
                         </> : <div className="service-history-empty">Pobieram kartę klienta…</div>}
-                      </section>
+                        </div>
+                      </details>
 
-                      <section className="service-workspace-card">
-                        <div className="service-workspace-title"><StickyNote size={15}/><div><strong>Notatki wewnętrzne</strong><span>Nie są wysyłane klientowi.</span></div></div>
+                      <details className="service-workspace-card service-workspace-collapse">
+                        <summary><StickyNote size={15}/><span><strong>Notatki wewnętrzne</strong><small>Diagnoza, części i ustalenia zespołu.</small></span></summary>
+                        <div className="service-collapse-body">
                         {canEditStatus && <div className="service-note-compose">
                           <textarea rows={3} maxLength={2000} value={noteDrafts[order.id] ?? ''} onChange={(e)=>setNoteDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="Diagnoza technika, zamówione części, ustalenia z klientem…"/>
                           <button className="button secondary small" disabled={Boolean(orderBusyId) || !(noteDrafts[order.id] ?? '').trim()} onClick={()=>void addOrderNote(order.id)}>Dodaj notatkę</button>
@@ -1246,10 +1293,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           {notes.map((note)=><div key={note.id}><div><strong>{note.authorName}</strong><span>{new Date(note.createdAt).toLocaleString('pl-PL')}</span></div><p>{note.body}</p></div>)}
                           {notes.length===0 && <div className="service-history-empty">Brak notatek wewnętrznych.</div>}
                         </div>
-                      </section>
+                        </div>
+                      </details>
 
-                      <section className="service-workspace-card service-workspace-history">
-                        <div className="service-workspace-title"><History size={15}/><div><strong>Historia statusów</strong><span>Pełna oś czasu zlecenia #{order.orderNumber}</span></div></div>
+                      <details className="service-workspace-card service-workspace-collapse service-workspace-history">
+                        <summary><History size={15}/><span><strong>Historia zlecenia</strong><small>Pełna oś czasu zmian statusu.</small></span></summary>
+                        <div className="service-collapse-body">
                         {(orderHistories[order.id] ?? []).map((item, index) => (
                           <div className="service-history-item" key={item.id}>
                             <div className="service-history-line"><i className={index === (orderHistories[order.id] ?? []).length - 1 ? 'current' : ''}></i></div>
@@ -1261,7 +1310,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           </div>
                         ))}
                         {(orderHistories[order.id] ?? []).length === 0 && <div className="service-history-empty">Brak zapisanych zmian statusu.</div>}
-                      </section>
+                        </div>
+                      </details>
                     </div>
           </section>
         </div>;
