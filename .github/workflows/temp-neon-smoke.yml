@@ -437,6 +437,12 @@ jobs:
           api POST "/service/orders/$order_id/status" '{"status":"REPAIR_DONE","note":"CI temp smoke"}' > repair-done.json
           node -e "const d=require('./repair-done.json');if(d.order?.status!=='REPAIR_DONE')throw new Error('Could not mark repair done at service point')"
 
+          set +e
+          ready_without_warranty_http="$(curl --silent --show-error --output ready-without-warranty.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_id/status"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data '{"status":"READY","note":"CI must be blocked before warranty"}')"
+          set -e
+          [ "$ready_without_warranty_http" = "409" ] || { echo "::error::READY was not blocked before warranty: HTTP $ready_without_warranty_http"; cat ready-without-warranty.json; exit 1; }
+          node -e "const d=require('./ready-without-warranty.json');if(d.error!=='WARRANTY_REQUIRED')throw new Error('READY rejection did not use WARRANTY_REQUIRED')"
+
           api POST "/service/orders/$order_id/warranty" '{"months":6}' > warranty.json
           node - <<'NODE'
           const d=require('./warranty.json');
@@ -626,6 +632,16 @@ jobs:
           if(Number(d.order.planPosition||0)<=0)throw new Error('Plan position was not persisted');
           if(!d.notification||typeof d.notification.sent!=='boolean')throw new Error('ETA notification result missing');
           NODE
+
+          earlier_day="$(node -e "const d=new Date(process.argv[1]);d.setUTCDate(d.getUTCDate()-1);process.stdout.write(d.toISOString())" "$target_day")"
+          set +e
+          earlier_http="$(curl --silent --show-error --output plan-earlier.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_1/plan"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$earlier_day")")"
+          remove_http="$(curl --silent --show-error --output plan-remove.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_1/plan"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data '{"estimatedCompletionAt":null,"targetIndex":0}')"
+          set -e
+          [ "$earlier_http" = "409" ] || { echo "::error::Plan allowed moving ETA backward: HTTP $earlier_http"; cat plan-earlier.json; exit 1; }
+          [ "$remove_http" = "409" ] || { echo "::error::Plan allowed removing established ETA: HTTP $remove_http"; cat plan-remove.json; exit 1; }
+          node -e "const d=require('./plan-earlier.json');if(d.error!=='ETA_CANNOT_MOVE_BACK')throw new Error('Backward plan move returned wrong error')"
+          node -e "const d=require('./plan-remove.json');if(d.error!=='ETA_CANNOT_REMOVE')throw new Error('ETA removal returned wrong error')"
 
           plan_api POST "/service/orders/$order_2/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-move-2.json
           plan_api POST "/service/orders/$order_1/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-reorder.json
