@@ -4426,6 +4426,107 @@ const route = async (request) => {
     return json(request,{ok:true});
   }
 
+  const scheduleMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/schedule$/);
+  if(method==='POST'&&scheduleMatch){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do planu pracy.'),{status:403});
+    const found=(await q("SELECT id,order_number,point_id,home_point_id,current_point_id,customer_id,assigned_technician_id,estimated_completion_at,status FROM service_orders WHERE id=$1 LIMIT 1",[scheduleMatch[1]])).rows[0];
+    if(!found)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,found.id);
+    if(u.role_code==='TECHNICIAN'&&found.assigned_technician_id!==u.id)return json(request,{error:'TECHNICIAN_ORDER_REQUIRED',message:'Możesz układać tylko własny plan pracy.'},403);
+    if(CLOSED_ORDER_STATUSES.has(found.status))return json(request,{error:'ORDER_CLOSED',message:'Zamkniętego zlecenia nie można przesuwać w planie.'},409);
+    const targetText=cleanText(body.estimatedCompletionAt,64);
+    if(!targetText)return json(request,{error:'ETA_REQUIRED',message:'Wybierz dzień w planie pracy.'},400);
+    const target=new Date(targetText);
+    if(Number.isNaN(target.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy przewidywany termin.'},400);
+    const current=found.estimated_completion_at?new Date(found.estimated_completion_at):null;
+    if(current&&!Number.isNaN(current.getTime())&&target.getTime()<current.getTime()-60_000){
+      return json(request,{error:'ETA_CANNOT_MOVE_BACK',message:'Terminu nie można skracać. Możesz pozostawić obecną datę albo przesunąć zlecenie na później.'},409);
+    }
+    if(!current&&target.getTime()<Date.now()-12*60*60*1000){
+      return json(request,{error:'ETA_IN_PAST',message:'Nie można zaplanować zlecenia w przeszłości.'},409);
+    }
+    const sameDay=Boolean(current)&&current.toISOString().slice(0,10)===target.toISOString().slice(0,10);
+    let position=Number(body.position);
+    if(!Number.isFinite(position)||position<1){
+      const max=(await q("SELECT COALESCE(max(work_queue_position),0)::int AS max FROM service_orders WHERE assigned_technician_id=$1 AND estimated_completion_at::date=$2::date AND status NOT IN ('COMPLETED','CANCELLED','REJECTED')",[found.assigned_technician_id,target])).rows[0];
+      position=Number(max?.max||0)+100;
+    }
+    await q("UPDATE service_orders SET estimated_completion_at=$2,work_queue_position=$3,updated_at=now() WHERE id=$1",[found.id,target,Math.round(position)]);
+    let notification={sent:false,reason:'DATE_UNCHANGED'};
+    if(!sameDay){
+      notification=await sendCustomerPortalEventEmail({
+        customerId:found.customer_id,
+        pointId:found.point_id,
+        preference:'serviceUpdates',
+        subject:'LockOn ServiceOS · zmiana przewidywanego terminu',
+        title:'Przewidywany termin Twojego zlecenia został zmieniony',
+        message:'Nowy przewidywany termin zlecenia #'+found.order_number+': '+target.toLocaleDateString('pl-PL',{timeZone:'Europe/Warsaw'})+'. Aktualny status zawsze sprawdzisz w panelu klienta.'
+      });
+      await audit(session,'SERVICE_ORDER_ETA_CHANGED','service_order',found.id,found.point_id,{from:current?.toISOString()||null,to:target.toISOString(),notification});
+    }
+    const view=(await listVisibleOrders(u)).find((order)=>order.id===found.id);
+    return json(request,{order:view,notification});
+  }
+
+  if(method==='POST'&&url.pathname==='/service/technician-workspace/reorder'){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Układanie kolejki jest dostępne dla serwisanta.'),{status:403,code:'TECHNICIAN_ONLY'});
+    const orderIds=Array.isArray(body.orderIds)?body.orderIds.map((id)=>cleanText(id,80)).filter(Boolean).slice(0,100):[];
+    const dateText=cleanText(body.date,20);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(dateText)||!orderIds.length)return json(request,{error:'REORDER_PAYLOAD',message:'Nieprawidłowa kolejka dnia.'},400);
+    const rows=(await q("SELECT id FROM service_orders WHERE id=ANY($1::text[]) AND assigned_technician_id=$2 AND estimated_completion_at::date=$3::date AND status NOT IN ('COMPLETED','CANCELLED','REJECTED')",[orderIds,u.id,dateText])).rows;
+    if(rows.length!==orderIds.length)return json(request,{error:'REORDER_SCOPE',message:'Kolejka zawiera zlecenie spoza Twojego planu lub innego dnia.'},409);
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      for(let index=0;index<orderIds.length;index+=1){
+        await client.query("UPDATE service_orders SET work_queue_position=$2,updated_at=now() WHERE id=$1",[orderIds[index],(index+1)*100]);
+      }
+      await client.query('COMMIT');
+    }catch(error){await client.query('ROLLBACK').catch(()=>undefined);throw error;}finally{client.release();}
+    await audit(session,'SERVICE_WORKPLAN_REORDERED','user',u.id,session.activePointId||null,{date:dateText,count:orderIds.length});
+    return json(request,{ok:true,orderIds});
+  }
+
+  const warrantyMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/warranty$/);
+  if(method==='POST'&&warrantyMatch){
+    const session=await requireActive(request),u=session.user,body=await readJson(request);
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do gwarancji.'),{status:403});
+    const order=(await q("SELECT id,point_id,home_point_id,current_point_id,status FROM service_orders WHERE id=$1 LIMIT 1",[warrantyMatch[1]])).rows[0];
+    if(!order)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,order.id);
+    const activePoint=order.current_point_id||order.home_point_id||order.point_id;
+    await requirePoint(u,activePoint);
+    if(!['REPAIR_DONE','READY'].includes(order.status))return json(request,{error:'WARRANTY_STAGE',message:'Okres gwarancji ustaw po zakończeniu naprawy, przed oznaczeniem urządzenia jako gotowego.'},409);
+    const months=Number(body.months);
+    if(!Number.isInteger(months)||months<1||months>60)return json(request,{error:'WARRANTY_MONTHS',message:'Podaj okres gwarancji od 1 do 60 miesięcy.'},400);
+    await q("UPDATE service_orders SET warranty_months=$2,warranty_issued_at=NULL,warranty_expires_at=NULL,warranty_card_printed_at=NULL,updated_at=now() WHERE id=$1",[order.id,months]);
+    await audit(session,'SERVICE_WARRANTY_CONFIGURED','service_order',order.id,activePoint,{months});
+    const view=(await listVisibleOrders(u)).find((item)=>item.id===order.id);
+    return json(request,view);
+  }
+
+  const warrantyCardMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/warranty-card$/);
+  if(method==='POST'&&warrantyCardMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do karty gwarancyjnej.'),{status:403});
+    const order=(await q("SELECT id,point_id,home_point_id,current_point_id,status,warranty_months,warranty_issued_at,warranty_expires_at FROM service_orders WHERE id=$1 LIMIT 1",[warrantyCardMatch[1]])).rows[0];
+    if(!order)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,order.id);
+    const activePoint=order.current_point_id||order.home_point_id||order.point_id;
+    await requirePoint(u,activePoint);
+    if(!['REPAIR_DONE','READY','COMPLETED'].includes(order.status))return json(request,{error:'WARRANTY_STAGE',message:'Kartę gwarancyjną drukuje się po zakończeniu naprawy.'},409);
+    if(!order.warranty_months)return json(request,{error:'WARRANTY_REQUIRED',message:'Najpierw ustaw liczbę miesięcy gwarancji.'},409);
+    const issuedAt=order.warranty_issued_at?new Date(order.warranty_issued_at):new Date();
+    const expiresAt=order.warranty_expires_at?new Date(order.warranty_expires_at):new Date(issuedAt);
+    if(!order.warranty_expires_at)expiresAt.setUTCMonth(expiresAt.getUTCMonth()+Number(order.warranty_months));
+    await q("UPDATE service_orders SET warranty_issued_at=$2,warranty_expires_at=$3,warranty_card_printed_at=now(),updated_at=now() WHERE id=$1",[order.id,issuedAt,expiresAt]);
+    const card=await renderWarrantyCardPdf(order.id);
+    await audit(session,'SERVICE_WARRANTY_CARD_PRINTED','service_order',order.id,activePoint,{months:Number(order.warranty_months),expiresAt:expiresAt.toISOString()});
+    return json(request,{orderId:order.id,fileName:card.fileName,mimeType:'application/pdf',pdfBase64:card.buffer.toString('base64'),warranty:{months:Number(order.warranty_months),issuedAt:issuedAt.toISOString(),expiresAt:expiresAt.toISOString()}});
+  }
+
   const detailsMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
   if(method==='POST'&&detailsMatch){
     const session=await requireActive(request),u=session.user;
