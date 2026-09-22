@@ -4811,7 +4811,22 @@ const route = async (request) => {
     const found=(await q("SELECT id,point_id,home_point_id,current_point_id,status,assigned_technician_id,repair_summary,warranty_months,warranty_started_at,warranty_expires_at,warranty_card_printed_at FROM service_orders WHERE id=$1 LIMIT 1",[warrantyMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
-    const activePointId=found.current_point_id||found.home_point_id||found.point_id;
+    const homePointId=found.home_point_id||found.point_id;
+    const openTransfer=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') ORDER BY requested_at DESC LIMIT 1",[found.id])).rows[0]||null;
+    if(openTransfer){
+      return json(request,{error:'DEVICE_IN_TRANSFER',message:'Gwarancję można wystawić dopiero po zakończeniu transportu i fizycznym przyjęciu urządzenia w punkcie macierzystym.'},409);
+    }
+    const activePointId=found.current_point_id||homePointId;
+    if(activePointId!==homePointId){
+      return json(request,{error:'RETURN_REQUIRED',message:'Gwarancję można wystawić dopiero po fizycznym powrocie urządzenia do punktu macierzystego.'},409);
+    }
+    const actingPointId=session.activePointId;
+    if(GLOBAL_ROLES.has(u.role_code)&&!actingPointId){
+      return json(request,{error:'ACTIVE_POINT_REQUIRED',message:'Wybierz punkt, w którym fizycznie znajduje się urządzenie.'},409);
+    }
+    if(actingPointId&&actingPointId!==activePointId){
+      return json(request,{error:'WRONG_ACTIVE_POINT',message:'Gwarancję można wystawić tylko w punkcie, w którym fizycznie znajduje się urządzenie.'},409);
+    }
     await requirePoint(u,activePointId);
     if(u.role_code==='TECHNICIAN'&&found.assigned_technician_id!==u.id){
       throw Object.assign(new Error('Gwarancję może ustawić serwisant przypisany do tego zlecenia.'),{status:403,code:'TECHNICIAN_ORDER_REQUIRED'});
@@ -4843,7 +4858,22 @@ const route = async (request) => {
     const found=(await q("SELECT id,point_id,home_point_id,current_point_id,status,assigned_technician_id,warranty_months,warranty_expires_at FROM service_orders WHERE id=$1 LIMIT 1",[warrantyCardMatch[1]])).rows[0];
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
-    const activePointId=found.current_point_id||found.home_point_id||found.point_id;
+    const homePointId=found.home_point_id||found.point_id;
+    const openTransfer=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') ORDER BY requested_at DESC LIMIT 1",[found.id])).rows[0]||null;
+    if(openTransfer){
+      return json(request,{error:'DEVICE_IN_TRANSFER',message:'Kartę gwarancyjną można przygotować dopiero po zakończeniu transportu i fizycznym przyjęciu urządzenia.'},409);
+    }
+    const activePointId=found.current_point_id||homePointId;
+    if(activePointId!==homePointId){
+      return json(request,{error:'RETURN_REQUIRED',message:'Kartę gwarancyjną przygotuj po fizycznym powrocie urządzenia do punktu macierzystego.'},409);
+    }
+    const actingPointId=session.activePointId;
+    if(GLOBAL_ROLES.has(u.role_code)&&!actingPointId){
+      return json(request,{error:'ACTIVE_POINT_REQUIRED',message:'Wybierz punkt, w którym fizycznie znajduje się urządzenie.'},409);
+    }
+    if(actingPointId&&actingPointId!==activePointId){
+      return json(request,{error:'WRONG_ACTIVE_POINT',message:'Kartę gwarancyjną można przygotować tylko w punkcie, w którym fizycznie znajduje się urządzenie.'},409);
+    }
     await requirePoint(u,activePointId);
     if(u.role_code==='TECHNICIAN'&&found.assigned_technician_id!==u.id){
       throw Object.assign(new Error('Kartę gwarancyjną może przygotować serwisant przypisany do tego zlecenia.'),{status:403,code:'TECHNICIAN_ORDER_REQUIRED'});
