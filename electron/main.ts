@@ -55,7 +55,15 @@ const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
 let mainReady: Promise<void> = Promise.resolve();
+let rendererBootReady: Promise<void> = Promise.resolve();
+let resolveRendererBootReady: (() => void) | null = null;
 let localApiProcess: ChildProcess | null = null;
+
+const resetRendererBootGate = () => {
+  rendererBootReady = new Promise<void>((resolve) => {
+    resolveRendererBootReady = resolve;
+  });
+};
 
 const APP_PROTOCOL = 'lockon-serviceos';
 let pendingProtocolFocus = false;
@@ -279,10 +287,10 @@ const secureWebPreferences = {
   spellcheck: false
 } as const;
 
-const createSplashWindow = () => {
+const createSplashWindow = async () => {
   splashWindow = new BrowserWindow({
-    width: 610,
-    height: 390,
+    width: 680,
+    height: 430,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -294,11 +302,12 @@ const createSplashWindow = () => {
     webPreferences: secureWebPreferences
   });
   protectLocalWindow(splashWindow);
-  void splashWindow.loadURL(rendererUrl('splash'));
-  splashWindow.once('ready-to-show', () => splashWindow?.show());
+  await splashWindow.loadURL(rendererUrl('splash'));
+  if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
 };
 
 const createMainWindow = () => {
+  resetRendererBootGate();
   const size = windowSize();
   mainWindow = new BrowserWindow({
     ...size,
@@ -358,28 +367,41 @@ const pushSplashProgress = (percent: number, label: string) => {
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const runStartupSequence = async () => {
-  const stages = [
-    { percent: 12, label: 'Uruchamianie LockOn ServiceOS…', delay: 200 },
-    { percent: 30, label: 'Ładowanie interfejsu…', delay: 230 },
-    { percent: 50, label: 'Łączenie z LockOn API…', delay: 260 },
-    { percent: 68, label: 'Przygotowanie punktów i uprawnień…', delay: 260 },
-    { percent: 86, label: 'Finalizowanie interfejsu…', delay: 260 }
-  ];
-  for (const stage of stages) {
-    pushSplashProgress(stage.percent, stage.label);
-    await delay(stage.delay);
+  await delay(90);
+  pushSplashProgress(10, 'Uruchamiam bezpieczny silnik ServiceOS…');
+
+  pushSplashProgress(22, 'Przygotowuję usługi aplikacji…');
+  try {
+    await startBundledApi();
+  } catch (error) {
+    console.error('[LockOn API startup]', error);
   }
-  // Nie pozwalamy, aby splash został na 86% w nieskończoność.
-  // Po aktualizacji "ready-to-show" potrafi nie nadejść mimo załadowanego renderera,
-  // dlatego opieramy start na loadURL i dodajemy twardy bezpiecznik czasowy.
+
+  pushSplashProgress(36, 'Zabezpieczam komunikację i moduły…');
+  registerIpc();
+  configureUpdater();
+  startAutomaticUpdateChecks();
+
+  pushSplashProgress(52, 'Ładuję interfejs i ustawienia ekranu…');
+  createMainWindow();
+
   await Promise.race([mainReady, delay(8_000)]);
-  pushSplashProgress(100, 'Gotowe.');
-  await delay(200);
+  pushSplashProgress(70, 'Interfejs gotowy. Przywracam Twoją sesję…');
+
+  // Renderer zgłasza gotowość dopiero po wczytaniu preferencji i stanu logowania.
+  // Bezpiecznik nie blokuje aplikacji w nieskończoność przy problemach sieciowych.
+  await Promise.race([rendererBootReady, delay(12_000)]);
+  pushSplashProgress(90, 'Synchronizuję uprawnienia i widok startowy…');
+
+  await delay(180);
+  pushSplashProgress(100, 'Wszystko gotowe. Miłej pracy!');
+  await delay(260);
+
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
     mainWindow.focus();
   }
-  splashWindow?.close();
+  if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
   splashWindow = null;
 };
 
@@ -728,6 +750,11 @@ const runConnectivityDiagnostics = async () => {
 };
 
 const registerIpc = () => {
+  secureHandle('app:renderer-ready', () => {
+    resolveRendererBootReady?.();
+    resolveRendererBootReady = null;
+  });
+
   secureHandle('app:getInfo', () => ({
     name: APP_CONFIG.name,
     author: APP_CONFIG.author,
@@ -1298,17 +1325,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
 
-  try {
-    await startBundledApi();
-  } catch (error) {
-    console.error('[LockOn API startup]', error);
-  }
-  registerIpc();
-  configureUpdater();
-  startAutomaticUpdateChecks();
-  createSplashWindow();
-  createMainWindow();
-  await delay(380);
+  await createSplashWindow();
   await runStartupSequence();
   if (pendingProtocolFocus) focusMainWindow();
 
