@@ -1814,9 +1814,9 @@ const renderWarrantyCardPdf = async (orderId) => {
     throw Object.assign(new Error('Najpierw ustaw okres gwarancji serwisowej.'),{status:409,code:'WARRANTY_REQUIRED'});
   }
   const definition={
-    pageSize:'A5',
+    pageSize:'A4',
     pageOrientation:'portrait',
-    pageMargins:[34,30,34,30],
+    pageMargins:[46,38,46,38],
     defaultStyle:{font:'Roboto',fontSize:10,color:'#111827'},
     info:{title:'LockOn ServiceOS · karta gwarancyjna · '+context.serviceCardNumber,author:'LockOn ServiceOS',subject:'Karta gwarancyjna naprawy'},
     compress:true,
