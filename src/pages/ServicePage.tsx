@@ -1089,7 +1089,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           </section>
         </div>;
       })()}
-      {isActualTechnician && <MonthlyInvoicePrompt onOpenWarehouse={() => setTab('INVOICES')}/>} 
+      {isActualTechnician && pointId && <MonthlyInvoicePrompt pointId={pointId} onOpenWarehouse={() => setTab('INVOICES')}/>} 
       {showGmailOnboarding && (
         <section className="panel-card service-mail-card">
           <div className="service-mail-copy">
