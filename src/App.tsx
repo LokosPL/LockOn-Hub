@@ -31,8 +31,19 @@ export default function App() {
 
   useEffect(() => {
     if (view === 'splash') return;
-    void applyStoredUiPreferences().catch(() => undefined);
-    void window.lockOn.auth.getState().then(setAuth);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [, nextAuth] = await Promise.all([
+          applyStoredUiPreferences().catch(() => undefined),
+          window.lockOn.auth.getState()
+        ]);
+        if (!cancelled) setAuth(nextAuth);
+      } finally {
+        if (!cancelled) void window.lockOn.app.markReady().catch(() => undefined);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const actualRole = auth?.role as UserRole | null;
