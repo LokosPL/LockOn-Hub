@@ -4260,7 +4260,7 @@ const route = async (request) => {
   if(method==='GET'&&url.pathname==='/service/invoices'){
     const session=await requireActive(request),u=session.user;
     const period=cleanText(url.searchParams.get('month'),7)||nowIso().slice(0,7);
-    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    const pointId=cleanText(url.searchParams.get('pointId'),80)||session.activePointId||'';
     return json(request,{period,pointId,invoices:await listAccessibleInvoices(u,period,pointId)});
   }
 
@@ -4290,7 +4290,7 @@ const route = async (request) => {
   if(method==='POST'&&url.pathname==='/service/invoices/download-batch'){
     const session=await requireActive(request),u=session.user,body=await readJson(request);
     const period=cleanText(body.period,7);
-    const pointId=cleanText(body.pointId,80);
+    const pointId=cleanText(body.pointId,80)||session.activePointId||'';
     const invoices=await listAccessibleInvoices(u,period,pointId);
     const storage=requireInvoiceStorage();
     const files=[];
