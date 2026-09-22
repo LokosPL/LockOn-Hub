@@ -608,6 +608,7 @@ const orderView = (row) => ({
   finalCost: row.final_cost == null ? null : Number(row.final_cost),
   currency: row.currency || 'PLN',
   estimatedCompletionAt: row.estimated_completion_at || null,
+  planPosition: Number(row.plan_position || 0),
   receivedAt: row.received_at,
   completedAt: row.completed_at || null,
   createdAt: row.created_at,
@@ -2035,6 +2036,12 @@ const staffQuoteVisible = async (user, requestId) => {
 const renderStatusEmail = (item) => {
   const displayName = cleanText(item.sender_display_name || 'LockOn ServiceOS', 80).replace(/[\r\n]+/g, ' ');
   const isIntakeCard = item.template_key === 'SERVICE_INTAKE_CARD';
+  const isEtaChange = item.template_key === 'SERVICE_ETA_CHANGED';
+  const etaRaw = item.payload?.newEstimatedCompletionAt || null;
+  const etaDate = etaRaw ? new Date(etaRaw) : null;
+  const etaLabel = etaDate && !Number.isNaN(etaDate.getTime())
+    ? etaDate.toLocaleDateString('pl-PL',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})
+    : 'termin do ponownego ustalenia';
   const transferStatus = String(item.payload?.transferStatus || '').toUpperCase();
   const transferKind = String(item.payload?.transferKind || 'OUTBOUND_SERVICE').toUpperCase();
   const returnHome = transferKind === 'RETURN_HOME';
@@ -2054,7 +2061,7 @@ const renderStatusEmail = (item) => {
 
   const isTransfer = Boolean(transferLabels[transferStatus]);
   const targetStatus = String(item.payload?.to || item.status || 'RECEIVED').toUpperCase();
-  const label = isTransfer ? transferLabels[transferStatus] : (STATUS_LABELS[targetStatus] || targetStatus);
+  const label = isEtaChange ? ('Nowy przewidywany termin: ' + etaLabel) : isTransfer ? transferLabels[transferStatus] : (STATUS_LABELS[targetStatus] || targetStatus);
   const fromPoint = cleanText(item.payload?.fromPointName || item.point_name || '', 100);
   const toPoint = cleanText(item.payload?.toPointName || '', 100);
   const transferNote = cleanText(item.payload?.note || '', 300);
@@ -2080,9 +2087,15 @@ const renderStatusEmail = (item) => {
 
   const subject = isIntakeCard
     ? 'LockOn ServiceOS · karta serwisowa · zlecenie #' + item.order_number
-    : 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
+    : isEtaChange
+      ? 'LockOn ServiceOS · zmiana terminu · zlecenie #' + item.order_number
+      : 'LockOn ServiceOS · zlecenie #' + item.order_number + ' · ' + label;
   const intro = isIntakeCard
     ? 'Przyjęliśmy urządzenie ' + item.brand + ' ' + item.model + ' do punktu ' + item.point_name + '. W załączniku znajdziesz kartę serwisową PDF.'
+    : isEtaChange
+      ? (etaRaw
+          ? 'Przewidywany termin realizacji Twojego zlecenia został zmieniony. Nowy termin to ' + etaLabel + '.'
+          : 'Przewidywany termin realizacji Twojego zlecenia został zmieniony i zostanie ustalony ponownie przez serwis.')
     : isTransfer
     ? (
         returnHome
@@ -2139,7 +2152,7 @@ const renderStatusEmail = (item) => {
       '<div style="border:1px solid #252b33;border-radius:20px;background:#11151a;overflow:hidden">' +
         '<div style="padding:24px 22px 20px">' +
           '<div style="font-size:11px;color:#ff8b60;font-weight:800;letter-spacing:.1em">ZLECENIE #' + escapeHtml(item.order_number) + '</div>' +
-          '<div style="font-size:26px;line-height:1.15;font-weight:850;margin-top:8px">' + (isIntakeCard ? 'Potwierdzenie przyjęcia urządzenia' : 'Mamy aktualizację Twojej naprawy') + '</div>' +
+          '<div style="font-size:26px;line-height:1.15;font-weight:850;margin-top:8px">' + (isIntakeCard ? 'Potwierdzenie przyjęcia urządzenia' : isEtaChange ? 'Zmieniliśmy przewidywany termin' : 'Mamy aktualizację Twojej naprawy') + '</div>' +
           '<p style="margin:12px 0 0;color:#909aa5;font-size:14px;line-height:1.55">Dzień dobry ' + escapeHtml(item.first_name) + '. Poniżej najważniejsza informacja — bez technicznych szczegółów.</p>' +
         '</div>' +
         '<div style="margin:0 22px;padding:18px;border-radius:15px;background:#171d23;border:1px solid #2a323c">' +
@@ -2345,6 +2358,32 @@ const processNotification = async (notificationId) => {
       if(item.sender_point_id) await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1", [item.sender_point_id, message]);
     }
     return { sent: false, status: 'FAILED', reason: isGmailReauthError(error) ? 'GMAIL_REAUTH_REQUIRED' : 'SEND_FAILED', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
+  }
+};
+
+const queueEtaChangedNotification = async (actor, orderId, oldEta, newEta) => {
+  try {
+    const orderData = (await q(
+      "SELECT s.id,s.point_id,s.customer_id,c.email FROM service_orders s JOIN customers c ON c.id=s.customer_id WHERE s.id=$1 LIMIT 1",
+      [orderId]
+    )).rows[0];
+    if (!orderData?.email) return { queued:false,sent:false,reason:'NO_CUSTOMER_EMAIL' };
+    const settings = await mailSettingsForPoint(orderData.point_id);
+    const customerPrefs = await customerNotificationPreferences(orderData.customer_id);
+    if (customerPrefs.serviceUpdates === false) return { queued:false,sent:false,reason:'CUSTOMER_PREF_DISABLED' };
+    if (settings.automatic_email_enabled !== true) return { queued:false,sent:false,reason:'AUTOMATIC_EMAIL_DISABLED' };
+    const notificationId = makeId('ntf');
+    await q(
+      "INSERT INTO notification_outbox(id,user_id,customer_id,service_order_id,channel,template_key,recipient,payload,status) VALUES($1,$2,$3,$4,'EMAIL','SERVICE_ETA_CHANGED',$5,$6::jsonb,'PENDING')",
+      [notificationId,actor.id,orderData.customer_id,orderId,orderData.email,JSON.stringify({
+        oldEstimatedCompletionAt:oldEta ? new Date(oldEta).toISOString() : null,
+        newEstimatedCompletionAt:newEta ? new Date(newEta).toISOString() : null
+      })]
+    );
+    return { queued:true,...(await processNotification(notificationId)) };
+  } catch (error) {
+    console.error('[eta notification]',error);
+    return { queued:false,sent:false,reason:'NOTIFICATION_ERROR' };
   }
 };
 
@@ -4335,11 +4374,78 @@ const route = async (request) => {
     return json(request,{ok:true});
   }
 
+  const planMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/plan$/);
+  if(method==='POST'&&planMatch){
+    const session=await requireActive(request),u=session.user;
+    if(!SERVICE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do planu pracy.'),{status:403});
+    const found=(await q("SELECT id,point_id,home_point_id,current_point_id,assigned_technician_id,estimated_completion_at,plan_position,status FROM service_orders WHERE id=$1 LIMIT 1",[planMatch[1]])).rows[0];
+    if(!found)return json(request,{error:'NOT_FOUND'},404);
+    await requireOrder(u,found.id);
+    if(!found.assigned_technician_id)return json(request,{error:'TECHNICIAN_REQUIRED',message:'Zlecenie musi mieć przypisanego serwisanta, aby trafiło do planu pracy.'},409);
+    if(u.role_code==='TECHNICIAN'&&found.assigned_technician_id!==u.id)throw Object.assign(new Error('Możesz układać tylko własny plan pracy.'),{status:403});
+    if(['COMPLETED','CANCELLED','REJECTED'].includes(found.status))return json(request,{error:'ORDER_CLOSED',message:'Zamkniętego zlecenia nie można przesuwać w planie.'},409);
+    const body=await readJson(request);
+    const rawTarget=cleanText(body.estimatedCompletionAt,64);
+    let targetDate=null;
+    if(rawTarget){
+      targetDate=new Date(rawTarget);
+      if(Number.isNaN(targetDate.getTime()))return json(request,{error:'ETA',message:'Nieprawidłowy termin planu pracy.'},400);
+    }
+    const targetIndex=Math.max(0,Math.min(500,Number.isFinite(Number(body.targetIndex))?Math.trunc(Number(body.targetIndex)):500));
+    const dayKey=(value)=>value?new Date(value).toISOString().slice(0,10):null;
+    const sourceDay=dayKey(found.estimated_completion_at);
+    const targetDay=dayKey(targetDate);
+    const etaChanged=sourceDay!==targetDay;
+
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      await client.query("UPDATE service_orders SET estimated_completion_at=$2,updated_at=now() WHERE id=$1",[found.id,targetDate]);
+
+      if(targetDate){
+        const targetRows=(await client.query(
+          "SELECT id FROM service_orders WHERE assigned_technician_id=$1 AND estimated_completion_at::date=$2::date AND status NOT IN ('COMPLETED','CANCELLED','REJECTED') AND id<>$3 ORDER BY plan_position ASC,estimated_completion_at ASC,created_at ASC FOR UPDATE",
+          [found.assigned_technician_id,targetDate,found.id]
+        )).rows.map((row)=>row.id);
+        targetRows.splice(Math.min(targetIndex,targetRows.length),0,found.id);
+        for(let index=0;index<targetRows.length;index+=1){
+          await client.query("UPDATE service_orders SET plan_position=$2 WHERE id=$1",[targetRows[index],(index+1)*10]);
+        }
+      }else{
+        await client.query("UPDATE service_orders SET plan_position=0 WHERE id=$1",[found.id]);
+      }
+
+      if(sourceDay&&sourceDay!==targetDay){
+        const sourceRows=(await client.query(
+          "SELECT id FROM service_orders WHERE assigned_technician_id=$1 AND estimated_completion_at::date=$2::date AND status NOT IN ('COMPLETED','CANCELLED','REJECTED') AND id<>$3 ORDER BY plan_position ASC,estimated_completion_at ASC,created_at ASC FOR UPDATE",
+          [found.assigned_technician_id,sourceDay,found.id]
+        )).rows;
+        for(let index=0;index<sourceRows.length;index+=1){
+          await client.query("UPDATE service_orders SET plan_position=$2 WHERE id=$1",[sourceRows[index].id,(index+1)*10]);
+        }
+      }
+      await client.query('COMMIT');
+    }catch(error){
+      await client.query('ROLLBACK').catch(()=>undefined);
+      throw error;
+    }finally{client.release();}
+
+    await audit(session,etaChanged?'SERVICE_PLAN_MOVED':'SERVICE_PLAN_REORDERED','service_order',found.id,found.point_id,{
+      fromDate:sourceDay,toDate:targetDay,targetIndex
+    });
+    const notification=etaChanged
+      ? await queueEtaChangedNotification(u,found.id,found.estimated_completion_at,targetDate)
+      : {queued:false,sent:false,reason:'DATE_UNCHANGED'};
+    const view=(await listVisibleOrders(u)).find((order)=>order.id===found.id)||null;
+    return json(request,{order:view,notification});
+  }
+
   const detailsMatch=url.pathname.match(/^\/service\/orders\/([^/]+)\/details$/);
   if(method==='POST'&&detailsMatch){
     const session=await requireActive(request),u=session.user;
     if(!SERVICE_INTAKE_EDIT_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do edycji danych przyjęcia.'),{status:403});
     const found=(await q('SELECT id,point_id,home_point_id,current_point_id,handling_mode,device_id,assigned_technician_id,estimated_cost,final_cost,estimated_completion_at FROM service_orders WHERE id=$1 LIMIT 1',[detailsMatch[1]])).rows[0];
+    const previousEstimatedCompletionAt=found?.estimated_completion_at||null;
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
     const detailsOpenTransfer=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') LIMIT 1",[found.id])).rows[0]||null;
@@ -4429,6 +4535,11 @@ const route = async (request) => {
       hasImei:Boolean(imei),
       hasSerialNumber:Boolean(serialNumber)
     });
+    const previousEtaDay=previousEstimatedCompletionAt?new Date(previousEstimatedCompletionAt).toISOString().slice(0,10):null;
+    const nextEtaDay=estimatedCompletionAt?new Date(estimatedCompletionAt).toISOString().slice(0,10):null;
+    if(previousEtaDay!==nextEtaDay){
+      await queueEtaChangedNotification(u,found.id,previousEstimatedCompletionAt,estimatedCompletionAt);
+    }
     const view=(await listVisibleOrders(u)).find((order)=>order.id===found.id);
     return json(request,view);
   }
