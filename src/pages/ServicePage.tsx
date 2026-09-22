@@ -137,6 +137,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [ordersBusy, setOrdersBusy] = useState(false);
   const ordersLoadedRef = useRef(false);
   const [ordersVisibleLimit,setOrdersVisibleLimit]=useState(28);
+  const [ordersHasMore,setOrdersHasMore]=useState(true);
+  const [ordersPageBusy,setOrdersPageBusy]=useState(false);
   const [result, setResult] = useState<ServiceCreateOrderResult | null>(null);
   const [cardChoice, setCardChoice] = useState<{orderId:string;orderNumber:number}|null>(null);
   const [notificationChoice, setNotificationChoice] = useState<{
@@ -165,6 +167,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
   const [warrantyBusyId, setWarrantyBusyId] = useState<string | null>(null);
   const [warrantyDrafts, setWarrantyDrafts] = useState<Record<string,string>>({});
+  const [warrantyRepairDrafts, setWarrantyRepairDrafts] = useState<Record<string,string>>({});
   const [servicePoints, setServicePoints] = useState<AdminPoint[]>([]);
   const [transfers, setTransfers] = useState<ServiceTransfer[]>([]);
   const [transferDrafts, setTransferDrafts] = useState<Record<string,{toPointId:string;note:string}>>({});
@@ -248,13 +251,31 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const loadOrders = async () => {
     setOrdersBusy(true);
     try {
-      setOrders(await window.lockOn.service.listOrders());
+      const page=await window.lockOn.service.listOrders(40,0);
+      setOrders(page);
+      setOrdersHasMore(page.length===40);
+      setOrdersVisibleLimit(28);
       ordersLoadedRef.current=true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się pobrać zleceń.');
     } finally {
       setOrdersBusy(false);
     }
+  };
+
+  const loadMoreOrders=async()=>{
+    if(ordersPageBusy||!ordersHasMore)return;
+    setOrdersPageBusy(true);setError('');
+    try{
+      const page=await window.lockOn.service.listOrders(40,orders.length);
+      setOrders((current)=>{
+        const known=new Set(current.map((item)=>item.id));
+        return [...current,...page.filter((item)=>!known.has(item.id))];
+      });
+      setOrdersHasMore(page.length===40);
+      setOrdersVisibleLimit((value)=>value+40);
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się pobrać kolejnych zleceń.');}
+    finally{setOrdersPageBusy(false);}
   };
 
   const loadTransfers = async () => {
@@ -305,6 +326,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     setWarrantyDrafts((current)=>({
       ...current,
       [order.id]: current[order.id] ?? (order.warrantyMonths ? String(order.warrantyMonths) : '')
+    }));
+    setWarrantyRepairDrafts((current)=>({
+      ...current,
+      [order.id]: current[order.id] ?? (order.repairSummary || '')
     }));
 
     setHistoryBusyId(order.id);
@@ -587,9 +612,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       setError('Podaj okres gwarancji od 1 do 60 miesięcy.');
       return;
     }
+    const repairSummary=(warrantyRepairDrafts[order.id]||'').trim();
+    if(!repairSummary){
+      setError('Opisz wykonaną naprawę przed zapisaniem gwarancji.');
+      return;
+    }
     setWarrantyBusyId(order.id);setError('');setNotice('');
     try{
-      const result=await window.lockOn.service.updateWarranty(order.id,months);
+      const result=await window.lockOn.service.updateWarranty(order.id,{months,repairSummary});
       if(result.order)setOrders((current)=>current.map((item)=>item.id===order.id?result.order!:item));
       setWarrantyDrafts((current)=>({...current,[order.id]:String(months)}));
       setNotice(result.warranty.cardPrintedAt
