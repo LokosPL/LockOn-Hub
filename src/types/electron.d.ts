@@ -122,7 +122,7 @@ export interface GmailConnectionStatus { connected:boolean; needsReconnect?:bool
 export interface NotificationSettings { pointId:string; automaticEmailEnabled:boolean; notifyStatuses:string[]; senderDisplayName:string; footerText:string; updatedAt?:string; }
 export interface NotificationHistoryItem { id:string; orderId?:string|null; orderNumber?:number|null; recipient:string; status:'PENDING'|'PROCESSING'|'SENT'|'FAILED'|'CANCELLED'; attempts:number; subject?:string|null; providerMessageId?:string|null; lastError?:string|null; availableAt:string; sentAt?:string|null; createdAt:string; updatedAt:string; customerName?:string|null; device?:string|null; }
 export interface GmailTestResult { ok:true; recipient:string; messageId:string; }
-export interface NotificationRetryResult { id:string; sent:boolean; status?:string; reason?:string; attempts?:number; nextAttemptAt?:string; messageId?:string; }
+export interface NotificationRetryResult { id?:string; queued?:boolean; sent:boolean; status?:string; reason?:string; attempts?:number; nextAttemptAt?:string; messageId?:string; }
 export interface HelpAction {
   type:'WEBSITE_CODE'|'NAVIGATE'|'OPEN_ORDER'|'OPEN_USER'|'SPEED_TEST'|'CONNECTIVITY_TEST'|'BROWSER_SEARCH'|string;
   label?:string; target?:string; code?:string; expiresAt?:string;
