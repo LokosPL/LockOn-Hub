@@ -824,15 +824,28 @@ jobs:
           support_marker="ODPOWIEDZ-KONSULTANTA-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/tickets/$ticket_id/reply"             --header "Authorization: Bearer $support_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({message:process.argv[1]}))" "$support_marker")" > hotline-reply.json
 
-          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/conversation"             --header "Authorization: Bearer $user_token" > hotline-user-conversation.json
-          node - <<'NODE' "$support_marker" "$private_marker" "$parallel_bot_marker"
+          visible=0
+          for attempt in $(seq 1 12); do
+            curl --silent --show-error --fail-with-body               "$TEMP_API_URL/support/conversation"               --header "Authorization: Bearer $user_token" > hotline-user-conversation.json
+            if node - <<'NODE' "$support_marker" "$private_marker" "$parallel_bot_marker"
           const d=require('./hotline-user-conversation.json');
           const [supportMarker,privateMarker,parallelBot]=process.argv.slice(2);
-          if(d.consultantState!=='JOINED') throw new Error('Consultant did not join');
+          if(d.consultantState!=='JOINED') process.exit(1);
           for(const marker of [supportMarker,privateMarker,parallelBot]){
-            if(!(d.messages||[]).some(m=>String(m.text||'').includes(marker))) throw new Error('User conversation missing '+marker);
+            if(!(d.messages||[]).some(m=>String(m.text||'').includes(marker))) process.exit(1);
           }
           NODE
+            then
+              visible=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [[ "$visible" != "1" ]]; then
+            echo "::error::Latest consultant reply did not become visible in the user conversation."
+            cat hotline-user-conversation.json
+            exit 1
+          fi
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data '{}' > hotline-leave.json
           node -e "const d=require('./hotline-leave.json');if(d.consultantState!=='BOT')throw new Error('Bot did not remain after consultant channel closed')"
