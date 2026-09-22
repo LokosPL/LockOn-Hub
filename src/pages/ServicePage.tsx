@@ -1009,7 +1009,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         </div>
         <div className="service-tabs">
           {isActualTechnician && <button className={tab === 'CALENDAR' ? 'active' : ''} onClick={() => setTab('CALENDAR')}><CalendarDays size={15}/> Plan pracy</button>}
-          <button className={tab === 'NEW' ? 'active' : ''} onClick={() => setTab('NEW')}><ClipboardPlus size={15}/> Nowe zlecenie</button>
+          <button className={tab === 'NEW' ? 'active' : ''} onClick={() => { setIntakeStage('TYPE'); setTab('NEW'); }}><ClipboardPlus size={15}/> Nowe zlecenie</button>
           <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia{transferredToServiceCount>0&&<b className="service-tab-count" title="Telefony przekazane do serwisu">{transferredToServiceCount}</b>}</button>
           <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
           {canHandleCustomerQuotes && <button className={tab === 'QUOTES' ? 'active' : ''} onClick={() => {setTab('QUOTES');void loadCustomerQuotes(pointId);}}><MessageSquareText size={15}/> Wyceny klientów{customerQuotes.filter((item)=>item.status==='OPEN').length > 0 && <b className="service-tab-count">{customerQuotes.filter((item)=>item.status==='OPEN').length}</b>}</button>}
@@ -1480,7 +1480,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             })}
             {!ordersBusy && orders.length === 0 && <div className="service-empty">Brak zleceń w Twoim zakresie.</div>}
             {!ordersBusy && orders.length > 0 && visibleOrders.length === 0 && <div className="service-empty">Brak zleceń w wybranej sekcji.</div>}
-            {!ordersBusy && renderedOrders.length < visibleOrders.length && <div className="service-orders-load-more"><button className="button secondary" onClick={()=>setOrdersVisibleLimit((value)=>value+28)}>Pokaż kolejne {Math.min(28,visibleOrders.length-renderedOrders.length)} zleceń</button><small>Wyświetlam {renderedOrders.length} z {visibleOrders.length}. Mniejszy pakiet odciąża słabsze komputery.</small></div>}
+            {!ordersBusy && (renderedOrders.length < visibleOrders.length || ordersHasMore) && <div className="service-orders-load-more">
+              <button className="button secondary" disabled={ordersPageBusy} onClick={()=>renderedOrders.length<visibleOrders.length?setOrdersVisibleLimit((value)=>value+28):void loadMoreOrders()}>
+                {renderedOrders.length<visibleOrders.length
+                  ? `Pokaż kolejne ${Math.min(28,visibleOrders.length-renderedOrders.length)} zleceń`
+                  : ordersPageBusy?'Pobieram…':'Pobierz kolejne z serwera'}
+              </button>
+              <small>Wyświetlam {renderedOrders.length} z {visibleOrders.length} pobranych. ServiceOS pobiera następne zlecenia dopiero na żądanie.</small>
+            </div>}
           </div>
         </section>
       )}
