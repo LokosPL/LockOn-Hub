@@ -1058,6 +1058,24 @@ const registerIpc = () => {
     if(openError)throw new Error('Nie udało się otworzyć karty serwisowej: '+openError);
     return {opened:true,filePath,fileName:result.fileName,printMode:mode,staffScanCode:result.staffScanCode};
   });
+  secureHandle('service:updateWarranty', async (orderId: string, months: number) => {
+    const token=requireSessionToken();
+    return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/warranty`,{
+      method:'POST',
+      body:JSON.stringify({months:Math.max(1,Math.min(60,Math.trunc(Number(months)||0)))})
+    },token);
+  });
+  secureHandle('service:openWarrantyCard', async (orderId: string) => {
+    const token=requireSessionToken();
+    const result=await backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/warranty-card`,{
+      method:'POST',body:'{}'
+    },token) as {fileName:string;pdfBase64:string;order?:unknown};
+    const filePath=await writeApiPdfToTemp(result.pdfBase64,result.fileName);
+    const openError=await shell.openPath(filePath);
+    if(openError)throw new Error('Nie udało się otworzyć karty gwarancyjnej: '+openError);
+    return {opened:true,filePath,fileName:result.fileName,order:result.order};
+  });
+
   secureHandle('service:scanServiceCard', async (payload: any) => {
     const token=requireSessionToken();
     return backendRequest('/service/scan',{
