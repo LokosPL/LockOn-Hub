@@ -4416,3 +4416,63 @@ input,textarea,select{line-height:1.45}
   .invoice-head{flex-direction:column}.invoice-current-point{width:100%}.invoice-stats{grid-template-columns:1fr}.invoice-toolbar-clean-v3{grid-template-columns:1fr}.invoice-toolbar-clean-v3>*{grid-column:auto}.invoice-month-controls{overflow-x:auto}
   .invoice-list-v3>article{grid-template-columns:minmax(0,1fr) auto}.invoice-order-v3,.invoice-supplier-v3,.invoice-value-v3{grid-column:1}.invoice-actions-v3{grid-column:2;grid-row:1/4}
 }
+
+
+/* ServiceOS 1.0.0.14 — unified in-app dialogs */
+.app-dialog-backdrop{
+  position:fixed;inset:0;z-index:500;display:grid;place-items:center;padding:22px;
+  background:rgba(2,6,10,.78);
+}
+.app-dialog{
+  width:min(520px,calc(100vw - 32px));overflow:hidden;border:1px solid rgba(255,255,255,.11);
+  border-radius:18px;background:#10161d;box-shadow:0 28px 90px rgba(0,0,0,.5);
+}
+.app-dialog>header{display:flex;align-items:center;gap:11px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.app-dialog>header>div{display:flex;min-width:0;flex:1;flex-direction:column;gap:2px}
+.app-dialog>header strong{font-size:16px}.app-dialog>header small{color:var(--muted);font-size:10px}
+.app-dialog>header>button{width:34px;height:34px;display:grid;place-items:center;border:0;border-radius:9px;background:transparent;color:var(--muted);cursor:pointer}
+.app-dialog-icon{width:36px;height:36px;display:grid;place-items:center;border-radius:10px;background:rgba(255,114,68,.09);color:#ff8052}
+.app-dialog.danger .app-dialog-icon{background:rgba(255,77,77,.09);color:#ff7070}
+.app-dialog-body{padding:19px 18px}.app-dialog-body>p{margin:0;color:#c0c8d1;font-size:13px;line-height:1.65;white-space:pre-line}
+.app-dialog-body label{display:grid;gap:7px;margin-top:16px}.app-dialog-body label>span{font-size:11px;font-weight:800;color:#aab4bf}.app-dialog-body label small{color:var(--muted)}
+.app-dialog>footer{display:flex;justify-content:flex-end;gap:8px;padding:13px 18px;border-top:1px solid var(--line);background:rgba(0,0,0,.12)}
+.button.danger{border-color:rgba(255,77,77,.3);background:#8f2f32;color:#fff}
+.button.danger:hover{background:#a63a3d}
+
+/* New service intake uses the same modal language as order details. */
+.service-intake-modal-shell{
+  position:fixed!important;inset:20px!important;z-index:190!important;width:auto!important;max-width:1180px!important;
+  max-height:calc(100vh - 40px)!important;margin:auto!important;overflow:auto!important;
+  border:1px solid var(--line)!important;border-radius:18px!important;background:var(--panel)!important;
+  box-shadow:0 28px 90px rgba(0,0,0,.46)!important;padding:18px!important;
+}
+.service-intake-modal-shell::before{content:"";position:fixed;inset:0;z-index:-1;background:rgba(2,6,10,.74)}
+.service-intake-modal-close{position:sticky;top:0;z-index:4;float:right;width:38px;height:38px;display:grid;place-items:center;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);color:var(--text);cursor:pointer}
+.service-intake-type-screen,.service-intake-details-card{clear:both}
+
+/* Warranty stage */
+.service-stage-card{border-color:rgba(255,126,72,.18)!important;background:linear-gradient(145deg,rgba(255,112,65,.035),rgba(255,255,255,.01))}
+.service-stage-current{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin:12px 0}.service-stage-current>span{color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase}.service-stage-current>strong{font-size:16px}.service-stage-current>small{color:var(--muted)}
+.service-stage-actions{display:flex;flex-wrap:wrap;gap:7px}
+.service-stage-actions button{min-height:34px;padding:6px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);color:#aab4bf;font-size:10px;font-weight:750;cursor:pointer}
+.service-stage-actions button.active{border-color:rgba(255,120,67,.42);background:rgba(255,112,65,.1);color:#ff986e}.service-stage-actions button:disabled{opacity:.42;cursor:not-allowed}
+.service-stage-cancel{margin-top:10px}
+.service-warranty-gate{display:grid;gap:12px;margin-top:16px;padding:15px;border:1px solid rgba(255,133,71,.23);border-radius:13px;background:rgba(255,112,65,.045)}
+.service-warranty-gate>div:first-child>span{color:#ff956b;font-size:9px;font-weight:900;letter-spacing:.09em}.service-warranty-gate>div:first-child>strong{display:block;margin-top:5px;font-size:15px}.service-warranty-gate p{margin:5px 0 0;color:var(--muted);font-size:11px;line-height:1.55}
+.service-warranty-controls{display:grid;grid-template-columns:minmax(160px,1fr) auto auto;gap:8px;align-items:end}.service-warranty-controls label{display:grid;gap:5px}.service-warranty-controls label span{font-size:10px;font-weight:800;color:#9ea9b5}
+.service-warranty-state{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:10px}.service-warranty-state span{display:flex;flex-direction:column;gap:2px}.service-warranty-state small{color:var(--muted)}
+.service-warranty-state.pending{background:rgba(255,170,66,.06);color:#e0a662}.service-warranty-state.ready{background:rgba(83,204,143,.07);color:#73d9a4}
+.service-order-status-light{min-width:120px}.service-load-more{display:block;margin:12px auto 2px}
+
+/* Note details */
+.note-details-dialog{max-width:760px!important}.note-details-body{display:grid;gap:13px;padding:18px;overflow:auto}.note-details-body label:not(.notes-pin){display:grid;gap:6px}.note-details-body label>span{color:#aab4bf;font-size:10px;font-weight:800}.note-details-body textarea{resize:vertical}.note-details-footer{display:flex;justify-content:space-between;gap:9px;padding:14px 18px;border-top:1px solid var(--line)}
+.notes-list article{cursor:pointer}
+
+/* Work-plan restrictions and ordering */
+.workplan-days button.blocked{opacity:.38;cursor:not-allowed;border-style:dashed}
+.workplan-order-position{width:25px;height:25px;display:grid;place-items:center;flex:0 0 25px;border-radius:8px;background:rgba(255,255,255,.045);color:#8995a2;font-size:10px;font-weight:900}
+.workplan-order.dragging{opacity:.45}
+@media(max-width:760px){
+ .service-warranty-controls{grid-template-columns:1fr}.service-intake-modal-shell{inset:8px!important;max-height:calc(100vh - 16px)!important}
+ .app-dialog-backdrop{padding:10px}
+}
