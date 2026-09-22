@@ -608,6 +608,12 @@ const orderView = (row) => ({
   finalCost: row.final_cost == null ? null : Number(row.final_cost),
   currency: row.currency || 'PLN',
   estimatedCompletionAt: row.estimated_completion_at || null,
+  workQueuePosition: Number(row.work_queue_position ?? 1000),
+  warrantyMonths: row.warranty_months == null ? null : Number(row.warranty_months),
+  warrantyIssuedAt: row.warranty_issued_at || null,
+  warrantyExpiresAt: row.warranty_expires_at || null,
+  warrantyCardPrintedAt: row.warranty_card_printed_at || null,
+  warrantyReady: Boolean(row.warranty_months && row.warranty_issued_at && row.warranty_expires_at && row.warranty_card_printed_at),
   receivedAt: row.received_at,
   completedAt: row.completed_at || null,
   createdAt: row.created_at,
@@ -1454,7 +1460,7 @@ const pdfToBuffer = (definition) => new Promise((resolve,reject)=>{
 
 const loadServiceCardContext = async (orderId) => {
   const row=(await q(
-    "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.received_at,s.estimated_completion_at,s.estimated_cost,s.currency,s.point_id,s.home_point_id,s.current_point_id,c.id AS customer_id,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,p.name AS point_name,p.city AS point_city FROM service_orders s JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id WHERE s.id=$1 LIMIT 1",
+    "SELECT s.id,s.order_number,s.order_type,s.handling_mode,s.issue_description,s.status,s.received_at,s.estimated_completion_at,s.estimated_cost,s.currency,s.point_id,s.home_point_id,s.current_point_id,s.warranty_months,s.warranty_issued_at,s.warranty_expires_at,s.warranty_card_printed_at,c.id AS customer_id,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,p.name AS point_name,p.city AS point_city FROM service_orders s JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id JOIN points p ON p.id=s.point_id WHERE s.id=$1 LIMIT 1",
     [orderId]
   )).rows[0];
   if(!row)throw Object.assign(new Error('Nie znaleziono zlecenia.'),{status:404,code:'NOT_FOUND'});
@@ -1475,6 +1481,10 @@ const loadServiceCardContext = async (orderId) => {
     estimatedCompletionAt:row.estimated_completion_at||null,
     estimatedCost:row.estimated_cost==null?null:Number(row.estimated_cost),
     currency:String(row.currency||'PLN').trim()||'PLN',
+    warrantyMonths:row.warranty_months==null?null:Number(row.warranty_months),
+    warrantyIssuedAt:row.warranty_issued_at||null,
+    warrantyExpiresAt:row.warranty_expires_at||null,
+    warrantyCardPrintedAt:row.warranty_card_printed_at||null,
     pointId:row.point_id,
     pointName:row.point_name,
     pointCity:row.point_city||'',
@@ -2239,6 +2249,7 @@ const sendCustomerPortalEventEmail = async ({
   const customer=(await q("SELECT email,first_name,last_name FROM customers WHERE id=$1 LIMIT 1",[customerId])).rows[0];
   if(!customer?.email)return {sent:false,reason:'NO_CUSTOMER_EMAIL'};
   const prefs=await customerNotificationPreferences(customerId);
+  if(preference==='serviceUpdates'&&prefs.serviceUpdates===false)return {sent:false,reason:'CUSTOMER_PREF_DISABLED'};
   if(preference==='quoteUpdates'&&prefs.quoteUpdates===false)return {sent:false,reason:'CUSTOMER_PREF_DISABLED'};
   if(preference==='messages'&&prefs.messages===false)return {sent:false,reason:'CUSTOMER_PREF_DISABLED'};
   const sender=await loadActiveMailSender(pointId);
@@ -3865,7 +3876,16 @@ const route = async (request) => {
     const session=await requireActive(request),u=session.user;
     if(u.role_code!=='TECHNICIAN')throw Object.assign(new Error('Ten widok jest przeznaczony dla serwisanta.'),{status:403,code:'TECHNICIAN_ONLY'});
     const all=await listVisibleOrders(u);
-    const orders=all.filter((order)=>order.assignedTechnicianId===u.id&&!CLOSED_ORDER_STATUSES.has(order.status));
+    const orders=all
+      .filter((order)=>order.assignedTechnicianId===u.id&&!CLOSED_ORDER_STATUSES.has(order.status))
+      .sort((a,b)=>{
+        const etaA=a.estimatedCompletionAt?new Date(a.estimatedCompletionAt).getTime():Number.POSITIVE_INFINITY;
+        const etaB=b.estimatedCompletionAt?new Date(b.estimatedCompletionAt).getTime():Number.POSITIVE_INFINITY;
+        if(etaA!==etaB)return etaA-etaB;
+        const posA=Number(a.workQueuePosition??1000),posB=Number(b.workQueuePosition??1000);
+        if(posA!==posB)return posA-posB;
+        return Number(a.orderNumber)-Number(b.orderNumber);
+      });
     const counts={
       active:orders.length,
       received:orders.filter((order)=>order.status==='RECEIVED').length,
