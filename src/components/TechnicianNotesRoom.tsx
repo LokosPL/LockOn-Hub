@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Filter, NotebookPen, Pin, Plus, RefreshCw, Search, Sparkles, Trash2, XCircle } from 'lucide-react';
+import { Filter, NotebookPen, Pin, Plus, RefreshCw, Save, Search, Sparkles, Trash2, XCircle } from 'lucide-react';
 import type { TechnicianPrivateNote } from '../types/electron';
 import { useAppDialog } from './AppDialog';
 
@@ -17,6 +17,9 @@ export function TechnicianNotesRoom(){
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
   const [selectedId,setSelectedId]=useState<string|null>(null);
+  const [editTitle,setEditTitle]=useState('');
+  const [editBody,setEditBody]=useState('');
+  const [editPinned,setEditPinned]=useState(false);
 
   const load=async()=>{
     if(busy)return;
@@ -43,6 +46,14 @@ export function TechnicianNotesRoom(){
   },[notes,query,onlyPinned]);
 
   const selected=useMemo(()=>notes.find((note)=>note.id===selectedId)??null,[notes,selectedId]);
+  useEffect(()=>{
+    if(!selected)return;
+    setEditTitle(selected.title||'');
+    setEditBody(selected.body);
+    setEditPinned(selected.pinned);
+  },[selectedId]);
+
+  const openNote=(note:TechnicianPrivateNote)=>setSelectedId(note.id);
 
   const add=async()=>{
     if(busy||!body.trim())return;
@@ -72,6 +83,17 @@ export function TechnicianNotesRoom(){
       setSelectedId((current)=>current===note.id?null:current);
       setNotice('Notatka została usunięta.');
     }catch(reason){setError(reason instanceof Error?reason.message:'Nie udało się usunąć notatki.');}
+    finally{setBusy('');}
+  };
+
+  const saveSelected=async()=>{
+    if(!selected||busy||!editBody.trim())return;
+    setBusy(selected.id);setError('');setNotice('');
+    try{
+      const updated=await window.lockOn.service.updateTechnicianNote(selected.id,{title:editTitle.trim(),body:editBody.trim(),pinned:editPinned});
+      setNotes((current)=>current.map((item)=>item.id===updated.id?updated:item));
+      setNotice('Zmiany w notatce zostały zapisane.');
+    }catch(reason){setError(reason instanceof Error?reason.message:'Nie udało się zapisać zmian notatki.');}
     finally{setBusy('');}
   };
 
@@ -121,8 +143,8 @@ export function TechnicianNotesRoom(){
             className={(note.pinned?'pinned ':'')+'notes-card-clickable'}
             role="button"
             tabIndex={0}
-            onClick={()=>setSelectedId(note.id)}
-            onKeyDown={(event)=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();setSelectedId(note.id);}}}
+            onClick={()=>openNote(note)}
+            onKeyDown={(event)=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();openNote(note);}}}
           >
             <div className="notes-card-icon">{note.pinned?<Pin size={15}/>:<NotebookPen size={15}/>}</div>
             <div className="notes-card-body">
@@ -134,7 +156,7 @@ export function TechnicianNotesRoom(){
                   onClick={(event)=>{event.stopPropagation();void remove(note);}}
                 ><Trash2 size={14}/></button>
               </header>
-              <p>{note.body}</p>
+              <p>{note.body.length>180?note.body.slice(0,180)+'…':note.body}</p>
               <small className="notes-open-hint">Kliknij, aby otworzyć szczegóły →</small>
             </div>
           </article>)}
@@ -158,10 +180,17 @@ export function TechnicianNotesRoom(){
             <span>{selected.pinned?<><Pin size={13}/> Przypięta</>:<><NotebookPen size={13}/> Notatka robocza</>}</span>
             <span>Utworzono {new Date(selected.createdAt).toLocaleString('pl-PL')}</span>
           </div>
-          <article>{selected.body}</article>
+          <div className="notes-details-editor">
+            <label><span>Tytuł</span><input maxLength={120} value={editTitle} disabled={Boolean(busy)} onChange={(event)=>setEditTitle(event.target.value)}/></label>
+            <label><span>Treść</span><textarea rows={12} maxLength={4000} value={editBody} disabled={Boolean(busy)} onChange={(event)=>setEditBody(event.target.value)}/></label>
+            <label className="notes-pin"><input type="checkbox" checked={editPinned} disabled={Boolean(busy)} onChange={(event)=>setEditPinned(event.target.checked)}/><Pin size={13}/> Przypnij notatkę</label>
+          </div>
           <div className="notes-details-actions">
             <small>Tylko Ty widzisz tę notatkę. Nie jest częścią historii klienta ani zlecenia.</small>
-            <button className="button danger-soft" disabled={Boolean(busy)} onClick={()=>void remove(selected)}><Trash2 size={14}/> Usuń notatkę</button>
+            <div>
+              <button className="button secondary" disabled={Boolean(busy)||!editBody.trim()} onClick={()=>void saveSelected()}><Save size={14}/> Zapisz zmiany</button>
+              <button className="button danger-soft" disabled={Boolean(busy)} onClick={()=>void remove(selected)}><Trash2 size={14}/> Usuń notatkę</button>
+            </div>
           </div>
         </div>
       </section>
