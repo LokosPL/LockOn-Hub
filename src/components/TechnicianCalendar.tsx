@@ -73,11 +73,16 @@ export function TechnicianCalendar({onOpenOrder}:Props){
     const current=data?.orders.find((item)=>item.id===orderId); if(!current)return;
     const oldDay=current.estimatedCompletionAt?dayKey(new Date(current.estimatedCompletionAt)):null;
     const dateChanged=oldDay!==target;
+    let effectiveIndex=targetIndex;
+    if(target&&oldDay===target){
+      const sourceIndex=(byDay.get(target)??[]).findIndex((item)=>item.id===orderId);
+      if(sourceIndex>=0&&sourceIndex<effectiveIndex)effectiveIndex-=1;
+    }
     setMoving(orderId);setError('');setNotice('');
     try{
       const result=await window.lockOn.service.updatePlan(orderId,{
         estimatedCompletionAt:target?apiDate(target):null,
-        targetIndex
+        targetIndex:Math.max(0,effectiveIndex)
       });
       const refreshed=await window.lockOn.service.getTechnicianWorkspace();
       setData(refreshed);
@@ -178,7 +183,7 @@ export function TechnicianCalendar({onOpenOrder}:Props){
             <span className="workplan-order-state"><strong>{order.workflow?.attentionLabel||order.statusLabel}</strong><small>{order.workflow?.nextAction||'Otwórz szczegóły'}</small></span>
           </button>
         </div>)}
-        {dragging&&selectedOrders.length>0&&<div className={dropIndex===selectedOrders.length?'workplan-drop-end active':'workplan-drop-end'} onDragOver={(event)=>{event.preventDefault();event.stopPropagation();setDropTarget(selected);setDropIndex(selectedOrders.length);}} onDrop={(event)=>{event.preventDefault();event.stopPropagation();const id=event.dataTransfer.getData('text/service-order')||dragging;void moveOrder(id,selected,selectedOrders.filter((order)=>order.id!==id).length);}}>Upuść tutaj, aby zrobić na końcu</div>}
+        {dragging&&selectedOrders.length>0&&<div className={dropIndex===selectedOrders.length?'workplan-drop-end active':'workplan-drop-end'} onDragOver={(event)=>{event.preventDefault();event.stopPropagation();setDropTarget(selected);setDropIndex(selectedOrders.length);}} onDrop={(event)=>{event.preventDefault();event.stopPropagation();const id=event.dataTransfer.getData('text/service-order')||dragging;void moveOrder(id,selected,selectedOrders.length);}}>Upuść tutaj, aby zrobić na końcu</div>}
         {!selectedOrders.length&&<div className="workplan-empty"><CalendarDays size={25}/><strong>Ten dzień jest wolny</strong><span>Upuść tutaj zlecenie albo wybierz inny dzień.</span></div>}
       </div>
     </div>
