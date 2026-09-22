@@ -61,7 +61,7 @@ export function TechnicianCalendar({onOpenOrder}:Props){
       const list=result.get(key);
       if(list)list.push(order);else result.set(key,[order]);
     }
-    for(const items of result.values())items.sort((a,b)=>(a.workflow?.sortRank??50)-(b.workflow?.sortRank??50)||a.orderNumber!-b.orderNumber!);
+    for(const items of result.values())items.sort((a,b)=>(a.workflow?.sortRank??50)-(b.workflow?.sortRank??50)||((a.orderNumber??0)-(b.orderNumber??0)));
     return result;
   },[data]);
 
