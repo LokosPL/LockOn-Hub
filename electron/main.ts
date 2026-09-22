@@ -367,7 +367,10 @@ const pushSplashProgress = (percent: number, label: string) => {
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const runStartupSequence = async () => {
-  await delay(90);
+  const startupStartedAt = Date.now();
+  const minimumStartupMs = 4_600;
+
+  await delay(120);
   pushSplashProgress(10, 'Uruchamiam bezpieczny silnik ServiceOS…');
 
   pushSplashProgress(22, 'Przygotowuję usługi aplikacji…');
@@ -394,8 +397,15 @@ const runStartupSequence = async () => {
   pushSplashProgress(90, 'Synchronizuję uprawnienia i widok startowy…');
 
   await delay(180);
+  pushSplashProgress(95, 'Sprawdzam gotowość modułów…');
+
+  const remainingStartupMs = minimumStartupMs - (Date.now() - startupStartedAt);
+  if (remainingStartupMs > 0) {
+    await delay(remainingStartupMs);
+  }
+
   pushSplashProgress(100, 'Wszystko gotowe. Miłej pracy!');
-  await delay(260);
+  await delay(420);
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
