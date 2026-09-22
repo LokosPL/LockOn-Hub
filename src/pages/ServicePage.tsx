@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BadgeDollarSign, BellRing, CalendarClock, CalendarDays, CheckCircle2, ClipboardList, ClipboardPlus,
   Clock3, FileArchive, History, IdCard, Mail, MailCheck, MapPin, MessageSquareText, NotebookPen, PackageCheck, Printer, RefreshCw, RotateCcw, Save, Search, Send,
-  Settings2, Smartphone, StickyNote, Truck, UserCog, UserRound, Wrench, XCircle
+  Settings2, ShieldCheck, Smartphone, StickyNote, Truck, UserCog, UserRound, Wrench, XCircle
 } from 'lucide-react';
 import { InvoiceWarehouse } from '../components/InvoiceWarehouse';
 import { MonthlyInvoicePrompt } from '../components/MonthlyInvoicePrompt';
@@ -163,6 +163,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
   const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
+  const [warrantyBusyId, setWarrantyBusyId] = useState<string | null>(null);
+  const [warrantyDrafts, setWarrantyDrafts] = useState<Record<string,string>>({});
   const [servicePoints, setServicePoints] = useState<AdminPoint[]>([]);
   const [transfers, setTransfers] = useState<ServiceTransfer[]>([]);
   const [transferDrafts, setTransferDrafts] = useState<Record<string,{toPointId:string;note:string}>>({});
@@ -299,6 +301,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         finalCost: order.finalCost == null ? '' : String(order.finalCost),
         estimatedCompletionAt: toLocalDateInput(order.estimatedCompletionAt)
       }
+    }));
+    setWarrantyDrafts((current)=>({
+      ...current,
+      [order.id]: current[order.id] ?? (order.warrantyMonths ? String(order.warrantyMonths) : '')
     }));
 
     setHistoryBusyId(order.id);
@@ -574,8 +580,42 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     finally{setServiceCardBusyId(null);}
   };
 
+  const saveWarranty = async (order: ServiceOrderSummary) => {
+    if(warrantyBusyId)return;
+    const months=Number(warrantyDrafts[order.id]||0);
+    if(!Number.isInteger(months)||months<1||months>60){
+      setError('Podaj okres gwarancji od 1 do 60 miesięcy.');
+      return;
+    }
+    setWarrantyBusyId(order.id);setError('');setNotice('');
+    try{
+      const result=await window.lockOn.service.updateWarranty(order.id,months);
+      if(result.order)setOrders((current)=>current.map((item)=>item.id===order.id?result.order!:item));
+      setWarrantyDrafts((current)=>({...current,[order.id]:String(months)}));
+      setNotice(result.warranty.cardPrintedAt
+        ? `Gwarancja ${months} mies. została zapisana.`
+        : `Gwarancja ${months} mies. została zapisana. Teraz wydrukuj kartę gwarancyjną.`);
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się zapisać gwarancji.');}
+    finally{setWarrantyBusyId(null);}
+  };
+
+  const openWarrantyCard = async (order: ServiceOrderSummary) => {
+    if(warrantyBusyId)return;
+    setWarrantyBusyId(order.id);setError('');setNotice('');
+    try{
+      const result=await window.lockOn.service.openWarrantyCard(order.id);
+      if(result.order)setOrders((current)=>current.map((item)=>item.id===order.id?result.order!:item));
+      setNotice('Karta gwarancyjna została przygotowana i oznaczona jako wydrukowana. Dołącz ją do urządzenia.');
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się przygotować karty gwarancyjnej.');}
+    finally{setWarrantyBusyId(null);}
+  };
+
   const changeStatus = async (order: ServiceOrderSummary, status: string) => {
     if (orderBusyId || status === order.status) return;
+    if(status==='READY'&&!order.warrantyReady){
+      setError('Przed statusem „Gotowe do odbioru” ustaw gwarancję i wydrukuj kartę gwarancyjną.');
+      return;
+    }
     if (status === 'CANCELLED' && !await confirm({
       title:`Anulować zlecenie #${order.orderNumber}?`,
       message:'Zlecenie zostanie oznaczone jako anulowane.',
@@ -1025,13 +1065,55 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             <div className="service-order-workspace">
                       {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
 
+                      <section className="service-workspace-card service-stage-card">
+                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Etap zlecenia</strong><span>Najpierw zakończ naprawę, przygotuj gwarancję, a dopiero potem ustaw „Gotowe do odbioru”.</span></div></div>
+                        <div className="service-stage-overview">
+                          <div className="service-stage-progress"><span style={{width:`${order.workflow?.progressPercent ?? 10}%`}}/></div>
+                          <div className="service-stage-meta">
+                            <div><span>Aktualnie</span><strong>{order.statusLabel}</strong></div>
+                            <div><span>Następny krok</span><strong>{order.workflow?.nextAction || 'Sprawdź szczegóły zlecenia.'}</strong></div>
+                          </div>
+                        </div>
+                        {canEditOrderHere ? <label className="service-stage-select">
+                          <span>Zmień etap</span>
+                          <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e)=>void changeStatus(order,e.target.value)}>
+                            {statuses.map(([value,label])=><option key={value} value={value} disabled={(value==='READY'&&(order.status!=='REPAIR_DONE'||order.canMarkReady===false||!order.warrantyReady))||(value==='COMPLETED'&&order.status!=='READY')}>{label}</option>)}
+                          </select>
+                        </label> : <div className="service-history-empty">Etap może zmienić użytkownik obsługujący aktualny punkt urządzenia.</div>}
+                      </section>
+
+                      {order.handlingMode!=='TRANSFER_ONLY' && (
+                        <section className={`service-workspace-card service-warranty-card ${order.warrantyReady?'ready':''}`}>
+                          <div className="service-workspace-title"><ShieldCheck size={15}/><div><strong>Gwarancja po naprawie</strong><span>Wymagana przed oznaczeniem urządzenia jako gotowe do odbioru.</span></div></div>
+                          <div className="service-warranty-status">
+                            <div><span>Okres</span><strong>{order.warrantyMonths ? `${order.warrantyMonths} mies.` : 'Nie ustawiono'}</strong></div>
+                            <div><span>Ważna do</span><strong>{order.warrantyExpiresAt ? new Date(order.warrantyExpiresAt).toLocaleDateString('pl-PL') : '—'}</strong></div>
+                            <div><span>Karta</span><strong>{order.warrantyCardPrintedAt ? 'Wydrukowana' : 'Do wydruku'}</strong></div>
+                          </div>
+                          {order.status==='REPAIR_DONE' ? <>
+                            <div className="service-warranty-controls">
+                              <label><span>Gwarancja (miesiące)</span><input type="number" min="1" max="60" step="1" value={warrantyDrafts[order.id]??''} onChange={(e)=>setWarrantyDrafts((current)=>({...current,[order.id]:e.target.value.replace(/\D/g,'').slice(0,2)}))} placeholder="np. 3 lub 6"/></label>
+                              <button className="button secondary small" disabled={warrantyBusyId===order.id} onClick={()=>void saveWarranty(order)}><Save size={13}/> Zapisz gwarancję</button>
+                              <button className="button primary small" disabled={warrantyBusyId===order.id||!order.warrantyMonths} onClick={()=>void openWarrantyCard(order)}><Printer size={13}/> Wydrukuj kartę gwarancyjną</button>
+                            </div>
+                            <small className="service-warranty-hint">{order.warrantyReady
+                              ? 'Gotowe — karta została przygotowana. Możesz teraz ustawić „Gotowe do odbioru”.'
+                              : order.warrantyMonths
+                                ? 'Wydrukuj kartę gwarancyjną i dołącz ją do telefonu. Dopiero wtedy ServiceOS odblokuje „Gotowe do odbioru”.'
+                                : 'Wpisz liczbę miesięcy gwarancji. Po zapisaniu wydrukuj kartę z QR i kodem klienta.'}</small>
+                          </> : <small className="service-warranty-hint">{order.status==='READY'||order.status==='COMPLETED'
+                            ? 'Gwarancja została przygotowana przed odbiorem urządzenia.'
+                            : 'Sekcja odblokuje zapis gwarancji po ustawieniu etapu „Naprawa zakończona”.'}</small>}
+                        </section>
+                      )}
+
                       {draft && (
                         <section className="service-workspace-card">
                           <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
                           <div className="service-details-grid">
                             <label><span>IMEI</span><input disabled={!canEditIntakeHere} inputMode="numeric" maxLength={16} value={draft.imei} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],imei:e.target.value.replace(/\D/g,'')}}))}/></label>
                             <label><span>Numer seryjny</span><input disabled={!canEditIntakeHere} maxLength={120} value={draft.serialNumber} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],serialNumber:e.target.value}}))}/></label>
-                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditIntakeHere && <div className="service-detail-date-field"><span>Przewidywany termin</span><div><input disabled={!canEditIntakeHere} type="date" value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/><button type="button" className="button tiny secondary" disabled={!canEditIntakeHere} onClick={()=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:''}}))}>Nie podano</button></div></div>}
+                            {order.handlingMode !== 'TRANSFER_ONLY' && canEditIntakeHere && <div className="service-detail-date-field"><span>Przewidywany termin</span><div><input disabled={!canEditIntakeHere} type="date" min={toLocalDateInput(order.estimatedCompletionAt)||undefined} value={draft.estimatedCompletionAt} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:e.target.value}}))}/><button type="button" className="button tiny secondary" disabled={!canEditIntakeHere||Boolean(order.estimatedCompletionAt)} title={order.estimatedCompletionAt?'Istniejącego terminu nie można usunąć — można go tylko wydłużyć.':'Brak przewidywanego terminu'} onClick={()=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCompletionAt:''}}))}>Nie podano</button></div></div>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canManageOrderMeta && <label><span>Technik</span><select disabled={!canEditOrderHere} value={draft.assignedTechnicianId} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],assignedTechnicianId:e.target.value}}))}><option value="">Nieprzypisany</option>{pointTechnicians.map((technician)=><option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena orientacyjna (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.estimatedCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],estimatedCost:e.target.value}}))}/></label>}
                             {order.handlingMode !== 'TRANSFER_ONLY' && canEditCosts && <label><span>Cena końcowa (PLN)</span><input disabled={!canEditOrderHere} type="number" min="0" step="0.01" value={draft.finalCost} onChange={(e)=>setDetailsDrafts((current)=>({...current,[order.id]:{...current[order.id],finalCost:e.target.value}}))}/></label>}
@@ -1330,7 +1412,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="transfer-only-status"><span className="status-badge">Tylko przekazanie</span>{order.status !== 'CANCELLED' && <button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button>}</div>
                         ) : canEditOrderHere ? (
                           <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e) => void changeStatus(order, e.target.value)}>
-                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && (order.canMarkReady===false || order.status!=='REPAIR_DONE')) || (value==='COMPLETED' && order.status!=='READY')}>{label}</option>)}
+                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && (order.canMarkReady===false || order.status!=='REPAIR_DONE' || !order.warrantyReady)) || (value==='COMPLETED' && order.status!=='READY')}>{label}</option>)}
                           </select>
                         ) : (
                           <div className="service-status-readonly">
