@@ -1143,7 +1143,9 @@ const listVisibleOrders = async (user,paging=null) => {
 const searchVisibleOrders = async (user, term) => {
   const query = cleanText(term, 120);
   if (query.length < 2) return [];
-  const pattern = '%' + query + '%';
+  const searchableQuery = query.replace(/^#\s*/, '');
+  if (searchableQuery.length < 1) return [];
+  const pattern = '%' + searchableQuery + '%';
   const commonMatch = `(
     CAST(s.order_number AS text) ILIKE $1 OR
     lower(c.first_name||' '||c.last_name||' '||coalesce(c.email,'')||' '||coalesce(c.phone,'')||' '||coalesce(d.brand,'')||' '||coalesce(d.model,'')||' '||coalesce(d.imei,'')||' '||coalesce(d.serial_number,'')) LIKE lower($1)
