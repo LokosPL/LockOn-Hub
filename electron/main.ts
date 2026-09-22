@@ -1191,6 +1191,17 @@ const registerIpc = () => {
     })
   },requireSessionToken()));
   secureHandle('service:deleteTechnicianNote', async (noteId: string) => backendRequest(`/service/technician-notes/${encodeURIComponent(safeId(noteId,'tnn'))}`,{method:'DELETE'},requireSessionToken()));
+  secureHandle('service:updateTechnicianNote', async (noteId: string, payload: unknown) => backendRequest(`/service/technician-notes/${encodeURIComponent(safeId(noteId,'tnn'))}`,{method:'PATCH',body:JSON.stringify(payload)},requireSessionToken()));
+  secureHandle('service:updateSchedule', async (orderId: string, payload: unknown) => backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/schedule`,{method:'POST',body:JSON.stringify(payload)},requireSessionToken()));
+  secureHandle('service:reorderTechnicianDay', async (date: string, orderIds: string[]) => backendRequest('/service/technician-workspace/reorder',{method:'POST',body:JSON.stringify({date:String(date??'').trim().slice(0,10),orderIds:Array.isArray(orderIds)?orderIds.slice(0,100):[]})},requireSessionToken()));
+  secureHandle('service:saveWarranty', async (orderId: string, months: number) => backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/warranty`,{method:'POST',body:JSON.stringify({months:Number(months)})},requireSessionToken()));
+  secureHandle('service:openWarrantyCard', async (orderId: string) => {
+    const result=await backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId,'srv'))}/warranty-card`,{method:'POST',body:'{}'},requireSessionToken()) as {fileName:string;pdfBase64:string;warranty?:unknown};
+    const filePath=await writeApiPdfToTemp(result.pdfBase64,result.fileName);
+    const openError=await shell.openPath(filePath);
+    if(openError)throw new Error('Nie udało się otworzyć karty gwarancyjnej: '+openError);
+    return {opened:true,filePath,fileName:result.fileName,warranty:result.warranty};
+  });
   secureHandle('service:updateDetails', async (orderId: string, payload: unknown) => {
     const token = requireSessionToken();
     return backendRequest(`/service/orders/${encodeURIComponent(safeId(orderId, 'srv'))}/details`, {
