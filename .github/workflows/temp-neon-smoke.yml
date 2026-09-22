@@ -452,6 +452,14 @@ jobs:
           [ "$ready_without_warranty_http" = "409" ] || { echo "::error::READY was not blocked before warranty: HTTP $ready_without_warranty_http"; cat ready-without-warranty.json; exit 1; }
           node -e "const d=require('./ready-without-warranty.json');if(d.error!=='WARRANTY_REQUIRED')throw new Error('READY rejection did not use WARRANTY_REQUIRED: '+JSON.stringify(d))"
 
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
+          set +e
+          wrong_warranty_http="$(curl --silent --show-error --output wrong-warranty-point.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_id/warranty"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data '{"months":6,"repairSummary":"Ta gwarancja nie może powstać z innego punktu"}')"
+          set -e
+          [ "$wrong_warranty_http" = "409" ] || { echo "::error::Warranty was allowed from wrong active point: HTTP $wrong_warranty_http"; cat wrong-warranty-point.json; exit 1; }
+          node -e "const d=require('./wrong-warranty-point.json');if(d.error!=='WARRANTY_WRONG_ACTIVE_POINT')throw new Error('Wrong-point warranty returned wrong error: '+JSON.stringify(d))"
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
+
           api POST "/service/orders/$order_id/warranty" '{"months":6,"repairSummary":"Wymiana modułu wyświetlacza i test funkcjonalny CI"}' > warranty.json
           node - <<'NODE'
           const d=require('./warranty.json');
