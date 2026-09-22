@@ -2608,7 +2608,7 @@ const conversationPayload = async (userId) => {
     [userId]
   )).rows[0] || await getOrCreateConversation(userId);
   const { rows } = await q(
-    'SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 200',
+    "SELECT * FROM (SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at DESC LIMIT 200) recent ORDER BY created_at ASC",
     [conversation.id]
   );
   return {
@@ -4812,6 +4812,17 @@ const route = async (request) => {
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
     const activePointId=found.current_point_id||found.home_point_id||found.point_id;
+    // Warranty is an in-person handoff step: the session must be bound to the phone's physical point.
+    if(!session.activePointId){
+      return json(request,{error:'WARRANTY_ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt, w którym fizycznie znajduje się telefon, aby wystawić gwarancję.'},409);
+    }
+    if(session.activePointId!==activePointId){
+      return json(request,{error:'WARRANTY_WRONG_ACTIVE_POINT',message:'Gwarancję można wystawić tylko w aktywnym punkcie, w którym fizycznie znajduje się telefon.'},409);
+    }
+    const openWarrantyTransfer=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') ORDER BY requested_at DESC LIMIT 1",[found.id])).rows[0]||null;
+    if(openWarrantyTransfer){
+      return json(request,{error:'WARRANTY_DEVICE_IN_TRANSFER',message:'Nie można wystawić gwarancji podczas aktywnego przekazania urządzenia.'},409);
+    }
     await requirePoint(u,activePointId);
     if(u.role_code==='TECHNICIAN'&&found.assigned_technician_id!==u.id){
       throw Object.assign(new Error('Gwarancję może ustawić serwisant przypisany do tego zlecenia.'),{status:403,code:'TECHNICIAN_ORDER_REQUIRED'});
@@ -4844,6 +4855,16 @@ const route = async (request) => {
     if(!found)return json(request,{error:'NOT_FOUND'},404);
     await requireOrder(u,found.id);
     const activePointId=found.current_point_id||found.home_point_id||found.point_id;
+    if(!session.activePointId){
+      return json(request,{error:'WARRANTY_ACTIVE_POINT_REQUIRED',message:'Wybierz aktywny punkt, w którym fizycznie znajduje się telefon, aby wystawić gwarancję.'},409);
+    }
+    if(session.activePointId!==activePointId){
+      return json(request,{error:'WARRANTY_WRONG_ACTIVE_POINT',message:'Gwarancję można wystawić tylko w aktywnym punkcie, w którym fizycznie znajduje się telefon.'},409);
+    }
+    const openWarrantyTransfer=(await q("SELECT id FROM service_order_transfers WHERE service_order_id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') ORDER BY requested_at DESC LIMIT 1",[found.id])).rows[0]||null;
+    if(openWarrantyTransfer){
+      return json(request,{error:'WARRANTY_DEVICE_IN_TRANSFER',message:'Nie można wystawić gwarancji podczas aktywnego przekazania urządzenia.'},409);
+    }
     await requirePoint(u,activePointId);
     if(u.role_code==='TECHNICIAN'&&found.assigned_technician_id!==u.id){
       throw Object.assign(new Error('Kartę gwarancyjną może przygotować serwisant przypisany do tego zlecenia.'),{status:403,code:'TECHNICIAN_ORDER_REQUIRED'});

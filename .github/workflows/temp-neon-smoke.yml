@@ -452,6 +452,14 @@ jobs:
           [ "$ready_without_warranty_http" = "409" ] || { echo "::error::READY was not blocked before warranty: HTTP $ready_without_warranty_http"; cat ready-without-warranty.json; exit 1; }
           node -e "const d=require('./ready-without-warranty.json');if(d.error!=='WARRANTY_REQUIRED')throw new Error('READY rejection did not use WARRANTY_REQUIRED: '+JSON.stringify(d))"
 
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
+          set +e
+          wrong_warranty_http="$(curl --silent --show-error --output wrong-warranty-point.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_id/warranty"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data '{"months":6,"repairSummary":"Ta gwarancja nie może powstać z innego punktu"}')"
+          set -e
+          [ "$wrong_warranty_http" = "409" ] || { echo "::error::Warranty was allowed from wrong active point: HTTP $wrong_warranty_http"; cat wrong-warranty-point.json; exit 1; }
+          node -e "const d=require('./wrong-warranty-point.json');if(d.error!=='WARRANTY_WRONG_ACTIVE_POINT')throw new Error('Wrong-point warranty returned wrong error: '+JSON.stringify(d))"
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
+
           api POST "/service/orders/$order_id/warranty" '{"months":6,"repairSummary":"Wymiana modułu wyświetlacza i test funkcjonalny CI"}' > warranty.json
           node - <<'NODE'
           const d=require('./warranty.json');
@@ -824,15 +832,23 @@ jobs:
           support_marker="ODPOWIEDZ-KONSULTANTA-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/tickets/$ticket_id/reply"             --header "Authorization: Bearer $support_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({message:process.argv[1]}))" "$support_marker")" > hotline-reply.json
 
-          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/conversation"             --header "Authorization: Bearer $user_token" > hotline-user-conversation.json
-          node - <<'NODE' "$support_marker" "$private_marker" "$parallel_bot_marker"
+          conversation_ready=0
+          for attempt in $(seq 1 10); do
+            curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/conversation"             --header "Authorization: Bearer $user_token" > hotline-user-conversation.json
+            if node - <<'NODE' "$support_marker" "$private_marker" "$parallel_bot_marker"
           const d=require('./hotline-user-conversation.json');
           const [supportMarker,privateMarker,parallelBot]=process.argv.slice(2);
-          if(d.consultantState!=='JOINED') throw new Error('Consultant did not join');
-          for(const marker of [supportMarker,privateMarker,parallelBot]){
-            if(!(d.messages||[]).some(m=>String(m.text||'').includes(marker))) throw new Error('User conversation missing '+marker);
-          }
+          const messages=d.messages||[];
+          const ok=d.consultantState==='JOINED' && [supportMarker,privateMarker,parallelBot].every(marker=>messages.some(m=>String(m.text||'').includes(marker)));
+          process.exit(ok?0:1);
           NODE
+            then
+              conversation_ready=1
+              break
+            fi
+            sleep 1
+          done
+          [ "$conversation_ready" = "1" ] || { echo "::error::Consultant reply did not become visible to user conversation"; cat hotline-user-conversation.json; exit 1; }
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data '{}' > hotline-leave.json
           node -e "const d=require('./hotline-leave.json');if(d.consultantState!=='BOT')throw new Error('Bot did not remain after consultant channel closed')"
