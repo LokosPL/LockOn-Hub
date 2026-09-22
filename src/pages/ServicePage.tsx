@@ -287,6 +287,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     setError('');
     try {
       const requests: Promise<unknown>[] = [];
+      if (canTransferService && servicePoints.length === 0) {
+        requests.push(window.lockOn.service.listServicePoints().then(setServicePoints));
+      }
       if (!orderHistories[order.id]) {
         requests.push(window.lockOn.service.getHistory(order.id).then((history) =>
           setOrderHistories((current) => ({ ...current, [order.id]: history }))
@@ -363,18 +366,16 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
   useEffect(() => {
     void loadOrders();
-    void loadTransfers();
-    if (canHandleCustomerQuotes) void loadCustomerQuotes(pointId);
   }, []);
 
   useEffect(() => {
-    if (!canHandleCustomerQuotes) return;
+    if (!canHandleCustomerQuotes || tab !== 'QUOTES') return;
     void loadCustomerQuotes(pointId);
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void loadCustomerQuotes(pointId);
-    }, 20_000);
+    }, 60_000);
     return () => window.clearInterval(timer);
-  }, [pointId, effectiveRole]);
+  }, [tab, pointId, effectiveRole]);
 
   useEffect(() => {
     setNotificationSettings(null);
