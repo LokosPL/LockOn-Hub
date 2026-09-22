@@ -170,7 +170,7 @@ export interface CustomerQuoteRequest {
 declare global {
   interface Window {
     lockOn: {
-      app: { getInfo: () => Promise<AppInfo> };
+      app: { getInfo: () => Promise<AppInfo>; markReady: () => Promise<void>; };
       ui: { setScale: (scale:'auto'|'compact'|'comfortable'|'large') => Promise<number>; };
       window: { minimize: () => Promise<void>; toggleMaximize: () => Promise<void>; close: () => Promise<void>; };
       auth: { getState: () => Promise<AuthState>; loginGoogle: () => Promise<AuthState>; loginLocal: () => Promise<AuthState>; logout: () => Promise<AuthState>; };
