@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Download, FileArchive, FileText, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { Building2, CalendarDays, ChevronLeft, ChevronRight, Download, FileArchive, FileText, RefreshCw, Search, Trash2 } from 'lucide-react';
 import type { ServiceInvoice } from '../types/electron';
+
+interface Props { pointId:string; pointName:string; }
 
 const monthKey=(date:Date)=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
 const currentMonth=()=>monthKey(new Date());
@@ -16,7 +18,7 @@ const shiftMonth=(value:string,delta:number)=>{
   return monthKey(date);
 };
 
-export function InvoiceWarehouse(){
+export function InvoiceWarehouse({pointId,pointName}:Props){
   const [month,setMonth]=useState(currentMonth);
   const [invoices,setInvoices]=useState<ServiceInvoice[]>([]);
   const [query,setQuery]=useState('');
@@ -25,15 +27,15 @@ export function InvoiceWarehouse(){
   const [notice,setNotice]=useState('');
 
   const load=async()=>{
-    if(busy)return;
+    if(busy||!pointId)return;
     setBusy('load');setError('');
     try{
-      const result=await window.lockOn.service.listInvoices(month);
+      const result=await window.lockOn.service.listInvoices(month,pointId);
       setInvoices(result.invoices);
     }catch(reason){setError(reason instanceof Error?reason.message:'Nie udało się pobrać magazynu faktur.');}
     finally{setBusy('');}
   };
-  useEffect(()=>{void load();},[month]);
+  useEffect(()=>{void load();},[month,pointId]);
 
   const filtered=useMemo(()=>{
     const term=query.trim().toLocaleLowerCase('pl-PL');
@@ -45,7 +47,6 @@ export function InvoiceWarehouse(){
     ].some((value)=>String(value||'').toLocaleLowerCase('pl-PL').includes(term)));
   },[invoices,query]);
 
-  const total=useMemo(()=>filtered.reduce((sum,item)=>sum+(item.grossAmount||0),0),[filtered]);
   const fullTotal=useMemo(()=>invoices.reduce((sum,item)=>sum+(item.grossAmount||0),0),[invoices]);
   const suppliers=useMemo(()=>new Set(invoices.map((item)=>item.supplier?.trim()).filter(Boolean)).size,[invoices]);
 
@@ -60,10 +61,10 @@ export function InvoiceWarehouse(){
   };
 
   const downloadAll=async()=>{
-    if(busy||!invoices.length)return;
+    if(busy||!invoices.length||!pointId)return;
     setBusy('all');setError('');setNotice('');
     try{
-      const result=await window.lockOn.service.downloadInvoiceBatch(month);
+      const result=await window.lockOn.service.downloadInvoiceBatch(month,pointId);
       if(result.cancelled)return;
       setNotice('Pobrano '+result.downloaded+' faktur'+(result.failed?'. Nie udało się pobrać: '+result.failed+'.':' do wybranego folderu.'));
     }catch(reason){setError(reason instanceof Error?reason.message:'Nie udało się pobrać paczki faktur.');}
@@ -72,7 +73,7 @@ export function InvoiceWarehouse(){
 
   const remove=async(invoice:ServiceInvoice)=>{
     if(busy)return;
-    if(!window.confirm('Usunąć fakturę „'+invoice.fileName+'” z prywatnego magazynu?'))return;
+    if(!window.confirm('Usunąć fakturę „'+invoice.fileName+'” z magazynu punktu?'))return;
     setBusy('delete:'+invoice.id);setError('');setNotice('');
     try{
       await window.lockOn.service.deleteInvoice(invoice.id);
@@ -82,53 +83,51 @@ export function InvoiceWarehouse(){
     finally{setBusy('');}
   };
 
-  return <section className="panel-card invoice-warehouse invoice-warehouse-v2">
-    <div className="panel-heading invoice-warehouse-heading">
+  return <section className="invoice-warehouse invoice-warehouse-hotfix">
+    <header className="invoice-warehouse-top">
       <div>
         <span className="eyebrow"><FileArchive size={13}/> MAGAZYN FAKTUR</span>
-        <h2>Faktury zakupu części</h2>
-        <p>Szybkie wyszukiwanie po numerze faktury, dostawcy, kliencie, urządzeniu albo numerze zlecenia.</p>
+        <h2>Faktury części · {pointName||'aktywny punkt'}</h2>
+        <p>Każdy punkt ma osobny magazyn. Tutaj widzisz tylko dokumenty przypisane do zleceń tego punktu.</p>
       </div>
-      <button className="button small secondary" disabled={Boolean(busy)} onClick={()=>void load()}><RefreshCw className={busy==='load'?'spin':''} size={14}/> Odśwież</button>
-    </div>
+      <div className="invoice-point-badge"><Building2 size={15}/><span>Magazyn punktu</span><strong>{pointName||'—'}</strong></div>
+    </header>
 
-    <div className="invoice-toolbar">
-      <div className="invoice-month-nav">
-        <button className="button small secondary" disabled={Boolean(busy)} onClick={()=>setMonth((value)=>shiftMonth(value,-1))} title="Poprzedni miesiąc"><ChevronLeft size={15}/></button>
+    <div className="invoice-control-bar">
+      <div className="invoice-month-nav-clean">
+        <button className="button small secondary" disabled={Boolean(busy)} onClick={()=>setMonth((value)=>shiftMonth(value,-1))}><ChevronLeft size={15}/></button>
         <label><CalendarDays size={14}/><input type="month" value={month} onChange={(e)=>setMonth(e.target.value)} disabled={Boolean(busy)}/></label>
-        <button className="button small secondary" disabled={Boolean(busy)} onClick={()=>setMonth((value)=>shiftMonth(value,1))} title="Następny miesiąc"><ChevronRight size={15}/></button>
-        <button className="button small secondary" disabled={Boolean(busy)||month===currentMonth()} onClick={()=>setMonth(currentMonth())}>Bieżący</button>
+        <button className="button small secondary" disabled={Boolean(busy)} onClick={()=>setMonth((value)=>shiftMonth(value,1))}><ChevronRight size={15}/></button>
+        <button className="button small secondary" disabled={Boolean(busy)||month===currentMonth()} onClick={()=>setMonth(currentMonth())}>Dzisiaj</button>
       </div>
-      <label className="invoice-search"><Search size={15}/><input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Szukaj faktury, dostawcy, zlecenia…"/></label>
+      <label className="invoice-search-clean"><Search size={15}/><input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Numer faktury, dostawca, klient, zlecenie…"/></label>
+      <button className="button small secondary" disabled={Boolean(busy)} onClick={()=>void load()}><RefreshCw className={busy==='load'?'spin':''} size={14}/></button>
       <button className="button small primary" disabled={Boolean(busy)||!invoices.length} onClick={()=>void downloadAll()}><Download size={14}/>{busy==='all'?'Pobieranie…':'Pobierz miesiąc'}</button>
     </div>
 
     {error&&<div className="service-inline-error">{error}</div>}
     {notice&&<div className="service-inline-success">{notice}</div>}
 
-    <div className="invoice-warehouse-summary invoice-warehouse-summary-v2">
-      <article><span>Dokumenty</span><strong>{invoices.length}</strong><small>{filtered.length!==invoices.length?'Widoczne po filtrze: '+filtered.length:'W '+monthLabel(month)}</small></article>
-      <article><span>Łączna wartość</span><strong>{money(fullTotal)}</strong><small>{query.trim()?'Widoczne: '+money(total):'Kwoty opisanych faktur'}</small></article>
-      <article><span>Dostawcy</span><strong>{suppliers}</strong><small>Unikalni w tym miesiącu</small></article>
+    <div className="invoice-summary-clean">
+      <article><span>Dokumenty</span><strong>{invoices.length}</strong><small>{monthLabel(month)}</small></article>
+      <article><span>Wartość brutto</span><strong>{money(fullTotal)}</strong><small>z wpisanymi kwotami</small></article>
+      <article><span>Dostawcy</span><strong>{suppliers}</strong><small>unikalni w miesiącu</small></article>
+      <article><span>Po filtrze</span><strong>{filtered.length}</strong><small>{query.trim()?'wyników':'bez filtra'}</small></article>
     </div>
 
-    <div className="invoice-warehouse-list invoice-warehouse-list-v2">
+    <div className="invoice-table-clean">
+      <header><span>Dokument</span><span>Zlecenie / klient</span><span>Dostawca / data</span><span>Kwota</span><span></span></header>
       {filtered.map((invoice)=><article key={invoice.id}>
-        <div className="invoice-file-icon"><FileText size={19}/></div>
-        <div className="invoice-file-main">
-          <div className="invoice-file-title">
-            <strong>{invoice.invoiceNumber||invoice.fileName}</strong>
-            {invoice.orderNumber!=null&&<b>#{invoice.orderNumber}</b>}
-          </div>
-          <span>{invoice.device||'Urządzenie'}{invoice.customerName?' · '+invoice.customerName:''}</span>
-          <small>{invoice.supplier||'Brak dostawcy'}{invoice.invoiceDate?' · '+new Date(invoice.invoiceDate+'T12:00:00').toLocaleDateString('pl-PL'):''}{invoice.grossAmount!=null?' · '+money(invoice.grossAmount):''} · {(invoice.sizeBytes/1024/1024).toFixed(2)} MB</small>
-        </div>
-        <div className="invoice-file-actions">
+        <div className="invoice-document-cell"><i><FileText size={18}/></i><span><strong>{invoice.invoiceNumber||invoice.fileName}</strong><small>{invoice.fileName} · {(invoice.sizeBytes/1024/1024).toFixed(2)} MB</small></span></div>
+        <div><strong>{invoice.orderNumber!=null?'#'+invoice.orderNumber:'Bez numeru'}</strong><small>{invoice.device||'Urządzenie'}{invoice.customerName?' · '+invoice.customerName:''}</small></div>
+        <div><strong>{invoice.supplier||'Nie podano'}</strong><small>{invoice.invoiceDate?new Date(invoice.invoiceDate+'T12:00:00').toLocaleDateString('pl-PL'):'Brak daty'}</small></div>
+        <div className="invoice-amount-cell"><strong>{invoice.grossAmount!=null?money(invoice.grossAmount):'—'}</strong></div>
+        <div className="invoice-row-actions">
           <button disabled={Boolean(busy)} title="Pobierz PDF" onClick={()=>void download(invoice)}><Download size={15}/></button>
           <button disabled={Boolean(busy)} title="Usuń fakturę" onClick={()=>void remove(invoice)}><Trash2 size={15}/></button>
         </div>
       </article>)}
-      {!busy&&!filtered.length&&<div className="service-history-empty">{invoices.length?'Brak faktur pasujących do wyszukiwania.':'W tym miesiącu nie ma zapisanych faktur PDF.'}</div>}
+      {!busy&&!filtered.length&&<div className="invoice-empty-clean"><FileArchive size={24}/><strong>{invoices.length?'Brak wyników':'Brak faktur w tym miesiącu'}</strong><span>{invoices.length?'Zmień wyszukiwanie.':'Faktury dodane do zleceń tego punktu pojawią się tutaj.'}</span></div>}
     </div>
   </section>;
 }
