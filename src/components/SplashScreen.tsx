@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Check, Database, LoaderCircle, MonitorUp, ShieldCheck, Sparkles } from 'lucide-react';
 import logo from '../assets/logo.svg';
 import type { SplashProgress } from '../types/electron';
@@ -56,7 +56,7 @@ export function SplashScreen() {
           </div>
 
           <div className="splash-meter" aria-label={`Postęp uruchamiania: ${safePercent}%`}>
-            <div className="splash-meter-ring" style={{ '--boot-progress': safePercent } as React.CSSProperties}>
+            <div className="splash-meter-ring" style={{ '--boot-progress': safePercent } as CSSProperties}>
               <div>
                 <strong>{safePercent}</strong>
                 <span>%</span>
