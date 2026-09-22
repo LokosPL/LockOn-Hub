@@ -897,7 +897,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         <section className="service-notification-choice-dialog" role="dialog" aria-modal="true" aria-labelledby="service-notification-choice-title">
           <div className="service-notification-choice-head">
             <div className="service-card-choice-icon"><BellRing size={24}/></div>
-            <div><span>ZLECENIE #${notificationChoice.orderNumber}</span><h2 id="service-notification-choice-title">Jak klient chce dostawać informacje?</h2><p>Potwierdzenie przyjęcia z kartą PDF wysyłamy zawsze. Poniżej wybierasz dodatkowe wiadomości podczas dalszej obsługi.</p></div>
+            <div><span>ZLECENIE #{notificationChoice.orderNumber}</span><h2 id="service-notification-choice-title">Jak klient chce dostawać informacje?</h2><p>Potwierdzenie przyjęcia z kartą PDF wysyłamy zawsze. Poniżej wybierasz dodatkowe wiadomości podczas dalszej obsługi.</p></div>
           </div>
           <div className="service-notification-presets">
             <button type="button" onClick={()=>setNotificationChoice((current)=>current?{...current,serviceUpdates:true,readyForPickup:true}:current)}>
