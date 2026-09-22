@@ -69,7 +69,7 @@ export interface ServiceOrderSummary extends ServiceOrder {
   customerName:string; customerEmail?:string|null; customerPhone?:string|null;
   brand:string; model:string; imei?:string|null; serialNumber?:string|null; deviceNotes?:string|null;
   statusLabel:string; assignedTechnicianId?:string|null; assignedTechnicianName?:string|null; assignedTechnicianEmail?:string|null;
-  estimatedCost?:number|null; finalCost?:number|null; currency?:string; estimatedCompletionAt?:string|null;
+  estimatedCost?:number|null; finalCost?:number|null; currency?:string; estimatedCompletionAt?:string|null; planPosition?:number;
   completedAt?:string|null; createdAt?:string; updatedAt?:string;
   workflow?:ServiceWorkflow;
   latestTransfer?:ServiceTransfer|null; transfers?:ServiceTransfer[];
@@ -237,6 +237,7 @@ declare global {
         addTechnicianNote: (payload:{title?:string;body:string;pinned?:boolean}) => Promise<TechnicianPrivateNote>;
         deleteTechnicianNote: (noteId:string) => Promise<{ok:true}>;
         updateDetails: (orderId:string,payload:{imei?:string;serialNumber?:string;deviceNotes?:string;assignedTechnicianId?:string|null;estimatedCost?:number|string|null;finalCost?:number|string|null;estimatedCompletionAt?:string|null}) => Promise<ServiceOrderSummary>;
+        updatePlan: (orderId:string,payload:{estimatedCompletionAt:string|null;targetIndex:number}) => Promise<{order:ServiceOrderSummary|null;notification?:NotificationRetryResult}>;
         updateStatus: (orderId:string,status:string,note?:string,actingPointId?:string) => Promise<ServiceStatusResult>;
         listCustomerQuotes: (pointId?:string) => Promise<CustomerQuoteRequest[]>;
         replyCustomerQuote: (requestId:string,message:string) => Promise<{ok:true}>;
