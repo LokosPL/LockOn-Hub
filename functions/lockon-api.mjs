@@ -4269,7 +4269,7 @@ const route = async (request) => {
     if(u.role_code!=='TECHNICIAN')return json(request,{show:false,period:null,count:0,dismissed:false});
     const period=monthlyInvoicePromptPeriod();
     if(!period)return json(request,{show:false,period:null,count:0,dismissed:false});
-    const activePointId=session.activePointId||u.point_ids?.[0]||null;
+    const activePointId=session.activePointId||null;
     if(!activePointId)return json(request,{show:false,period,count:0,dismissed:false});
     const invoices=await listAccessibleInvoices(u,period,activePointId);
     const bounds=invoicePeriodBounds(period);
