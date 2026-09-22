@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('lockOn', {
-  app: { getInfo: () => ipcRenderer.invoke('app:getInfo') },
+  app: { getInfo: () => ipcRenderer.invoke('app:getInfo'), markReady: () => ipcRenderer.invoke('app:renderer-ready') },
   ui: {
     setScale: (scale: 'auto' | 'compact' | 'comfortable' | 'large') => ipcRenderer.invoke('ui:setScale', scale)
   },
