@@ -434,6 +434,7 @@ jobs:
           api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-outbound.json
           node -e "const d=require('./scan-outbound.json');if(d.scanAction!=='SERVICE_ACCEPTED')throw new Error('Outbound transfer was not accepted by scan')"
 
+          # 1.0.0.15: gwarancja pozostaje zablokowana aż do fizycznego powrotu urządzenia.
           api POST "/service/orders/$order_id/status" '{"status":"REPAIR_DONE","note":"CI temp smoke"}' > repair-done.json
           node -e "const d=require('./repair-done.json');if(d.order?.status!=='REPAIR_DONE')throw new Error('Could not mark repair done at service point')"
 
