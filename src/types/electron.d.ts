@@ -70,14 +70,14 @@ export interface ServiceOrderSummary extends ServiceOrder {
   brand:string; model:string; imei?:string|null; serialNumber?:string|null; deviceNotes?:string|null;
   statusLabel:string; assignedTechnicianId?:string|null; assignedTechnicianName?:string|null; assignedTechnicianEmail?:string|null;
   estimatedCost?:number|null; finalCost?:number|null; currency?:string; estimatedCompletionAt?:string|null; planPosition?:number;
-  warrantyMonths?:number|null; warrantyStartedAt?:string|null; warrantyExpiresAt?:string|null; warrantyCardPrintedAt?:string|null; warrantyCardPrintCount?:number; warrantyReady?:boolean;
+  repairSummary?:string|null; warrantyMonths?:number|null; warrantyStartedAt?:string|null; warrantyExpiresAt?:string|null; warrantyCardPrintedAt?:string|null; warrantyCardPrintCount?:number; warrantyCardNumber?:string|null; warrantyReady?:boolean;
   completedAt?:string|null; createdAt?:string; updatedAt?:string;
   workflow?:ServiceWorkflow;
   latestTransfer?:ServiceTransfer|null; transfers?:ServiceTransfer[];
 }
 export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; reusedDevice?:boolean; notification?:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; serviceCard?:{required:boolean;printMode?:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY'|null;customerEmailRequired?:boolean}; }
 export interface ServiceCardOpenResult { opened:boolean; filePath:string; fileName:string; printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY'; staffScanCode?:string; }
-export interface ServiceWarrantyUpdateResult { ok:true; warranty:{months:number;startedAt:string;expiresAt:string;cardPrintedAt?:string|null;cardPrintCount:number}; order:ServiceOrderSummary|null; }
+export interface ServiceWarrantyUpdateResult { ok:true; warranty:{months:number;startedAt:string;expiresAt:string;cardPrintedAt?:string|null;cardPrintCount:number;repairSummary?:string|null;warrantyCardNumber?:string|null}; order:ServiceOrderSummary|null; }
 export interface ServiceWarrantyCardOpenResult { opened:boolean; filePath:string; fileName:string; order?:ServiceOrderSummary|null; }
 export interface ServiceScanResult { ok:true; scanAction:string; readyChanged:boolean; order:ServiceOrderSummary|null; notification?:NotificationRetryResult; }
 export interface ServiceStatusResult {
@@ -221,10 +221,10 @@ declare global {
         updateTransferStatus: (transferId:string,status:ServiceTransfer['status'],note?:string) => Promise<{transfer:ServiceTransfer;notification?:NotificationRetryResult}>;
         createOrder: (payload:{pointId:string;firstName:string;lastName:string;email?:string;phone?:string;brand?:string;model?:string;imei?:string;serialNumber?:string;deviceNotes?:string;issueDescription:string;orderType:'REPAIR'|'COMPLAINT';assignedTechnicianId?:string;estimatedCost?:number|string;estimatedCompletionAt?:string|null}) => Promise<ServiceCreateOrderResult>;
         openServiceCard: (orderId:string,printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY') => Promise<ServiceCardOpenResult>;
-        updateWarranty: (orderId:string,months:number) => Promise<ServiceWarrantyUpdateResult>;
+        updateWarranty: (orderId:string,payload:{months:number;repairSummary:string}) => Promise<ServiceWarrantyUpdateResult>;
         openWarrantyCard: (orderId:string) => Promise<ServiceWarrantyCardOpenResult>;
         scanServiceCard: (payload:{actingPointId:string;token?:string;code?:string}) => Promise<ServiceScanResult>;
-        listOrders: () => Promise<ServiceOrderSummary[]>;
+        listOrders: (limit?:number,offset?:number) => Promise<ServiceOrderSummary[]>;
         getHistory: (orderId:string) => Promise<ServiceStatusHistoryItem[]>;
         getNotes: (orderId:string) => Promise<ServiceOrderNote[]>;
         addNote: (orderId:string,body:string) => Promise<ServiceOrderNote>;
@@ -240,6 +240,7 @@ declare global {
         getTechnicianWorkspace: () => Promise<TechnicianWorkspace>;
         listTechnicianNotes: () => Promise<TechnicianPrivateNote[]>;
         addTechnicianNote: (payload:{title?:string;body:string;pinned?:boolean}) => Promise<TechnicianPrivateNote>;
+        updateTechnicianNote: (noteId:string,payload:{title?:string;body:string;pinned?:boolean}) => Promise<TechnicianPrivateNote>;
         deleteTechnicianNote: (noteId:string) => Promise<{ok:true}>;
         updateDetails: (orderId:string,payload:{imei?:string;serialNumber?:string;deviceNotes?:string;assignedTechnicianId?:string|null;estimatedCost?:number|string|null;finalCost?:number|string|null;estimatedCompletionAt?:string|null}) => Promise<ServiceOrderSummary>;
         updatePlan: (orderId:string,payload:{estimatedCompletionAt:string|null;targetIndex:number}) => Promise<{order:ServiceOrderSummary|null;notification?:NotificationRetryResult}>;
