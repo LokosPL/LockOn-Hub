@@ -122,6 +122,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const isActualTechnician = auth.role === 'TECHNICIAN';
   const [tab, setTab] = useState<ServiceTab>(isActualTechnician ? 'CALENDAR' : 'NEW');
   const [form, setForm] = useState<ServiceIntakeForm>(() => makeEmptyForm());
+  const [intakeStage, setIntakeStage] = useState<'TYPE'|'DETAILS'>('TYPE');
   const [brandOpen, setBrandOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [orderFilter, setOrderFilter] = useState('ALL');
@@ -505,6 +506,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       setForm(makeEmptyForm());
       setMatches([]);
       setQuery('');
+      setIntakeStage('TYPE');
       await loadOrders();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się utworzyć zlecenia.');
@@ -1127,114 +1129,83 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       {tab === 'TECH_NOTES' && isActualTechnician && <TechnicianNotesRoom/>}
 
       {tab === 'NEW' && (
-        <div className="service-intake-hotfix service-intake-v2">
-          <div className="service-intake-steps" aria-label="Etapy nowego zlecenia">
-            <span className="active"><b>1</b> Typ</span>
-            <i>→</i>
-            <span><b>2</b> Klient</span>
-            <i>→</i>
-            <span><b>3</b> Urządzenie</span>
-            <i>→</i>
-            <span><b>4</b> Powiadomienia</span>
-          </div>
-          <section className="service-intake-type-top">
-            <div>
-              <span className="eyebrow"><ClipboardPlus size={13}/> NOWE ZLECENIE · KROK 1</span>
-              <h2>Najpierw wybierz typ.</h2>
-              <p>Bez wybierania typu przy telefonie. Najpierw określasz naprawę albo reklamację, później uzupełniasz dane w jednym prostym formularzu.</p>
-            </div>
-            <div className="service-order-type-picker service-order-type-picker-top" role="group" aria-label="Typ zlecenia">
-              <button type="button" className={form.orderType==='REPAIR'?'active':''} onClick={()=>update('orderType','REPAIR')}>
-                <i><Wrench size={18}/></i><span><strong>Naprawa</strong><small>Standardowe przyjęcie telefonu do serwisu.</small></span>
-              </button>
-              <button type="button" className={form.orderType==='COMPLAINT'?'active':''} onClick={()=>update('orderType','COMPLAINT')}>
-                <i><RotateCcw size={18}/></i><span><strong>Reklamacja</strong><small>Reklamacja z osobnym oznaczeniem zlecenia.</small></span>
-              </button>
-            </div>
-          </section>
-          <div className="service-grid service-intake-layout service-intake-workspace-hotfix">
-          <section className="panel-card service-card service-intake-panel service-intake-customer">
-            <div className="panel-heading"><div><span className="eyebrow"><Search size={13}/> KROK 2 · KLIENT</span><h2>Dane klienta</h2><p>Wyszukaj istniejącego klienta albo wpisz dane nowej osoby.</p></div></div>
-            <div className="service-search-row">
-              <input value={query} onChange={(e)=>setQuery(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') void search(); }} placeholder="Nazwisko, email lub telefon"/>
-              <button className="button secondary" disabled={searchBusy||query.trim().length<2} onClick={()=>void search()}><Search className={searchBusy?'spin':''} size={14}/>{searchBusy?' Szukam…':' Szukaj'}</button>
-            </div>
-            <div className="service-customer-results">
-              {matches.map((customer)=><button key={customer.id} onClick={()=>useCustomer(customer)}>
-                <UserRound size={16}/><span><strong>{customer.firstName} {customer.lastName}</strong><small>{customer.email || customer.phone || 'Brak kontaktu'}</small></span>
-              </button>)}
-            </div>
-            <div className="service-form-grid">
-              <label><span>Imię</span><input value={form.firstName} onChange={(e)=>update('firstName',e.target.value)} /></label>
-              <label><span>Nazwisko</span><input value={form.lastName} onChange={(e)=>update('lastName',e.target.value)} /></label>
-              <label><span>Email</span><input type="email" value={form.email} onChange={(e)=>update('email',e.target.value)} /></label>
-              <label><span>Telefon</span><input value={form.phone} onChange={(e)=>update('phone',e.target.value)} /></label>
-            </div>
-          </section>
-
-          <section className="panel-card service-card service-intake-panel service-intake-device">
-            <div className="panel-heading"><div><span className="eyebrow"><Smartphone size={13}/> KROK 3 · URZĄDZENIE</span><h2>Urządzenie i przyjęcie</h2><p>Tak jak w szczegółach zlecenia: tylko potrzebne pola, termin, cena orientacyjna i opis problemu.</p></div></div>
-            <div className="service-form-grid service-intake-grid">
-              <label className="service-brand-field">
-                <span>Marka <em>opcjonalnie</em></span>
-                <div className="service-brand-combobox">
-                  <input
-                    value={form.brand}
-                    onFocus={()=>setBrandOpen(true)}
-                    onBlur={()=>window.setTimeout(()=>setBrandOpen(false),120)}
-                    onChange={(e)=>{update('brand',e.target.value);setBrandOpen(true);}}
-                    placeholder="Jeśli znasz, np. Samsung"
-                    autoComplete="off"
-                    role="combobox"
-                    aria-autocomplete="list"
-                    aria-expanded={brandOpen && brandSuggestions.length > 0}
-                  />
-                  {brandOpen && brandSuggestions.length > 0 && <div className="service-brand-suggestions" role="listbox">
-                    {brandSuggestions.map((brand)=><button
-                      type="button"
-                      key={brand}
-                      role="option"
-                      onMouseDown={(event)=>event.preventDefault()}
-                      onClick={()=>{update('brand',brand);setBrandOpen(false);}}
-                    ><Smartphone size={14}/><span>{brand}</span></button>)}
-                  </div>}
-                </div>
-              </label>
-              <label><span>Model <em>opcjonalnie</em></span><input value={form.model} onChange={(e)=>update('model',e.target.value)} placeholder="Jeśli znasz, np. Galaxy S24"/></label>
-              <label><span>IMEI <em>opcjonalnie</em></span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr, jeśli dostępny"/></label>
-              <label><span>Numer seryjny <em>opcjonalnie</em></span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Jeśli dostępny"/></label>
-              {canSetIntakeEstimate && <label className="service-estimate-field"><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="Np. 349,00"/><small>Wstępna kwota dla klienta — można ją później doprecyzować.</small></label>}
-              {canSetIntakeEta && <div className="service-intake-eta full">
-                <div className="service-field-heading"><span>Przewidywany termin</span><small>Domyślnie: do 3 dni</small></div>
-                <div className="service-quick-pills service-eta-pills" role="group" aria-label="Szybki wybór przewidywanego terminu">
-                  <button type="button" className={!form.estimatedCompletionAt?'active':''} onClick={()=>update('estimatedCompletionAt','')}>Nie podano</button>
-                  {[1,2,3].map((days)=><button
-                    type="button"
-                    key={days}
-                    className={form.estimatedCompletionAt===dateInputAfterDays(days)?'active':''}
-                    onClick={()=>update('estimatedCompletionAt',dateInputAfterDays(days))}
-                  >{days===1?'Jutro':`+${days} dni`}</button>)}
-                  <label className="service-custom-date">
-                    <span>Inna data</span>
-                    <input type="date" min={dateInputAfterDays(0)} value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)} />
-                  </label>
-                </div>
-                <small className="service-field-help">ServiceOS ustawia 3 dni automatycznie. Pracownik może wybrać krótszy termin, inną datę albo „Nie podano”.</small>
-              </div>}
-              <div className="service-device-notes full">
-                <div className="service-field-heading"><span>Uwagi do urządzenia</span><small>opcjonalnie</small></div>
-                <div className="service-quick-pills service-note-presets" role="group" aria-label="Szybkie uwagi do urządzenia">
-                  {DEVICE_NOTE_PRESETS.map((note)=><button type="button" key={note} className={form.deviceNotes===note?'active':''} onClick={()=>update('deviceNotes',note)}>{note}</button>)}
-                </div>
-                <textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Kliknij gotową opcję albo wpisz własną uwagę…"/>
-                <small className="service-field-help">Jeżeli nic szczególnego nie ma do zapisania, zostaw „Brak uwag”.</small>
+        <div className="service-intake-hotfix service-intake-v3">
+          {intakeStage === 'TYPE' ? (
+            <section className="service-intake-type-screen">
+              <div className="service-intake-type-copy">
+                <span className="eyebrow"><ClipboardPlus size={13}/> NOWE ZLECENIE</span>
+                <h2>Co przyjmujesz?</h2>
+                <p>Najpierw wybierz typ. Potem otworzy się jeden czytelny formularz — taki sam styl jak szczegóły zlecenia.</p>
               </div>
-              <label className="full"><span>Opis usterki <em>wymagane</em></span><textarea rows={6} required value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder="Np. ekran nie wyświetla obrazu, telefon dzwoni i reaguje na dotyk."/></label>
-            </div>
-            <button className="button primary wide service-submit service-submit-v2" disabled={busy || !pointId} onClick={()=>void submit()}>{busy ? 'Tworzę zlecenie…' : 'Utwórz zlecenie i wybierz powiadomienia'}</button>
-            <small className="service-intake-email-note">Po kliknięciu „Utwórz zlecenie” wybierzesz, jakie dodatkowe powiadomienia klient chce dostawać podczas serwisu.</small>
-          </section>
-          </div>
+              <div className="service-order-type-picker service-order-type-picker-v3" role="group" aria-label="Typ zlecenia">
+                <button type="button" onClick={()=>{update('orderType','REPAIR');setIntakeStage('DETAILS');}}>
+                  <i><Wrench size={22}/></i>
+                  <span><strong>Naprawa</strong><small>Standardowe przyjęcie urządzenia do serwisu.</small></span>
+                  <b>→</b>
+                </button>
+                <button type="button" onClick={()=>{update('orderType','COMPLAINT');setIntakeStage('DETAILS');}}>
+                  <i><RotateCcw size={22}/></i>
+                  <span><strong>Reklamacja</strong><small>Przyjęcie reklamacji z osobnym oznaczeniem zlecenia.</small></span>
+                  <b>→</b>
+                </button>
+              </div>
+            </section>
+          ) : (
+            <section className="service-intake-details-card">
+              <header className="service-intake-details-head">
+                <div>
+                  <button type="button" className="service-intake-back" onClick={()=>setIntakeStage('TYPE')}>← Zmień typ</button>
+                  <span className="eyebrow"><ClipboardPlus size={13}/> {form.orderType==='COMPLAINT'?'REKLAMACJA':'NAPRAWA'}</span>
+                  <h2>Nowe zlecenie</h2>
+                  <p>Klient i urządzenie w jednym miejscu. Uzupełnij tylko to, co potrzebne do przyjęcia.</p>
+                </div>
+                <div className="service-intake-type-chip">{form.orderType==='COMPLAINT'?<RotateCcw size={16}/>:<Wrench size={16}/>}<span>{form.orderType==='COMPLAINT'?'Reklamacja':'Naprawa'}</span></div>
+              </header>
+
+              <div className="service-intake-details-body">
+                <section className="service-intake-section service-intake-customer-v3">
+                  <div className="service-intake-section-title"><UserRound size={16}/><div><strong>Klient</strong><small>Wyszukaj istniejącego albo wpisz nowego.</small></div></div>
+                  <div className="service-search-row service-search-row-v3">
+                    <input value={query} onChange={(e)=>setQuery(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter')void search();}} placeholder="Nazwisko, email lub telefon"/>
+                    <button className="button secondary" disabled={searchBusy||query.trim().length<2} onClick={()=>void search()}><Search size={14}/>{searchBusy?'Szukam…':'Szukaj'}</button>
+                  </div>
+                  {matches.length>0&&<div className="service-customer-results service-customer-results-v3">{matches.map((customer)=><button key={customer.id} onClick={()=>useCustomer(customer)}><UserRound size={15}/><span><strong>{customer.firstName} {customer.lastName}</strong><small>{customer.email||customer.phone||'Brak kontaktu'}</small></span></button>)}</div>}
+                  <div className="service-form-grid service-intake-form-v3">
+                    <label><span>Imię</span><input value={form.firstName} onChange={(e)=>update('firstName',e.target.value)}/></label>
+                    <label><span>Nazwisko</span><input value={form.lastName} onChange={(e)=>update('lastName',e.target.value)}/></label>
+                    <label><span>Email</span><input type="email" value={form.email} onChange={(e)=>update('email',e.target.value)}/></label>
+                    <label><span>Telefon</span><input value={form.phone} onChange={(e)=>update('phone',e.target.value)}/></label>
+                  </div>
+                </section>
+
+                <section className="service-intake-section">
+                  <div className="service-intake-section-title"><Smartphone size={16}/><div><strong>Urządzenie i realizacja</strong><small>Dane techniczne, termin i cena orientacyjna.</small></div></div>
+                  <div className="service-form-grid service-intake-form-v3">
+                    <label className="service-brand-field"><span>Marka <em>opcjonalnie</em></span><div className="service-brand-combobox">
+                      <input value={form.brand} onFocus={()=>setBrandOpen(true)} onBlur={()=>window.setTimeout(()=>setBrandOpen(false),120)} onChange={(e)=>{update('brand',e.target.value);setBrandOpen(true);}} placeholder="Np. Samsung" autoComplete="off"/>
+                      {brandOpen&&brandSuggestions.length>0&&<div className="service-brand-suggestions">{brandSuggestions.map((brand)=><button type="button" key={brand} onMouseDown={(event)=>event.preventDefault()} onClick={()=>{update('brand',brand);setBrandOpen(false);}}><Smartphone size={14}/><span>{brand}</span></button>)}</div>}
+                    </div></label>
+                    <label><span>Model <em>opcjonalnie</em></span><input value={form.model} onChange={(e)=>update('model',e.target.value)} placeholder="Np. Galaxy S24"/></label>
+                    <label><span>IMEI <em>opcjonalnie</em></span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr"/></label>
+                    <label><span>Numer seryjny <em>opcjonalnie</em></span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Jeśli dostępny"/></label>
+                    {canSetIntakeEstimate&&<label className="service-estimate-field"><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="Np. 349,00"/></label>}
+                    {canSetIntakeEta&&<div className="service-intake-eta full"><div className="service-field-heading"><span>Przewidywany termin</span><small>domyślnie +3 dni</small></div><div className="service-quick-pills service-eta-pills">
+                      <button type="button" className={!form.estimatedCompletionAt?'active':''} onClick={()=>update('estimatedCompletionAt','')}>Bez terminu</button>
+                      {[1,2,3].map((days)=><button type="button" key={days} className={form.estimatedCompletionAt===dateInputAfterDays(days)?'active':''} onClick={()=>update('estimatedCompletionAt',dateInputAfterDays(days))}>{days===1?'Jutro':`+${days} dni`}</button>)}
+                      <label className="service-custom-date"><span>Inna data</span><input type="date" min={dateInputAfterDays(0)} value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)}/></label>
+                    </div></div>}
+                    <div className="service-device-notes full"><div className="service-field-heading"><span>Stan / uwagi do urządzenia</span><small>opcjonalnie</small></div><div className="service-quick-pills service-note-presets">{DEVICE_NOTE_PRESETS.map((note)=><button type="button" key={note} className={form.deviceNotes===note?'active':''} onClick={()=>update('deviceNotes',note)}>{note}</button>)}</div><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Dodatkowe uwagi…"/></div>
+                    <label className="full"><span>Opis usterki <em>wymagane</em></span><textarea rows={5} required value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder="Krótko opisz problem zgłoszony przez klienta."/></label>
+                  </div>
+                </section>
+              </div>
+
+              <footer className="service-intake-details-footer">
+                <div><strong>Po utworzeniu zlecenia</strong><span>ServiceOS od razu zapyta, jak klient chce być powiadamiany o przebiegu serwisu.</span></div>
+                <button className="button primary service-submit service-submit-v2" disabled={busy||!pointId} onClick={()=>void submit()}>{busy?'Tworzę zlecenie…':'Utwórz zlecenie'}</button>
+              </footer>
+            </section>
+          )}
         </div>
       )}
 
