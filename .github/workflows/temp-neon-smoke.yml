@@ -622,6 +622,7 @@ jobs:
           user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
           support_token="$(node -e "const d=require('./role-SUPPORT.json');process.stdout.write(d.token)")"
           order_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.id)")"
+          invoice_point_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.pointId)")"
 
           test -s service-card.pdf
           size_bytes="$(stat -c%s service-card.pdf)"
@@ -660,7 +661,7 @@ jobs:
           if(d.uploadedByUserId!==ownerId || d.uploadedByName!=='System LockOn') throw new Error('OWNER invoice uploader identity leaked');
           NODE
 
-          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/invoices?month=$period"             --header "Authorization: Bearer $owner_token" > invoices-list.json
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/invoices?month=$period&pointId=$invoice_point_id"             --header "Authorization: Bearer $owner_token" > invoices-list.json
           node - <<'NODE' "$invoice_id" "$owner_id"
           const d=require('./invoices-list.json');
           const [invoiceId,ownerId]=process.argv.slice(2);
