@@ -2608,7 +2608,7 @@ const conversationPayload = async (userId) => {
     [userId]
   )).rows[0] || await getOrCreateConversation(userId);
   const { rows } = await q(
-    'SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 200',
+    "SELECT * FROM (SELECT id,sender_user_id,sender_kind,body,metadata,created_at FROM support_messages WHERE conversation_id=$1 ORDER BY created_at DESC LIMIT 200) recent ORDER BY created_at ASC",
     [conversation.id]
   );
   return {
