@@ -1004,6 +1004,32 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             <div className="service-order-workspace">
                       {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
 
+                      <section className="service-workspace-card service-stage-card">
+                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Etap zlecenia</strong><span>Zmiana etapu jest wykonywana tutaj — lista zleceń pozostaje lekka.</span></div></div>
+                        <div className="service-stage-current"><span>Aktualnie</span><strong>{order.statusLabel}</strong>{order.workflow&&<small>Etap {order.workflow.stageNumber}/{order.workflow.stageTotal} · {order.workflow.nextAction}</small>}</div>
+                        {order.handlingMode!=='TRANSFER_ONLY'&&canEditOrderHere&&<div className="service-stage-actions">
+                          {statuses.filter(([value])=>!['REJECTED'].includes(value)).map(([value,label])=>{
+                            const readyBlocked=value==='READY'&&(order.status!=='REPAIR_DONE'||order.canMarkReady===false||!order.warrantyReady);
+                            const completedBlocked=value==='COMPLETED'&&order.status!=='READY';
+                            const backward=['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE'].indexOf(value)<['RECEIVED','DIAGNOSIS','WAITING_PARTS','IN_REPAIR','REPAIR_DONE'].indexOf(order.status as typeof value);
+                            const disabled=Boolean(orderBusyId)||value===order.status||readyBlocked||completedBlocked||backward;
+                            return <button key={value} className={value===order.status?'active':''} disabled={disabled} onClick={()=>void changeStatus(order,value)}>{label}</button>;
+                          })}
+                        </div>}
+                        {canCancelHere&&order.status!=='CANCELLED'&&!['COMPLETED','REJECTED'].includes(order.status)&&<button className="button small danger-soft service-stage-cancel" disabled={Boolean(orderBusyId)} onClick={()=>void changeStatus(order,'CANCELLED')}>Anuluj zlecenie</button>}
+                        {order.status==='REPAIR_DONE'&&<div className="service-warranty-gate">
+                          <div><span>OBOWIĄZKOWE PRZED „GOTOWE DO ODBIORU”</span><strong>Gwarancja po naprawie</strong><p>Ustaw liczbę miesięcy, zapisz ją i wydrukuj kartę gwarancyjną do urządzenia. Dopiero wtedy ServiceOS odblokuje status „Gotowe do odbioru”.</p></div>
+                          <div className="service-warranty-controls">
+                            <label><span>Gwarancja (miesiące)</span><input type="number" min="1" max="60" step="1" value={warrantyDrafts[order.id]??(order.warrantyMonths==null?'':String(order.warrantyMonths))} onChange={(e)=>setWarrantyDrafts((current)=>({...current,[order.id]:e.target.value}))} placeholder="np. 3 lub 6"/></label>
+                            <button className="button secondary" disabled={Boolean(orderBusyId)} onClick={()=>void saveWarranty(order)}><Save size={14}/> Zapisz okres</button>
+                            <button className="button primary" disabled={Boolean(orderBusyId)||!(warrantyDrafts[order.id]??order.warrantyMonths)} onClick={()=>void printWarrantyCard(order)}><Printer size={14}/> Wydrukuj kartę gwarancyjną</button>
+                          </div>
+                          <div className={"service-warranty-state "+(order.warrantyReady?'ready':'pending')}>
+                            {order.warrantyReady?<><CheckCircle2 size={16}/><span><strong>Gwarancja gotowa</strong><small>{order.warrantyMonths} mies. · ważna do {order.warrantyExpiresAt?new Date(order.warrantyExpiresAt).toLocaleDateString('pl-PL'):'—'} · karta wydrukowana</small></span></>:<><Clock3 size={16}/><span><strong>Jeszcze niegotowe</strong><small>Ustaw okres i wydrukuj kartę, aby odblokować odbiór.</small></span></>}
+                          </div>
+                        </div>}
+                      </section>
+
                       {draft && (
                         <section className="service-workspace-card">
                           <div className="service-workspace-title"><Smartphone size={15}/><div><strong>Urządzenie i realizacja</strong><span>Dane techniczne, termin i przypisanie naprawy.</span></div></div>
@@ -1301,21 +1327,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       </div>
                     </div>
                     <div className="service-order-actions">
-                      <div className="service-order-status">
-                        {canCancelHere && !canEditStatus && order.status !== 'CANCELLED' ? (
-                          <div className="transfer-only-status"><span className="status-badge">{order.handlingMode === 'TRANSFER_ONLY' ? 'Tylko przekazanie' : order.statusLabel}</span><button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button></div>
-                        ) : canEditOrderHere && order.handlingMode === 'TRANSFER_ONLY' ? (
-                          <div className="transfer-only-status"><span className="status-badge">Tylko przekazanie</span>{order.status !== 'CANCELLED' && <button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button>}</div>
-                        ) : canEditOrderHere ? (
-                          <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e) => void changeStatus(order, e.target.value)}>
-                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && (order.canMarkReady===false || order.status!=='REPAIR_DONE')) || (value==='COMPLETED' && order.status!=='READY')}>{label}</option>)}
-                          </select>
-                        ) : (
-                          <div className="service-status-readonly">
-                            <span className="status-badge">{order.handlingMode==='TRANSFER_ONLY' && order.status!=='CANCELLED' ? 'Tylko przekazanie' : order.statusLabel}</span>
-                            {canEditStatus && <small>{order.openTransfer ? 'Status zablokowany na czas transportu.' : 'Status zmienia punkt, w którym fizycznie znajduje się urządzenie.'}</small>}
-                          </div>
-                        )}
+                      <div className="service-order-status service-order-status-light">
+                        <span className="status-badge">{order.handlingMode==='TRANSFER_ONLY'&&order.status!=='CANCELLED'?'Tylko przekazanie':order.statusLabel}</span>
                       </div>
                       <button className="button small secondary service-history-button" onClick={() => void toggleOrderHistory(order)}>
                         <History size={13}/>
