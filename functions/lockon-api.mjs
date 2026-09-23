@@ -43,6 +43,7 @@ const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNIC
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_USER_ROLES = new Set(['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER']);
+const MEETING_HOST_ROLES = new Set(['OWNER', 'BOSS']);
 const CUSTOMER_QUOTE_STAFF_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const FINANCE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const DEV_TEST_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER', 'SUPPORT']);
@@ -3033,6 +3034,95 @@ const assistantReply = async (session, message) => {
   return { text: 'Jasne — spróbuję Ci pomóc. Mogę wyszukać klienta lub zlecenie w Twoim zakresie, sprawdzić historię i notatki, otworzyć właściwy ekran, wyjaśnić przekazania, rozliczenia, Gmail i uprawnienia, przetestować internet i połączenie z API oraz znaleźć filmy albo materiały techniczne do naprawy. Zacznij od konkretu, np. „zlecenie 123 statusy”, „historia klienta Kowalski” albo „diagnostyka połączenia”. Jeśli po mojej odpowiedzi nadal będzie potrzebna pomoc człowieka, poproś konsultanta — w czasie oczekiwania nadal będę z Tobą pracować.' };
 };
 
+
+const meetingRoomName = () => 'mtg_' + crypto.randomBytes(18).toString('hex');
+
+const meetingView = (row) => ({
+  id:row.id,
+  title:row.title,
+  description:row.description||'',
+  startsAt:row.starts_at,
+  expectedDurationMinutes:Number(row.expected_duration_minutes||60),
+  status:row.status,
+  audienceType:row.audience_type,
+  allowParticipantAudio:row.allow_participant_audio===true,
+  allowParticipantScreenShare:row.allow_participant_screen_share===true,
+  maxParticipants:Number(row.max_participants||50),
+  hostUserId:row.host_user_id,
+  hostName:supportIdentityName(row.host_name,row.host_email,row.host_role)||'Prowadzący',
+  registeredCount:Number(row.registered_count||0),
+  registered:row.registration_status==='REGISTERED',
+  startedAt:row.started_at||null,
+  endedAt:row.ended_at||null,
+  cancelledAt:row.cancelled_at||null,
+  createdAt:row.created_at,
+  updatedAt:row.updated_at,
+  canHost:Boolean(row.can_host)
+});
+
+const meetingVisibleToUser = async (meetingId,user) => {
+  if (GLOBAL_ROLES.has(user.role_code)) return true;
+  const row=(await q(
+    "SELECT m.audience_type, CASE WHEN m.audience_type='ALL' THEN true WHEN m.audience_type='USERS' THEN EXISTS(SELECT 1 FROM meeting_audience_users au WHERE au.meeting_id=m.id AND au.user_id=$2) WHEN m.audience_type='POINTS' THEN EXISTS(SELECT 1 FROM meeting_audience_points ap JOIN user_point_access upa ON upa.point_id=ap.point_id AND upa.user_id=$2 WHERE ap.meeting_id=m.id) ELSE false END AS visible FROM meetings m WHERE m.id=$1 LIMIT 1",
+    [meetingId,user.id]
+  )).rows[0];
+  return row?.visible===true;
+};
+
+const requireMeetingVisible = async (meetingId,user) => {
+  if(!(await meetingVisibleToUser(meetingId,user))) throw Object.assign(new Error('To spotkanie nie jest dostępne dla Twojego konta.'),{status:403,code:'MEETING_FORBIDDEN'});
+};
+
+const loadMeeting = async (meetingId) => (await q(
+  "SELECT m.*,u.name AS host_name,u.email AS host_email,u.role_code AS host_role,(SELECT count(*)::int FROM meeting_registrations r WHERE r.meeting_id=m.id AND r.status='REGISTERED') AS registered_count FROM meetings m JOIN users u ON u.id=m.host_user_id WHERE m.id=$1 LIMIT 1",
+  [meetingId]
+)).rows[0]||null;
+
+const requireMeetingHost = (meeting,user) => {
+  const allowed=user.role_code==='OWNER'||(MEETING_HOST_ROLES.has(user.role_code)&&meeting.host_user_id===user.id);
+  if(!allowed)throw Object.assign(new Error('Tylko prowadzący spotkanie lub OWNER może wykonać tę akcję.'),{status:403,code:'MEETING_HOST_REQUIRED'});
+};
+
+const listMeetingsForUser = async (user) => {
+  const global=GLOBAL_ROLES.has(user.role_code);
+  const {rows}=await q(
+    "SELECT m.*,host.name AS host_name,host.email AS host_email,host.role_code AS host_role,r.status AS registration_status,(SELECT count(*)::int FROM meeting_registrations rr WHERE rr.meeting_id=m.id AND rr.status='REGISTERED') AS registered_count,($3::boolean OR m.host_user_id=$1) AS can_host FROM meetings m JOIN users host ON host.id=m.host_user_id LEFT JOIN meeting_registrations r ON r.meeting_id=m.id AND r.user_id=$1 WHERE (m.starts_at>=now()-interval '14 days' OR m.status='LIVE') AND ($2::boolean OR m.audience_type='ALL' OR (m.audience_type='USERS' AND EXISTS(SELECT 1 FROM meeting_audience_users au WHERE au.meeting_id=m.id AND au.user_id=$1)) OR (m.audience_type='POINTS' AND EXISTS(SELECT 1 FROM meeting_audience_points ap JOIN user_point_access upa ON upa.point_id=ap.point_id AND upa.user_id=$1 WHERE ap.meeting_id=m.id))) ORDER BY CASE m.status WHEN 'LIVE' THEN 0 WHEN 'SCHEDULED' THEN 1 WHEN 'ENDED' THEN 2 ELSE 3 END,m.starts_at ASC,m.created_at DESC LIMIT 100",
+    [user.id,global,user.role_code==='OWNER']
+  );
+  return rows.map(meetingView);
+};
+
+const meetingAudienceDetails = async (meetingId) => {
+  const [points,users]=await Promise.all([
+    q("SELECT p.id,p.name,p.city FROM meeting_audience_points a JOIN points p ON p.id=a.point_id WHERE a.meeting_id=$1 ORDER BY p.name",[meetingId]),
+    q("SELECT u.id,u.name,u.email,u.role_code FROM meeting_audience_users a JOIN users u ON u.id=a.user_id WHERE a.meeting_id=$1 ORDER BY u.name",[meetingId])
+  ]);
+  return {
+    points:points.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
+    users:users.rows.map((row)=>({id:row.id,name:supportIdentityName(row.name,row.email,row.role_code)||'Użytkownik',role:row.role_code||null}))
+  };
+};
+
+const meetingPayload = async (meeting,user) => {
+  const registration=(await q("SELECT status FROM meeting_registrations WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meeting.id,user.id])).rows[0];
+  const view=meetingView({
+    ...meeting,
+    registration_status:registration?.status||null,
+    can_host:user.role_code==='OWNER'||(MEETING_HOST_ROLES.has(user.role_code)&&meeting.host_user_id===user.id)
+  });
+  return {
+    ...view,
+    audience: (view.canHost ? await meetingAudienceDetails(meeting.id) : null)
+  };
+};
+
+const meetingEvent = async (meetingId,eventType,actorUserId=null,targetUserId=null,metadata={}) => {
+  await q(
+    "INSERT INTO meeting_events(id,meeting_id,actor_user_id,target_user_id,event_type,metadata) VALUES($1,$2,$3,$4,$5,$6::jsonb)",
+    [makeId('mte'),meetingId,actorUserId,targetUserId,eventType,JSON.stringify(metadata&&typeof metadata==='object'?metadata:{})]
+  );
+};
+
 const route = async (request) => {
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
@@ -3297,6 +3387,141 @@ const route = async (request) => {
   }
 
   if (method === 'GET' && url.pathname === '/health') return json(request, { ok: true, service: 'LockOn ServiceOS Central API', time: nowIso() });
+
+
+  if(method==='GET'&&url.pathname==='/meetings'){
+    const session=await requireActive(request);
+    return json(request,{meetings:await listMeetingsForUser(session.user)});
+  }
+
+  if(method==='POST'&&url.pathname==='/meetings'){
+    const session=await requireActive(request),u=session.user;
+    if(!MEETING_HOST_ROLES.has(u.role_code))throw Object.assign(new Error('Tylko OWNER lub BOSS może utworzyć spotkanie.'),{status:403,code:'MEETING_CREATE_FORBIDDEN'});
+    const body=await readJson(request);
+    const title=cleanText(body.title,160),description=cleanText(body.description,3000);
+    const startsAt=new Date(body.startsAt);
+    const duration=Math.round(Number(body.expectedDurationMinutes||60));
+    const audienceType=cleanText(body.audienceType||'ALL',20).toUpperCase();
+    const maxParticipants=Math.round(Number(body.maxParticipants||50));
+    if(!title)return json(request,{error:'MEETING_TITLE_REQUIRED',message:'Podaj tytuł spotkania.'},400);
+    if(Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_START_INVALID',message:'Podaj poprawną datę i godzinę spotkania.'},400);
+    if(startsAt.getTime()<Date.now()-5*60_000)return json(request,{error:'MEETING_START_PAST',message:'Termin spotkania nie może być w przeszłości.'},400);
+    if(!Number.isInteger(duration)||duration<5||duration>720)return json(request,{error:'MEETING_DURATION_INVALID',message:'Czas spotkania musi wynosić od 5 do 720 minut.'},400);
+    if(!['ALL','POINTS','USERS'].includes(audienceType))return json(request,{error:'MEETING_AUDIENCE_INVALID'},400);
+    if(!Number.isInteger(maxParticipants)||maxParticipants<2||maxParticipants>500)return json(request,{error:'MEETING_LIMIT_INVALID',message:'Limit uczestników musi wynosić od 2 do 500.'},400);
+    const pointIds=[...new Set((Array.isArray(body.pointIds)?body.pointIds:[]).map((v)=>cleanText(v,80)).filter(Boolean))];
+    const userIds=[...new Set((Array.isArray(body.userIds)?body.userIds:[]).map((v)=>cleanText(v,120)).filter(Boolean))];
+    if(audienceType==='POINTS'&&!pointIds.length)return json(request,{error:'MEETING_POINTS_REQUIRED',message:'Wybierz co najmniej jeden punkt.'},400);
+    if(audienceType==='USERS'&&!userIds.length)return json(request,{error:'MEETING_USERS_REQUIRED',message:'Wybierz co najmniej jednego uczestnika.'},400);
+    if(pointIds.length){
+      const valid=(await q("SELECT id FROM points WHERE id=ANY($1::text[]) AND active=true",[pointIds])).rows.map((r)=>r.id);
+      if(valid.length!==pointIds.length)return json(request,{error:'MEETING_POINT_INVALID',message:'Co najmniej jeden wybrany punkt nie istnieje albo jest nieaktywny.'},400);
+    }
+    if(userIds.length){
+      const valid=(await q("SELECT id FROM users WHERE id=ANY($1::text[]) AND status='ACTIVE' AND blocked_at IS NULL",[userIds])).rows.map((r)=>r.id);
+      if(valid.length!==userIds.length)return json(request,{error:'MEETING_USER_INVALID',message:'Co najmniej jeden wybrany użytkownik nie jest aktywny.'},400);
+    }
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      const id=makeId('mtg'),roomName=meetingRoomName();
+      const meeting=(await client.query(
+        "INSERT INTO meetings(id,host_user_id,title,description,starts_at,expected_duration_minutes,audience_type,allow_participant_audio,allow_participant_screen_share,max_participants,livekit_room_name) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11) RETURNING *",
+        [id,u.id,title,description,startsAt,duration,audienceType,body.allowParticipantAudio!==false,body.allowParticipantScreenShare===true,maxParticipants,roomName]
+      )).rows[0];
+      for(const pointId of pointIds)await client.query("INSERT INTO meeting_audience_points(meeting_id,point_id) VALUES($1,$2)",[id,pointId]);
+      for(const userId of userIds)await client.query("INSERT INTO meeting_audience_users(meeting_id,user_id) VALUES($1,$2)",[id,userId]);
+      await client.query("INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,'MEETING_CREATED',$4::jsonb)",[makeId('mte'),id,u.id,JSON.stringify({audienceType,pointIds,userIds})]);
+      await client.query('COMMIT');
+      await audit(session,'MEETING_CREATED','meeting',id,null,{startsAt:startsAt.toISOString(),audienceType});
+      return json(request,{meeting:await meetingPayload({...meeting,host_name:u.name,host_email:u.email,host_role:u.role_code,registered_count:0},u)},201);
+    }catch(error){
+      try{await client.query('ROLLBACK');}catch{}
+      throw error;
+    }finally{client.release();}
+  }
+
+  const meetingDetail=url.pathname.match(/^\/meetings\/([^/]+)$/);
+  if(method==='GET'&&meetingDetail){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingDetail[1],120);
+    await requireMeetingVisible(meetingId,u);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    return json(request,{meeting:await meetingPayload(meeting,u)});
+  }
+
+  const meetingAction=url.pathname.match(/^\/meetings\/([^/]+)\/(register|unregister|start|end|cancel)$/);
+  if(method==='POST'&&meetingAction){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingAction[1],120),action=meetingAction[2];
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+
+    if(action==='register'){
+      await requireMeetingVisible(meetingId,u);
+      if(['ENDED','CANCELLED'].includes(meeting.status))return json(request,{error:'MEETING_CLOSED',message:'Zapisy na to spotkanie są zamknięte.'},409);
+      const registered=Number(meeting.registered_count||0);
+      const existing=(await q("SELECT status FROM meeting_registrations WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meetingId,u.id])).rows[0];
+      if(existing?.status!=='REGISTERED'&&registered>=Number(meeting.max_participants||50))return json(request,{error:'MEETING_FULL',message:'Limit uczestników został osiągnięty.'},409);
+      await q("INSERT INTO meeting_registrations(meeting_id,user_id,status,registered_at,cancelled_at,updated_at) VALUES($1,$2,'REGISTERED',now(),NULL,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET status='REGISTERED',cancelled_at=NULL,updated_at=now()",[meetingId,u.id]);
+      await meetingEvent(meetingId,'REGISTERED',u.id,u.id,{});
+      await audit(session,'MEETING_REGISTERED','meeting',meetingId,null,{});
+      const fresh=await loadMeeting(meetingId);
+      return json(request,{meeting:await meetingPayload(fresh,u)});
+    }
+
+    if(action==='unregister'){
+      await requireMeetingVisible(meetingId,u);
+      if(meeting.status!=='SCHEDULED')return json(request,{error:'MEETING_ALREADY_STARTED',message:'Nie można wypisać się po rozpoczęciu spotkania.'},409);
+      await q("INSERT INTO meeting_registrations(meeting_id,user_id,status,registered_at,cancelled_at,updated_at) VALUES($1,$2,'CANCELLED',now(),now(),now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET status='CANCELLED',cancelled_at=now(),updated_at=now()",[meetingId,u.id]);
+      await meetingEvent(meetingId,'UNREGISTERED',u.id,u.id,{});
+      await audit(session,'MEETING_UNREGISTERED','meeting',meetingId,null,{});
+      const fresh=await loadMeeting(meetingId);
+      return json(request,{meeting:await meetingPayload(fresh,u)});
+    }
+
+    requireMeetingHost(meeting,u);
+    if(action==='start'){
+      if(meeting.status==='LIVE')return json(request,{meeting:await meetingPayload(meeting,u)});
+      if(meeting.status!=='SCHEDULED')return json(request,{error:'MEETING_NOT_STARTABLE',message:'Tego spotkania nie można już rozpocząć.'},409);
+      await q("UPDATE meetings SET status='LIVE',started_at=COALESCE(started_at,now()),updated_at=now() WHERE id=$1",[meetingId]);
+      await meetingEvent(meetingId,'STARTED',u.id,null,{});
+      await audit(session,'MEETING_STARTED','meeting',meetingId,null,{});
+    }else if(action==='end'){
+      if(meeting.status==='ENDED')return json(request,{meeting:await meetingPayload(meeting,u)});
+      if(meeting.status!=='LIVE')return json(request,{error:'MEETING_NOT_LIVE',message:'Spotkanie nie jest rozpoczęte.'},409);
+      await q("UPDATE meetings SET status='ENDED',ended_at=now(),updated_at=now() WHERE id=$1",[meetingId]);
+      await q("UPDATE meeting_attendance SET total_seconds=total_seconds+CASE WHEN current_session_started_at IS NULL THEN 0 ELSE GREATEST(0,extract(epoch from (now()-current_session_started_at)))::bigint END,current_session_started_at=NULL,last_left_at=COALESCE(last_left_at,now()),updated_at=now() WHERE meeting_id=$1",[meetingId]);
+      await meetingEvent(meetingId,'ENDED',u.id,null,{});
+      await audit(session,'MEETING_ENDED','meeting',meetingId,null,{});
+    }else{
+      if(meeting.status==='CANCELLED')return json(request,{meeting:await meetingPayload(meeting,u)});
+      if(meeting.status==='ENDED')return json(request,{error:'MEETING_ALREADY_ENDED',message:'Zakończonego spotkania nie można anulować.'},409);
+      await q("UPDATE meetings SET status='CANCELLED',cancelled_at=now(),ended_at=CASE WHEN status='LIVE' THEN now() ELSE ended_at END,updated_at=now() WHERE id=$1",[meetingId]);
+      await q("UPDATE meeting_attendance SET total_seconds=total_seconds+CASE WHEN current_session_started_at IS NULL THEN 0 ELSE GREATEST(0,extract(epoch from (now()-current_session_started_at)))::bigint END,current_session_started_at=NULL,last_left_at=COALESCE(last_left_at,now()),updated_at=now() WHERE meeting_id=$1",[meetingId]);
+      await meetingEvent(meetingId,'CANCELLED',u.id,null,{});
+      await audit(session,'MEETING_CANCELLED','meeting',meetingId,null,{});
+    }
+    const fresh=await loadMeeting(meetingId);
+    return json(request,{meeting:await meetingPayload(fresh,u)});
+  }
+
+  const meetingAttendance=url.pathname.match(/^\/meetings\/([^/]+)\/attendance$/);
+  if(method==='GET'&&meetingAttendance){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingAttendance[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    requireMeetingHost(meeting,u);
+    const rows=(await q(
+      "SELECT a.user_id,u.name,u.email,u.role_code,a.join_count,a.first_joined_at,a.last_joined_at,a.last_left_at,a.current_session_started_at,a.total_seconds,r.status AS registration_status FROM meeting_attendance a JOIN users u ON u.id=a.user_id LEFT JOIN meeting_registrations r ON r.meeting_id=a.meeting_id AND r.user_id=a.user_id WHERE a.meeting_id=$1 ORDER BY a.first_joined_at ASC NULLS LAST,u.name",
+      [meetingId]
+    )).rows;
+    return json(request,{attendance:rows.map((row)=>({
+      userId:row.user_id,name:supportIdentityName(row.name,row.email,row.role_code)||'Użytkownik',role:row.role_code||null,
+      registered:row.registration_status==='REGISTERED',joinCount:Number(row.join_count||0),
+      firstJoinedAt:row.first_joined_at||null,lastJoinedAt:row.last_joined_at||null,lastLeftAt:row.last_left_at||null,
+      present:Boolean(row.current_session_started_at),totalSeconds:Number(row.total_seconds||0)
+    }))});
+  }
 
   if (method === 'POST' && url.pathname === '/auth/google-code') {
     const body = await readJson(request);
