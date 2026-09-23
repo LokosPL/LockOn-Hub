@@ -10,10 +10,12 @@ import {
   type RemoteTrackPublication
 } from 'livekit-client';
 import type { MeetingLiveParticipant, MeetingScreenSource, MeetingSummary } from '../types/electron';
+import { useAppDialog } from './AppDialog';
 
 type Props = {
   meeting: MeetingSummary;
   onClose: () => void;
+  onMeetingEnded?: () => void;
 };
 
 const parseMetadataUserId = (value?: string | null) => {
@@ -26,7 +28,8 @@ const parseMetadataUserId = (value?: string | null) => {
   }
 };
 
-export function MeetingRoom({ meeting, onClose }: Props) {
+export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
+  const { confirm } = useAppDialog();
   const roomRef = useRef<Room | null>(null);
   const screenPublicationRef = useRef<LocalTrackPublication | null>(null);
   const attendanceOpenRef = useRef(false);
@@ -268,6 +271,32 @@ export function MeetingRoom({ meeting, onClose }: Props) {
     }
   };
 
+  const endForEveryone = async () => {
+    if (!canManage || busy) return;
+    const accepted = await confirm({
+      title:'Zakończyć spotkanie?',
+      message:'Po zakończeniu wszyscy uczestnicy zostaną rozłączeni.',
+      detail:'Frekwencja zostanie domknięta, a tego spotkania nie będzie można ponownie uruchomić.',
+      confirmLabel:'Zakończ spotkanie',
+      cancelLabel:'Wróć',
+      tone:'warning'
+    });
+    if (!accepted) return;
+    setBusy('end');
+    setError('');
+    try {
+      await window.lockOn.meetings.action(meeting.id,'end');
+      closeAttendance();
+      roomRef.current?.disconnect();
+      onMeetingEnded?.();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nie udało się zakończyć spotkania.');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const leave = () => {
     closeAttendance();
     roomRef.current?.disconnect();
@@ -329,7 +358,8 @@ export function MeetingRoom({ meeting, onClose }: Props) {
           <button className={'meeting-control '+(screenEnabled?'active':'')} disabled={!connected||!canShare||Boolean(busy)} onClick={()=>void (screenEnabled?stopScreenShare():openScreenPicker())}>
             {screenEnabled?<MonitorX size={18}/>:<MonitorUp size={18}/>} {canShare?(screenEnabled?'Zatrzymaj ekran':'Udostępnij ekran'):'Udostępnianie zablokowane'}
           </button>
-          <button className="meeting-control danger" onClick={leave}><PhoneOff size={18}/> Opuść spotkanie</button>
+          {canManage && <button className="meeting-control danger" disabled={Boolean(busy)} onClick={()=>void endForEveryone()}><PhoneOff size={18}/> Zakończ dla wszystkich</button>}
+          <button className="meeting-control danger" disabled={busy==='end'} onClick={leave}><PhoneOff size={18}/> Opuść spotkanie</button>
         </footer>
       </div>
 
