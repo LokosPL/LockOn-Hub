@@ -47,7 +47,7 @@ export function MeetingsCard({ role }: { role: UserRole }) {
     plannedMinutes:60,
     maxParticipants:50,
     audienceType:'ALL' as 'ALL'|'POINT'|'USER',
-    targetId:'',
+    targetIds:[] as string[],
     allowParticipantAudio:true,
     allowParticipantScreenShare:false
   });
@@ -110,8 +110,8 @@ export function MeetingsCard({ role }: { role: UserRole }) {
       setError('Wpisz tytuł spotkania.');
       return;
     }
-    if (form.audienceType !== 'ALL' && !form.targetId) {
-      setError(form.audienceType === 'POINT' ? 'Wybierz punkt.' : 'Wybierz osobę.');
+    if (form.audienceType !== 'ALL' && form.targetIds.length === 0) {
+      setError(form.audienceType === 'POINT' ? 'Wybierz co najmniej jeden punkt.' : 'Wybierz co najmniej jedną osobę.');
       return;
     }
     const startsAt = new Date(form.startsAt);
@@ -130,13 +130,13 @@ export function MeetingsCard({ role }: { role: UserRole }) {
         maxParticipants:Number(form.maxParticipants),
         allowParticipantAudio:form.allowParticipantAudio,
         allowParticipantScreenShare:form.allowParticipantScreenShare,
-        audience:[form.audienceType === 'ALL'
-          ? { type:'ALL' }
+        audience:form.audienceType === 'ALL'
+          ? [{ type:'ALL' }]
           : form.audienceType === 'POINT'
-            ? { type:'POINT', pointId:form.targetId }
-            : { type:'USER', userId:form.targetId }]
+            ? form.targetIds.map((pointId)=>({ type:'POINT' as const, pointId }))
+            : form.targetIds.map((userId)=>({ type:'USER' as const, userId }))
       });
-      setForm((current) => ({ ...current, title:'', description:'', startsAt:toLocalDateTimeInput(), targetId:'' }));
+      setForm((current) => ({ ...current, title:'', description:'', startsAt:toLocalDateTimeInput(), targetIds:[] }));
       setCreateOpen(false);
       await load(true);
     } catch (err) {
@@ -168,9 +168,9 @@ export function MeetingsCard({ role }: { role: UserRole }) {
             <label><span>Termin</span><input type="datetime-local" value={form.startsAt} onChange={(e)=>setForm({...form,startsAt:e.target.value})} /></label>
             <label><span>Czas (min)</span><input type="number" min={10} max={480} value={form.plannedMinutes} onChange={(e)=>setForm({...form,plannedMinutes:Number(e.target.value)})} /></label>
             <label><span>Limit osób</span><input type="number" min={2} max={500} value={form.maxParticipants} onChange={(e)=>setForm({...form,maxParticipants:Number(e.target.value)})} /></label>
-            <label><span>Dla kogo</span><select value={form.audienceType} onChange={(e)=>setForm({...form,audienceType:e.target.value as 'ALL'|'POINT'|'USER',targetId:''})}><option value="ALL">Wszyscy</option><option value="POINT">Konkretny punkt</option><option value="USER">Konkretna osoba</option></select></label>
-            {form.audienceType === 'POINT' && <label><span>Punkt</span><select value={form.targetId} onChange={(e)=>setForm({...form,targetId:e.target.value})}><option value="">Wybierz punkt…</option>{options?.points.map((item)=><option key={item.id} value={item.id}>{item.name} — {item.city}</option>)}</select></label>}
-            {form.audienceType === 'USER' && <label><span>Osoba</span><select value={form.targetId} onChange={(e)=>setForm({...form,targetId:e.target.value})}><option value="">Wybierz osobę…</option>{options?.users.map((item)=><option key={item.id} value={item.id}>{item.name}{item.email ? ' · '+item.email : ''}</option>)}</select></label>}
+            <label><span>Dla kogo</span><select value={form.audienceType} onChange={(e)=>setForm({...form,audienceType:e.target.value as 'ALL'|'POINT'|'USER',targetIds:[]})}><option value="ALL">Wszyscy</option><option value="POINT">Wybrane punkty</option><option value="USER">Wybrane osoby</option></select></label>
+            {form.audienceType === 'POINT' && <div className="meeting-audience-picker"><span>Punkty ({form.targetIds.length})</span><div>{options?.points.map((item)=><label key={item.id}><input type="checkbox" checked={form.targetIds.includes(item.id)} onChange={()=>setForm((current)=>({...current,targetIds:current.targetIds.includes(item.id)?current.targetIds.filter((id)=>id!==item.id):[...current.targetIds,item.id]}))}/><span><strong>{item.name}</strong><small>{item.city}</small></span></label>)}</div></div>}
+            {form.audienceType === 'USER' && <div className="meeting-audience-picker"><span>Osoby ({form.targetIds.length})</span><div>{options?.users.map((item)=><label key={item.id}><input type="checkbox" checked={form.targetIds.includes(item.id)} onChange={()=>setForm((current)=>({...current,targetIds:current.targetIds.includes(item.id)?current.targetIds.filter((id)=>id!==item.id):[...current.targetIds,item.id]}))}/><span><strong>{item.name}</strong><small>{item.email || item.role}</small></span></label>)}</div></div>
             <label className="meeting-create-description"><span>Opis</span><textarea rows={3} maxLength={2000} value={form.description} onChange={(e)=>setForm({...form,description:e.target.value})} placeholder="Krótko opisz temat spotkania." /></label>
           </div>
           <div className="meeting-create-flags">
