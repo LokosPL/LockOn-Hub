@@ -1413,7 +1413,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="transfer-compose">
                             <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onFocus={()=>void ensureServicePoints()} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
                               <option value="">Wybierz punkt docelowy…</option>
-                              {currentServicePointId !== (order.homePointId || order.pointId) && <option value={order.homePointId || order.pointId}>{order.homePointName || order.pointName} — punkt macierzysty</option>}
+                              {currentServicePointId !== (order.homePointId || order.pointId) && <option value={order.homePointId || order.pointId}>{order.homePointName || order.pointName} — {effectiveRole==='USER'?'punkt klienta':'punkt macierzysty'}</option>}
                               {servicePoints.filter((point)=>point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                             </select>
                             <button className="button primary" disabled={Boolean(orderBusyId)||!(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={14}/> Wyślij telefon</button>
@@ -1547,7 +1547,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         ) : order.returnRequired ? (
                           canTransferHere && order.status==='REPAIR_DONE' ? (
                             <div className="transfer-compose">
-                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów"/>
+                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder={effectiveRole==='USER'?'Krótka informacja przy powrocie telefonu (opcjonalnie)':'Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów'}/>
                               <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> {effectiveRole==='USER'?'Odeślij telefon do punktu klienta':'Odeślij do punktu macierzystego'}</button>
                             </div>
                           ) : (
