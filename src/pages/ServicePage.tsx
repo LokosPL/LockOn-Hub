@@ -292,6 +292,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [detailsDrafts, setDetailsDrafts] = useState<Record<string, OrderDetailsDraft>>({});
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
+  const [serviceClock, setServiceClock] = useState(()=>Date.now());
   const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
   const [warrantyBusyId, setWarrantyBusyId] = useState<string | null>(null);
   const [warrantyDrafts, setWarrantyDrafts] = useState<Record<string,string>>({});
@@ -612,6 +613,17 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [expandedOrderId]);
+
+  useEffect(() => {
+    if (!expandedOrderId || effectiveRole!=='USER') return;
+    const order=orders.find((item)=>item.id===expandedOrderId);
+    if(!order)return;
+    void ensureOrderHistory(order.id);
+    void ensureServicePoints();
+    setServiceClock(Date.now());
+    const timer=window.setInterval(()=>setServiceClock(Date.now()),60_000);
+    return()=>window.clearInterval(timer);
+  }, [expandedOrderId,effectiveRole,orders]);
 
   const search = async () => {
     const clean = query.trim();
