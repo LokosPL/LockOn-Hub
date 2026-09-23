@@ -50,6 +50,8 @@ export function MeetingRoom({ meeting, currentUserId, onClose }: MeetingRoomProp
   const [error,setError]=useState('');
 
   const isHost=credentials?.meeting.canHost===true||meeting.canHost===true;
+  const canUseMicrophone=isHost||meeting.allowParticipantAudio;
+  const canUseScreenShare=isHost||meeting.allowParticipantScreenShare;
 
   const refreshParticipants=(room=roomRef.current)=>{
     if(!room){setParticipants([]);return;}
@@ -143,7 +145,7 @@ export function MeetingRoom({ meeting, currentUserId, onClose }: MeetingRoomProp
   },[screenTrack]);
 
   const toggleMicrophone=async()=>{
-    const room=roomRef.current;if(!room||!connected)return;
+    const room=roomRef.current;if(!room||!connected||!canUseMicrophone)return;
     setBusy('mic');setError('');
     try{
       const next=!microphoneOn;
@@ -154,6 +156,7 @@ export function MeetingRoom({ meeting, currentUserId, onClose }: MeetingRoomProp
   };
 
   const openScreenPicker=async()=>{
+    if(!canUseScreenShare&&!screenOn)return;
     if(screenOn){
       const room=roomRef.current;if(!room)return;
       setBusy('screen');setError('');
@@ -199,10 +202,7 @@ export function MeetingRoom({ meeting, currentUserId, onClose }: MeetingRoomProp
   const blockParticipantMic=async(participant:ParticipantRow)=>{
     setBusy('block-mic:'+participant.identity);setError('');
     try{
-      await window.lockOn.meetings.updateParticipantPermissions(meeting.id,participant.identity,{
-        canPublishAudio:false,
-        canShareScreen:meeting.allowParticipantScreenShare
-      });
+      await window.lockOn.meetings.updateParticipantPermissions(meeting.id,participant.identity,{canPublishAudio:false});
     }catch(e){setError(displayError(e));}
     finally{setBusy('');}
   };
@@ -210,10 +210,7 @@ export function MeetingRoom({ meeting, currentUserId, onClose }: MeetingRoomProp
   const blockParticipantScreen=async(participant:ParticipantRow)=>{
     setBusy('block-screen:'+participant.identity);setError('');
     try{
-      await window.lockOn.meetings.updateParticipantPermissions(meeting.id,participant.identity,{
-        canPublishAudio:meeting.allowParticipantAudio,
-        canShareScreen:false
-      });
+      await window.lockOn.meetings.updateParticipantPermissions(meeting.id,participant.identity,{canShareScreen:false});
     }catch(e){setError(displayError(e));}
     finally{setBusy('');}
   };
@@ -262,13 +259,13 @@ export function MeetingRoom({ meeting, currentUserId, onClose }: MeetingRoomProp
           </div>}
 
           <div className="meeting-room-controls">
-            <button className={'meeting-control '+(microphoneOn?'active':'')} disabled={!connected||busy==='mic'} onClick={()=>void toggleMicrophone()}>
+            <button className={'meeting-control '+(microphoneOn?'active':'')} disabled={!connected||busy==='mic'||!canUseMicrophone} onClick={()=>void toggleMicrophone()}>
               {microphoneOn?<Mic size={18}/>:<MicOff size={18}/>}
-              <span>{microphoneOn?'Wycisz mikrofon':'Włącz mikrofon'}</span>
+              <span>{!canUseMicrophone?'Mikrofon zablokowany':microphoneOn?'Wycisz mikrofon':'Włącz mikrofon'}</span>
             </button>
-            <button className={'meeting-control '+(screenOn?'active':'')} disabled={!connected||busy==='screen'} onClick={()=>void openScreenPicker()}>
+            <button className={'meeting-control '+(screenOn?'active':'')} disabled={!connected||busy==='screen'||(!canUseScreenShare&&!screenOn)} onClick={()=>void openScreenPicker()}>
               {screenOn?<MonitorX size={18}/>:<MonitorUp size={18}/>}
-              <span>{screenOn?'Zatrzymaj ekran':'Udostępnij ekran'}</span>
+              <span>{!canUseScreenShare&&!screenOn?'Ekran zablokowany':screenOn?'Zatrzymaj ekran':'Udostępnij ekran'}</span>
             </button>
             <button className="meeting-control danger" onClick={leave}><PhoneOff size={18}/><span>Opuść</span></button>
           </div>
