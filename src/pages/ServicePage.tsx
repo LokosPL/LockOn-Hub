@@ -171,6 +171,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     serviceUpdates:boolean; readyForPickup:boolean; quoteUpdates:boolean; messages:boolean;
   }|null>(null);
   const [notificationChoiceBusy, setNotificationChoiceBusy] = useState(false);
+  const notificationPrefsQueuePrefix = 'lockon:pending-notification-preferences:';
   const [cardBusy, setCardBusy] = useState(false);
   const [serviceCardBusyId, setServiceCardBusyId] = useState<string|null>(null);
   const [error, setError] = useState('');
@@ -676,24 +677,72 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     } finally { submitBusyRef.current = false; setBusy(false); }
   };
 
+  const persistPendingNotificationChoice = (choice: NonNullable<typeof notificationChoice>) => {
+    try {
+      window.localStorage.setItem(notificationPrefsQueuePrefix + choice.customerId, JSON.stringify({
+        customerId:choice.customerId,
+        serviceUpdates:choice.serviceUpdates,
+        readyForPickup:choice.readyForPickup,
+        quoteUpdates:choice.quoteUpdates,
+        messages:choice.messages,
+        savedAt:new Date().toISOString()
+      }));
+    } catch {
+      // Brak localStorage nie może zatrzymać przyjęcia urządzenia.
+    }
+  };
+
+  const flushPendingNotificationChoices = async () => {
+    try {
+      const keys=Object.keys(window.localStorage).filter((key)=>key.startsWith(notificationPrefsQueuePrefix));
+      for(const key of keys){
+        try{
+          const queued=JSON.parse(window.localStorage.getItem(key)||'{}') as {
+            customerId?:string;serviceUpdates?:boolean;readyForPickup?:boolean;quoteUpdates?:boolean;messages?:boolean;
+          };
+          if(!queued.customerId){window.localStorage.removeItem(key);continue;}
+          await window.lockOn.customers.updateNotificationPreferences(queued.customerId,{
+            serviceUpdates:queued.serviceUpdates!==false,
+            readyForPickup:queued.readyForPickup!==false,
+            quoteUpdates:queued.quoteUpdates!==false,
+            messages:queued.messages!==false
+          });
+          window.localStorage.removeItem(key);
+        }catch{
+          // Zostawiamy wpis do kolejnej próby, bez blokowania pracy serwisu.
+        }
+      }
+    } catch {
+      // Synchronizacja preferencji jest best-effort.
+    }
+  };
+
+  useEffect(()=>{void flushPendingNotificationChoices();},[]);
+
   const saveCustomerNotificationChoice = async () => {
     if(!notificationChoice||notificationChoiceBusy)return;
+    const choice={...notificationChoice};
+    const nextCard={orderId:choice.orderId,orderNumber:choice.orderNumber};
     setNotificationChoiceBusy(true);setError('');
     try{
-      await window.lockOn.customers.updateNotificationPreferences(notificationChoice.customerId,{
-        serviceUpdates:notificationChoice.serviceUpdates,
-        readyForPickup:notificationChoice.readyForPickup,
-        quoteUpdates:notificationChoice.quoteUpdates,
-        messages:notificationChoice.messages
+      await window.lockOn.customers.updateNotificationPreferences(choice.customerId,{
+        serviceUpdates:choice.serviceUpdates,
+        readyForPickup:choice.readyForPickup,
+        quoteUpdates:choice.quoteUpdates,
+        messages:choice.messages
       });
-      const nextCard={orderId:notificationChoice.orderId,orderNumber:notificationChoice.orderNumber};
+      try{window.localStorage.removeItem(notificationPrefsQueuePrefix + choice.customerId);}catch{}
       setNotificationChoice(null);
-      setNotice(notificationChoice.serviceUpdates||notificationChoice.readyForPickup
+      setNotice(choice.serviceUpdates||choice.readyForPickup
         ? 'Preferencje powiadomień klienta zapisane.'
         : 'Klient wybrał brak dodatkowych e-maili o przebiegu serwisu.');
       setCardChoice(nextCard);
     }catch(e){
-      setError(e instanceof Error?e.message:'Nie udało się zapisać preferencji powiadomień klienta.');
+      persistPendingNotificationChoice(choice);
+      setNotificationChoice(null);
+      setCardChoice(nextCard);
+      setNotice('Wybór klienta zapisano lokalnie i przechodzę dalej. ServiceOS ponowi synchronizację z serwerem automatycznie.');
+      setError('');
     }finally{setNotificationChoiceBusy(false);}
   };
 
