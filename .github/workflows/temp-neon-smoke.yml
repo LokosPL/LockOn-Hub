@@ -241,6 +241,51 @@ jobs:
             exit 1
           fi
 
+      - name: Verify temp runtime integration environment
+        if: steps.neon_credential.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$NEON_BRANCH_ID/functions/$NEON_FUNCTION_SLUG"
+          curl --silent --show-error --fail "$endpoint" --header "Authorization: Bearer $NEON_API_KEY" > function-environment.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const root=JSON.parse(fs.readFileSync('function-environment.json','utf8'));
+          const names=new Set();
+          const visit=(value,key='')=>{
+            if(!value)return;
+            if(key==='environment'){
+              if(Array.isArray(value)){
+                for(const item of value){
+                  if(typeof item==='string')names.add(item);
+                  else if(item&&typeof item==='object'){
+                    if(typeof item.name==='string')names.add(item.name);
+                    for(const k of Object.keys(item))names.add(k);
+                  }
+                }
+              }else if(typeof value==='object'){
+                for(const k of Object.keys(value))names.add(k);
+              }
+            }
+            if(value&&typeof value==='object'){
+              for(const [k,v] of Object.entries(value))visit(v,k);
+            }
+          };
+          visit(root);
+          const required=[
+            'LOCKON_OWNER_EMAIL',
+            'LOCKON_GOOGLE_DESKTOP_CLIENT_ID',
+            'LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET',
+            'LOCKON_GMAIL_TOKEN_KEY',
+            'LIVEKIT_URL',
+            'LIVEKIT_API_KEY',
+            'LIVEKIT_API_SECRET'
+          ];
+          const missing=required.filter((name)=>!names.has(name));
+          if(missing.length)throw new Error('TEMP function is missing required environment names: '+missing.join(', '));
+          console.log('TEMP integration environment names verified: '+required.join(', '));
+          NODE
+
       - name: Temp health, CORS and authenticated smoke
         shell: bash
         run: |
