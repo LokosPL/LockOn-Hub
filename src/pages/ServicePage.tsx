@@ -1179,12 +1179,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const physicalPointId = order.currentPointId || order.homePointId || order.pointId;
         const canManageWarrantyHere = canEditOrderHere && Boolean(operatingPointId) && physicalPointId === operatingPointId;
         const canShowWarranty = order.handlingMode!=='TRANSFER_ONLY' && (
-          canManageWarrantyHere ||
-          Boolean(order.warrantyMonths) ||
+          order.status==='REPAIR_DONE' ||
           order.status==='READY' ||
-          order.status==='COMPLETED'
+          order.status==='COMPLETED' ||
+          Boolean(order.warrantyMonths)
         );
-        const primaryStageAction = ({
+        const canActTransferDestination = Boolean(order.openTransfer) && operatingPointId === order.openTransfer?.toPointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(operatingPointId));
+        const canActTransferSource = Boolean(order.openTransfer) && operatingPointId === order.openTransfer?.fromPointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(operatingPointId));
+        const primaryStageAction = order.handlingMode==='TRANSFER_ONLY' ? undefined : ({
           RECEIVED:{status:'DIAGNOSIS',label:'Rozpocznij diagnozę'},
           DIAGNOSIS:{status:'IN_REPAIR',label:'Rozpocznij naprawę'},
           WAITING_PARTS:{status:'IN_REPAIR',label:'Części są — rozpocznij naprawę'},
@@ -1206,8 +1208,6 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               <button className="button secondary small service-order-details-back" title="Wróć do listy" onClick={()=>setExpandedOrderId(null)}>← Wróć do zleceń</button>
             </header>
             <div className={`service-order-workspace ${effectiveRole==='USER'?'service-order-workspace-frontdesk':''}`}>
-                      {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
-
                       <section className="service-order-keyfacts">
                         <article><span>Klient</span><strong>{order.customerName}</strong><small>{order.customerPhone || order.customerEmail || 'Brak kontaktu'}</small></article>
                         <article><span>Telefon</span><strong>{formatDeviceLabel(order.brand,order.model)}</strong><small>{order.imei ? 'IMEI ' + order.imei : order.serialNumber ? 'S/N ' + order.serialNumber : 'Brak IMEI / S/N'}</small></article>
@@ -1221,24 +1221,52 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         {canCompletePickupHere && <button className="button primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeStatus(order,'COMPLETED')}>Wydaj telefon klientowi</button>}
                       </section>}
 
-                      <section className="service-workspace-card service-stage-card">
-                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Co teraz ze zleceniem?</strong><span>Najważniejsza akcja jest na wierzchu. Pełna korekta etapu jest schowana niżej.</span></div></div>
+                      <section className="service-workspace-card service-stage-card service-stage-guided">
+                        <div className="service-process-heading">
+                          <div className="service-process-step"><span>KROK {Math.min(stageIndex+1,stageSteps.length)} Z {stageSteps.length}</span><strong>{order.workflow?.nextAction || 'Sprawdź zlecenie.'}</strong></div>
+                          <div className="service-process-location"><MapPin size={14}/><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span></div>
+                        </div>
                         <div className="service-stage-overview">
                           <div className="service-stage-progress"><span style={{width:`${order.workflow?.progressPercent ?? 10}%`}}/></div>
                           <div className="service-repair-stage-rail service-repair-stage-rail-compact">
                             {stageSteps.map((label,index)=><span key={label} className={index<stageIndex?'done':index===stageIndex?'current':index===stageIndex+1?'next':''}>{label}</span>)}
                           </div>
-                          <div className="service-stage-meta service-stage-meta-simple">
-                            <div><span>Teraz</span><strong>{order.statusLabel}</strong></div>
-                            <div><span>Następnie</span><strong>{order.workflow?.nextAction || 'Sprawdź szczegóły zlecenia.'}</strong></div>
-                            <div><span>Telefon jest</span><strong>{order.currentLocationLabel || order.currentPointName || order.pointName}</strong></div>
-                          </div>
                         </div>
-                        {(canEditOrderHere || canCompletePickupHere) ? <div className="service-stage-actions">
+
+                        {order.openTransfer && <div className="service-process-logistics">
+                          <div><Truck size={18}/><span><strong>{order.openTransfer.kind==='RETURN_HOME'?'Telefon wraca do punktu macierzystego':'Telefon jest w przekazaniu'}</strong><small>{order.openTransfer.fromPointName} → {order.openTransfer.toPointName}</small></span></div>
+                          <div className="service-stage-actions">
+                            {order.openTransfer.status==='IN_TRANSIT'&&canActTransferDestination&&<button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'DELIVERED')}>Telefon dotarł do punktu</button>}
+                            {order.openTransfer.status==='DELIVERED'&&canActTransferDestination&&<button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'ACCEPTED')}><PackageCheck size={14}/> Przyjmij telefon w punkcie</button>}
+                            {order.openTransfer.status==='IN_TRANSIT'&&canActTransferSource&&<button className="button secondary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'CANCELLED')}>Anuluj wysyłkę</button>}
+                            {!canActTransferDestination&&!canActTransferSource&&<small>Akcję potwierdza punkt, w którym telefon fizycznie się znajduje lub do którego właśnie dotarł.</small>}
+                          </div>
+                        </div>}
+
+                        {!order.openTransfer&&order.handlingMode==='TRANSFER_ONLY'&&canTransferHere&&<div className="service-process-logistics">
+                          <div><Truck size={18}/><span><strong>Wybierz, dokąd wysłać telefon</strong><small>Po kliknięciu ServiceOS ustawi telefon jako „w drodze”.</small></span></div>
+                          <div className="transfer-compose">
+                            <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onFocus={()=>void ensureServicePoints()} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
+                              <option value="">Wybierz punkt docelowy…</option>
+                              {currentServicePointId !== (order.homePointId || order.pointId) && <option value={order.homePointId || order.pointId}>{order.homePointName || order.pointName} — punkt macierzysty</option>}
+                              {servicePoints.filter((point)=>point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
+                            </select>
+                            <button className="button primary" disabled={Boolean(orderBusyId)||!(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={14}/> Wyślij telefon</button>
+                          </div>
+                        </div>}
+
+                        {!order.openTransfer&&order.returnRequired&&order.status==='REPAIR_DONE'&&<div className="service-process-logistics">
+                          <div><RotateCcw size={18}/><span><strong>Naprawa zakończona poza punktem macierzystym</strong><small>Teraz odeślij telefon. Po przyjęciu w punkcie macierzystym ServiceOS pokaże krok z gwarancją i odbiorem.</small></span></div>
+                          {canTransferHere&&canEditStatus
+                            ? <button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}>Odeślij do punktu macierzystego</button>
+                            : <small>Zwrot rozpoczyna osoba pracująca w punkcie, w którym telefon znajduje się teraz.</small>}
+                        </div>}
+
+                        {!order.openTransfer&&order.handlingMode!=='TRANSFER_ONLY'&&<div className="service-stage-actions">
                           {primaryStageAction && (canEditOrderHere || (primaryStageAction.status==='COMPLETED' && canCompletePickupHere)) && <button
                             type="button"
                             className="button primary service-stage-primary"
-                            disabled={Boolean(orderBusyId)||primaryStageBlocked}
+                            disabled={Boolean(orderBusyId)||primaryStageBlocked||(primaryStageAction.status==='READY'&&Boolean(order.returnRequired))}
                             onClick={()=>void changeStatus(order,primaryStageAction.status)}
                           >{primaryStageAction.label}</button>}
                           {canEditOrderHere && (order.status==='DIAGNOSIS'||order.status==='IN_REPAIR') && <button
@@ -1247,9 +1275,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             disabled={Boolean(orderBusyId)}
                             onClick={()=>void changeStatus(order,'WAITING_PARTS')}
                           >Czekam na części</button>}
-                          {order.status==='REPAIR_DONE' && !order.warrantyReady && <small className="service-stage-gate">Aby oznaczyć „Gotowe do odbioru”, przygotuj gwarancję poniżej.</small>}
+                          {order.status==='REPAIR_DONE' && !order.warrantyReady && !order.returnRequired && <small className="service-stage-gate">Następny krok: wpisz wykonaną naprawę, ustaw gwarancję i przygotuj kartę poniżej.</small>}
+                          {!canEditOrderHere&&!canCompletePickupHere&&order.status!=='COMPLETED'&&<small>{!operatingPointId?'Wybierz konkretny aktywny punkt, aby wykonać ten krok.':'Ten krok wykonuje punkt, w którym fizycznie znajduje się telefon.'}</small>}
                           {canEditOrderHere && <details className="service-stage-more">
-                            <summary>Inna zmiana / korekta etapu</summary>
+                            <summary>Ręczna korekta etapu</summary>
                             <label className="service-stage-select">
                               <span>Status</span>
                               <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e)=>void changeStatus(order,e.target.value)}>
@@ -1257,7 +1286,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                               </select>
                             </label>
                           </details>}
-                        </div> : <div className="service-history-empty">{!operatingPointId?'Wybierz konkretny aktywny punkt zamiast „Wszystkie punkty”, aby obsługiwać ten telefon.':'Etap może zmienić tylko punkt, w którym fizycznie znajduje się telefon.'}</div>}
+                        </div>}
                       </section>
 
                       {canUseOrderFinance && ['WAITING_PARTS','IN_REPAIR'].includes(order.status) && (
@@ -1297,7 +1326,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       )}
 
                       {draft && (
-                        <details className="service-workspace-card service-workspace-collapse">
+                        <details className="service-workspace-card service-workspace-collapse" onToggle={(event)=>{if(event.currentTarget.open)void ensureTechnicians(order);}}>
                           <summary><Smartphone size={15}/><span><strong>Dane urządzenia i realizacja</strong><small>IMEI, numer seryjny, termin, technik i ceny.</small></span></summary>
                           <div className="service-collapse-body">
                           <div className="service-details-grid">
@@ -1314,12 +1343,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </details>
                       )}
 
-                      {canUseOrderFinance && !['WAITING_PARTS','IN_REPAIR'].includes(order.status) && <details className="service-workspace-card service-workspace-collapse">
-                        <summary><BadgeDollarSign size={15}/><span><strong>Koszty, części i faktury</strong><small>Rozwiń tylko podczas rozliczania naprawy.</small></span></summary>
-                        <div className="service-collapse-body service-finance-collapse"><OrderCostingCard order={order}/></div>
+                      {canUseOrderFinance && !['WAITING_PARTS','IN_REPAIR'].includes(order.status) && <details className="service-workspace-card service-workspace-collapse" onToggle={(event)=>setPanelOpen(order.id,'finance',event.currentTarget.open)}>
+                        <summary><BadgeDollarSign size={15}/><span><strong>Koszty, części i faktury</strong><small>Otwórz tylko, gdy chcesz sprawdzić rozliczenie.</small></span></summary>
+                        {openPanels[order.id+':finance']&&<div className="service-collapse-body service-finance-collapse"><OrderCostingCard order={order}/></div>}
                       </details>}
 
-                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" open={Boolean(order.openTransfer||order.returnRequired||order.handlingMode==='TRANSFER_ONLY')}>
+                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" onToggle={(event)=>{if(event.currentTarget.open)void ensureServicePoints();}}>
                         <summary><Truck size={15}/><span><strong>Logistyka urządzenia</strong><small>{order.openTransfer||order.returnRequired?'Wymaga uwagi — sprawdź transport lub powrót.':'Przekazanie do innego punktu, gdy jest potrzebne.'}</small></span></summary>
                         <div className="service-collapse-body">
                         <div className="active-transfer-summary">
@@ -1380,7 +1409,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </div>
                       </details>
 
-                      <details className="service-workspace-card service-workspace-collapse">
+                      <details className="service-workspace-card service-workspace-collapse" onToggle={(event)=>{if(event.currentTarget.open)void ensureCustomerCard(order);}}>
                         <summary><IdCard size={15}/><span><strong>Klient i jego wcześniejsze zlecenia</strong><small>Rozwiń tylko, gdy potrzebujesz historii klienta.</small></span></summary>
                         <div className="service-collapse-body">
                         {card ? <>
@@ -1391,11 +1420,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="service-customer-order-mini">
                             {card.orders.slice(0,5).map((item)=><div key={item.id}><span>#{item.orderNumber} · {item.brand} {item.model}</span><small>{item.statusLabel} · {new Date(item.receivedAt).toLocaleDateString('pl-PL')}</small></div>)}
                           </div>
-                        </> : <div className="service-history-empty">Pobieram kartę klienta…</div>}
+                        </> : <div className="service-history-empty">{historyBusyId===order.id?'Pobieram historię klienta…':'Otwórz sekcję, aby pobrać historię klienta.'}</div>}
                         </div>
                       </details>
 
-                      <details className="service-workspace-card service-workspace-collapse">
+                      <details className="service-workspace-card service-workspace-collapse" onToggle={(event)=>{if(event.currentTarget.open)void ensureOrderNotes(order.id);}}>
                         <summary><StickyNote size={15}/><span><strong>Notatki wewnętrzne</strong><small>Diagnoza, części i ustalenia zespołu.</small></span></summary>
                         <div className="service-collapse-body">
                         {canEditStatus && <div className="service-note-compose">
@@ -1404,12 +1433,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </div>}
                         <div className="service-note-list">
                           {notes.map((note)=><div key={note.id}><div><strong>{note.authorName}</strong><span>{new Date(note.createdAt).toLocaleString('pl-PL')}</span></div><p>{note.body}</p></div>)}
-                          {notes.length===0 && <div className="service-history-empty">Brak notatek wewnętrznych.</div>}
+                          {notes.length===0 && <div className="service-history-empty">{historyBusyId===order.id?'Pobieram notatki…':'Brak zapisanych notatek.'}</div>}
                         </div>
                         </div>
                       </details>
 
-                      <details className="service-workspace-card service-workspace-collapse service-workspace-history">
+                      <details className="service-workspace-card service-workspace-collapse service-workspace-history" onToggle={(event)=>{if(event.currentTarget.open)void ensureOrderHistory(order.id);}}>
                         <summary><History size={15}/><span><strong>Historia zlecenia</strong><small>Pełna oś czasu zmian statusu.</small></span></summary>
                         <div className="service-collapse-body">
                         {(orderHistories[order.id] ?? []).map((item, index) => (
@@ -1422,7 +1451,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             </div>
                           </div>
                         ))}
-                        {(orderHistories[order.id] ?? []).length === 0 && <div className="service-history-empty">Brak zapisanych zmian statusu.</div>}
+                        {(orderHistories[order.id] ?? []).length === 0 && <div className="service-history-empty">{historyBusyId===order.id?'Pobieram historię…':'Brak zapisanych zmian statusu.'}</div>}
                         </div>
                       </details>
                     </div>
