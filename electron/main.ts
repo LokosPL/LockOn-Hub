@@ -1019,6 +1019,22 @@ const registerIpc = () => {
     const token = requireSessionToken();
     return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/attendance`, {}, token);
   });
+  secureHandle('meetings:join', async (meetingId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/join`, { method:'POST', body:'{}' }, token);
+  });
+  secureHandle('meetings:updateParticipantPermissions', async (meetingId: string, userId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/participants/${encodeURIComponent(safeId(userId,'usr'))}/permissions`, { method:'POST', body:JSON.stringify(payload) }, token);
+  });
+  secureHandle('meetings:muteParticipant', async (meetingId: string, userId: string, trackSid: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/participants/${encodeURIComponent(safeId(userId,'usr'))}/mute`, { method:'POST', body:JSON.stringify({trackSid:String(trackSid??'').trim().slice(0,120)}) }, token);
+  });
+  secureHandle('meetings:removeParticipant', async (meetingId: string, userId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/participants/${encodeURIComponent(safeId(userId,'usr'))}/remove`, { method:'POST', body:'{}' }, token);
+  });
 
 
   secureHandle('service:searchCustomers', async (query: string) => {
