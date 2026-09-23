@@ -118,6 +118,66 @@ jobs:
           NODE
           gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${target_path}" --input bundle-upload.json >/dev/null
 
+      - name: Apply additive 1.0.0.20 migrations to temp Neon
+        if: steps.neon_credential.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID"
+          auth_header="Authorization: Bearer $NEON_API_KEY"
+
+          curl --silent --show-error --fail "$api/branches/$NEON_BRANCH_ID/databases" --header "$auth_header" > neon-databases.json
+          curl --silent --show-error --fail "$api/branches/$NEON_BRANCH_ID/roles" --header "$auth_header" > neon-roles.json
+
+          database_name="$(node - <<'NODE'
+          const fs=require('fs');
+          const rows=JSON.parse(fs.readFileSync('neon-databases.json','utf8')).databases||[];
+          const selected=rows.find((x)=>x.name==='neondb')||rows[0];
+          if(!selected?.name)throw new Error('Temp Neon branch has no database');
+          process.stdout.write(selected.name);
+          NODE
+          )"
+          role_name="$(node - <<'NODE'
+          const fs=require('fs');
+          const rows=JSON.parse(fs.readFileSync('neon-roles.json','utf8')).roles||[];
+          const selected=rows.find((x)=>x.name==='neondb_owner')||rows.find((x)=>x.protected!==true)||rows[0];
+          if(!selected?.name)throw new Error('Temp Neon branch has no usable Postgres role');
+          process.stdout.write(selected.name);
+          NODE
+          )"
+
+          curl --silent --show-error --fail --get "$api/connection_uri" \
+            --header "$auth_header" \
+            --data-urlencode "branch_id=$NEON_BRANCH_ID" \
+            --data-urlencode "database_name=$database_name" \
+            --data-urlencode "role_name=$role_name" > neon-connection.json
+          database_url="$(node - <<'NODE'
+          const fs=require('fs');
+          const payload=JSON.parse(fs.readFileSync('neon-connection.json','utf8'));
+          if(!payload.uri)throw new Error('Neon connection_uri response has no uri');
+          process.stdout.write(payload.uri);
+          NODE
+          )"
+          echo "::add-mask::$database_url"
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+          for migration in \
+            database/migrations/2026-09-24-v100020-user-gmail-credentials.sql \
+            database/migrations/2026-09-24-v100020-meetings.sql
+          do
+            echo "Applying additive TEMP migration: $migration"
+            psql "$database_url" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+          done
+
+          tables="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT concat_ws(',',to_regclass('public.user_gmail_credentials'),to_regclass('public.meetings'),to_regclass('public.meeting_email_outbox'));")"
+          if [[ "$tables" != *"user_gmail_credentials"* || "$tables" != *"meetings"* || "$tables" != *"meeting_email_outbox"* ]]; then
+            echo "::error::TEMP migration verification failed: $tables"
+            exit 1
+          fi
+          echo "TEMP additive migrations verified."
+
       - name: Deploy bundle to temp Neon only
         if: steps.neon_credential.outputs.available == 'true'
         id: deploy
