@@ -21,6 +21,7 @@ import {
   Send,
   ShieldCheck,
   Smartphone,
+  Truck,
   Unlink,
   Unlock,
   UserRound,
