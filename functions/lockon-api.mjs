@@ -4474,6 +4474,53 @@ const route = async (request) => {
     return json(request,payload);
   }
 
+  const meetingAttendanceAction=url.pathname.match(/^\/meetings\/([^/]+)\/attendance$/);
+  if(meetingAttendanceAction&&method==='POST'){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingAttendanceAction[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!await meetingEligible(u,meetingId)&&!meetingCanManage(u,meeting))return json(request,{error:'MEETING_NOT_ELIGIBLE'},403);
+    const body=await readJson(request),action=String(body.action||'').toUpperCase();
+    if(action==='JOIN'){
+      await q(
+        "INSERT INTO meeting_attendance(meeting_id,user_id,first_joined_at,last_joined_at,join_count,updated_at) VALUES($1,$2,now(),now(),1,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET first_joined_at=COALESCE(meeting_attendance.first_joined_at,now()),last_joined_at=now(),join_count=meeting_attendance.join_count+1,updated_at=now()",
+        [meetingId,u.id]
+      );
+      await meetingEvent(meetingId,u.id,'ATTENDANCE_JOIN',{});
+    }else if(action==='LEAVE'){
+      await q(
+        "UPDATE meeting_attendance SET total_seconds=total_seconds+GREATEST(0,LEAST(43200,EXTRACT(EPOCH FROM (now()-last_joined_at))::int)),last_left_at=now(),updated_at=now() WHERE meeting_id=$1 AND user_id=$2 AND last_joined_at IS NOT NULL AND (last_left_at IS NULL OR last_left_at<last_joined_at)",
+        [meetingId,u.id]
+      );
+      await meetingEvent(meetingId,u.id,'ATTENDANCE_LEAVE',{});
+    }else return json(request,{error:'MEETING_ATTENDANCE_ACTION'},400);
+    return json(request,{ok:true});
+  }
+
+  const meetingAttendanceList=url.pathname.match(/^\/meetings\/([^/]+)\/attendance$/);
+  if(meetingAttendanceList&&method==='GET'){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingAttendanceList[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN'},403);
+    const {rows}=await q(
+      "SELECT usr.id AS user_id,usr.name,usr.email,usr.role_code,r.status AS registration_status,r.registered_at,a.first_joined_at,a.last_joined_at,a.last_left_at,a.total_seconds,a.join_count FROM meeting_registrations r JOIN users usr ON usr.id=r.user_id LEFT JOIN meeting_attendance a ON a.meeting_id=r.meeting_id AND a.user_id=r.user_id WHERE r.meeting_id=$1 ORDER BY r.registered_at ASC",
+      [meetingId]
+    );
+    return json(request,{meetingId,attendance:rows.map((row)=>({
+      userId:row.user_id,
+      name:operationalIdentityName(row.name,row.email,row.role_code)||'Użytkownik',
+      registrationStatus:row.registration_status,
+      registeredAt:row.registered_at,
+      joined:Boolean(row.first_joined_at),
+      firstJoinedAt:row.first_joined_at||null,
+      lastJoinedAt:row.last_joined_at||null,
+      lastLeftAt:row.last_left_at||null,
+      totalSeconds:Number(row.total_seconds||0),
+      joinCount:Number(row.join_count||0)
+    }))});
+  }
+
   const meetingParticipants=url.pathname.match(/^\/meetings\/([^/]+)\/participants$/);
   if(method==='GET'&&meetingParticipants){
     const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingParticipants[1],120);
@@ -4585,6 +4632,9 @@ const route = async (request) => {
     );
     if(!result.rows[0])return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
     await meetingEvent(meetingId,u.id,target,{});
+    if(target==='ENDED'||target==='CANCELLED'){
+      await q("UPDATE meeting_attendance SET total_seconds=total_seconds+GREATEST(0,LEAST(43200,EXTRACT(EPOCH FROM (now()-last_joined_at))::int)),last_left_at=now(),updated_at=now() WHERE meeting_id=$1 AND last_joined_at IS NOT NULL AND (last_left_at IS NULL OR last_left_at<last_joined_at)",[meetingId]);
+    }
     if(target==='CANCELLED'){
       const cancellationQueue=await queueMeetingEmailEvent(meetingId,'CANCELLED');
       await meetingEvent(meetingId,u.id,'EMAIL_CANCELLATION_QUEUED',cancellationQueue);
