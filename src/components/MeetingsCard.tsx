@@ -231,7 +231,7 @@ export function MeetingsCard({ role }: { role: UserRole }) {
             <div className="meeting-attendance-list">
               {attendanceItems.length===0 ? <div className="meeting-empty">Nikt nie był zapisany na to spotkanie.</div> : attendanceItems.map((item)=>(
                 <div className="meeting-attendance-row" key={item.userId}>
-                  <div><strong>{item.name}</strong><small>{item.registrationStatus==='REGISTERED'?'Zapisany':'Wypisany'}</small></div>
+                  <div><strong>{item.name}</strong><small>{item.registrationStatus==='REGISTERED'?'Zapisany':item.registrationStatus==='CANCELLED'?'Wypisany':'Prowadzący / bez zapisu'}</small></div>
                   <span>{item.joined?'Dołączył':'Nie dołączył'}</span>
                   <span>{item.firstJoinedAt?new Date(item.firstJoinedAt).toLocaleString('pl-PL'):'—'}</span>
                   <span>{item.lastLeftAt?new Date(item.lastLeftAt).toLocaleString('pl-PL'):'—'}</span>
