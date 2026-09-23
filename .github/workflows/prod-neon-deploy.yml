@@ -1,0 +1,296 @@
+name: Production Neon exact deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      temp_run_id:
+        description: "Successful Temp Neon integration smoke run ID for this exact candidate"
+        required: true
+        type: string
+      confirmation:
+        description: "Type DEPLOY_PROD"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: lockon-production-neon-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: wandering-field-13057181
+      NEON_BRANCH_ID: br-steep-bonus-b1f1qh8u
+      NEON_FUNCTION_SLUG: lockonapi
+      PROD_API_URL: https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+      PROD_SITE_ORIGIN: https://app.serviceos.pl
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Enforce production gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Production deploy can run only from main."
+            exit 1
+          fi
+          if [[ "${{ inputs.confirmation }}" != "DEPLOY_PROD" ]]; then
+            echo "::error::Confirmation must be exactly DEPLOY_PROD."
+            exit 1
+          fi
+          if [[ -z "$NEON_API_KEY" ]]; then
+            echo "::error::Repository secret NEON_API_KEY is required for exact production deployment."
+            exit 1
+          fi
+
+      - name: Checkout main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify successful exact TEMP candidate
+        id: temp_gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="${{ inputs.temp_run_id }}"
+          if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+            echo "::error::temp_run_id must be a numeric GitHub Actions run ID."
+            exit 1
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > temp-run.json
+          node - <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs=require('fs');
+          const run=JSON.parse(fs.readFileSync('temp-run.json','utf8'));
+          if(run.name!=='Temp Neon integration smoke') throw new Error('Provided run is not Temp Neon integration smoke');
+          if(run.conclusion!=='success') throw new Error('TEMP run is not successful: '+String(run.conclusion));
+          if(!String(run.head_branch||'').startsWith('fix/user-frontdesk-flow-') && !String(run.head_branch||'').startsWith('release/')) {
+            throw new Error('TEMP run is not from an approved candidate branch');
+          }
+          if(!/^[a-f0-9]{40}$/.test(String(run.head_sha||''))) throw new Error('TEMP run has no valid head SHA');
+          console.log('temp_sha='+run.head_sha);
+          console.log('temp_branch='+run.head_branch);
+          NODE
+
+          temp_sha="$(node -e "const r=require('./temp-run.json');process.stdout.write(r.head_sha)")"
+          git fetch --no-tags origin "$temp_sha"
+          if ! git diff --quiet "$temp_sha" HEAD --; then
+            echo "::error::main content differs from the exact TEMP-tested candidate. Re-run TEMP for the final candidate before production."
+            git diff --stat "$temp_sha" HEAD
+            exit 1
+          fi
+          echo "Exact TEMP-tested tree matches main."
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Build exact production bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 pdfmake@0.2.20 livekit-server-sdk@2.19.1 esbuild@0.25.12
+          node --check functions/lockon-api.mjs
+          mkdir -p central-api-dist
+          npx esbuild functions/lockon-api.mjs \
+            --bundle \
+            --platform=node \
+            --target=node24 \
+            --format=esm \
+            --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" \
+            --outfile=central-api-dist/index.mjs
+          zip -j prod-neon-lockonapi.zip central-api-dist/index.mjs
+          sha256sum prod-neon-lockonapi.zip central-api-dist/index.mjs
+
+      - name: Apply additive 1.0.0.20 migrations to PROD
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID"
+          auth_header="Authorization: Bearer $NEON_API_KEY"
+
+          curl --silent --show-error --fail "$api/branches/$NEON_BRANCH_ID/databases" --header "$auth_header" > neon-databases.json
+          curl --silent --show-error --fail "$api/branches/$NEON_BRANCH_ID/roles" --header "$auth_header" > neon-roles.json
+
+          database_name="$(node - <<'NODE'
+          const fs=require('fs');
+          const rows=JSON.parse(fs.readFileSync('neon-databases.json','utf8')).databases||[];
+          const selected=rows.find((x)=>x.name==='neondb')||rows[0];
+          if(!selected?.name)throw new Error('PROD Neon branch has no database');
+          process.stdout.write(selected.name);
+          NODE
+          )"
+          role_name="$(node - <<'NODE'
+          const fs=require('fs');
+          const rows=JSON.parse(fs.readFileSync('neon-roles.json','utf8')).roles||[];
+          const selected=rows.find((x)=>x.name==='neondb_owner')||rows.find((x)=>x.protected!==true)||rows[0];
+          if(!selected?.name)throw new Error('PROD Neon branch has no usable Postgres role');
+          process.stdout.write(selected.name);
+          NODE
+          )"
+
+          curl --silent --show-error --fail --get "$api/connection_uri" \
+            --header "$auth_header" \
+            --data-urlencode "branch_id=$NEON_BRANCH_ID" \
+            --data-urlencode "database_name=$database_name" \
+            --data-urlencode "role_name=$role_name" > neon-connection.json
+          database_url="$(node - <<'NODE'
+          const fs=require('fs');
+          const payload=JSON.parse(fs.readFileSync('neon-connection.json','utf8'));
+          if(!payload.uri)throw new Error('Neon connection_uri response has no uri');
+          process.stdout.write(payload.uri);
+          NODE
+          )"
+          echo "::add-mask::$database_url"
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+          for migration in \
+            database/migrations/2026-09-24-v100020-user-gmail-credentials.sql \
+            database/migrations/2026-09-24-v100020-meetings.sql
+          do
+            echo "Applying additive PROD migration: $migration"
+            psql "$database_url" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+          done
+
+          tables="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT concat_ws(',',to_regclass('public.user_gmail_credentials'),to_regclass('public.meetings'),to_regclass('public.meeting_email_outbox'));")"
+          if [[ "$tables" != *"user_gmail_credentials"* || "$tables" != *"meetings"* || "$tables" != *"meeting_email_outbox"* ]]; then
+            echo "::error::PROD migration verification failed: $tables"
+            exit 1
+          fi
+
+      - name: Deploy exact bundle to PROD
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$NEON_BRANCH_ID/functions/$NEON_FUNCTION_SLUG/deployments"
+          http="$(curl --silent --show-error --output deploy.json --write-out '%{http_code}' \
+            --request POST "$endpoint" \
+            --header "Authorization: Bearer $NEON_API_KEY" \
+            --form "zip=@prod-neon-lockonapi.zip")"
+          if [[ "$http" -lt 200 || "$http" -ge 300 ]]; then
+            echo "::error::PROD Neon deploy HTTP $http"
+            cat deploy.json
+            exit 1
+          fi
+          node - <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs=require('fs');
+          const d=JSON.parse(fs.readFileSync('deploy.json','utf8'));
+          const id=d.id ?? d.deployment?.id ?? d.deployment_id;
+          if(id===undefined || id===null) throw new Error('Neon deploy response has no deployment id');
+          console.log('deployment_id='+id);
+          NODE
+
+      - name: Wait for exact PROD deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$NEON_BRANCH_ID/functions/$NEON_FUNCTION_SLUG"
+          expected="${{ steps.deploy.outputs.deployment_id }}"
+          ready=0
+          for attempt in $(seq 1 60); do
+            curl --silent --show-error --fail "$endpoint" --header "Authorization: Bearer $NEON_API_KEY" > function.json
+            read -r id state < <(node - <<'NODE'
+          const fs=require('fs');
+          const f=JSON.parse(fs.readFileSync('function.json','utf8'));
+          const d=f.current_deployment ?? f.active_deployment ?? f.deployment ?? {};
+          process.stdout.write(String(d.id ?? '')+' '+String(d.status ?? 'unknown'));
+          NODE
+          )
+            if [[ "$id" == "$expected" && "$state" == "completed" ]]; then ready=1; break; fi
+            if [[ "$id" == "$expected" && "$state" == "failed" ]]; then
+              echo "::error::PROD Neon deployment $expected failed."
+              exit 1
+            fi
+            sleep 5
+          done
+          if [[ "$ready" != "1" ]]; then
+            echo "::error::PROD Neon deployment did not become active."
+            exit 1
+          fi
+
+      - name: Verify PROD integration environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$NEON_BRANCH_ID/functions/$NEON_FUNCTION_SLUG"
+          curl --silent --show-error --fail "$endpoint" --header "Authorization: Bearer $NEON_API_KEY" > function-environment.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const root=JSON.parse(fs.readFileSync('function-environment.json','utf8'));
+          const names=new Set();
+          const visit=(value,key='')=>{
+            if(!value)return;
+            if(key==='environment'){
+              if(Array.isArray(value)){
+                for(const item of value){
+                  if(typeof item==='string')names.add(item);
+                  else if(item&&typeof item==='object'){
+                    if(typeof item.name==='string')names.add(item.name);
+                    for(const k of Object.keys(item))names.add(k);
+                  }
+                }
+              }else if(typeof value==='object'){
+                for(const k of Object.keys(value))names.add(k);
+              }
+            }
+            if(value&&typeof value==='object')for(const [k,v] of Object.entries(value))visit(v,k);
+          };
+          visit(root);
+          const required=['LOCKON_OWNER_EMAIL','LOCKON_GOOGLE_DESKTOP_CLIENT_ID','LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET','LOCKON_GMAIL_TOKEN_KEY','LIVEKIT_URL','LIVEKIT_API_KEY','LIVEKIT_API_SECRET'];
+          const missing=required.filter((name)=>!names.has(name));
+          if(missing.length)throw new Error('PROD function is missing required environment names: '+missing.join(', '));
+          NODE
+
+      - name: Production health, CORS and auth safety smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --fail-with-body --dump-header health.headers "$PROD_API_URL/health" --output health.json
+          node -e "const d=require('./health.json');if(d.ok!==true||d.service!=='LockOn ServiceOS Central API')throw new Error('Production health payload mismatch')"
+          grep -qi '^cache-control: no-store' health.headers
+          grep -qi '^x-content-type-options: nosniff' health.headers
+          grep -qi '^x-frame-options: DENY' health.headers
+
+          curl --silent --show-error --dump-header allowed.headers --output /dev/null --request OPTIONS "$PROD_API_URL/health" \
+            --header "Origin: $PROD_SITE_ORIGIN" \
+            --header "Access-Control-Request-Method: GET"
+          grep -qi "^access-control-allow-origin: $PROD_SITE_ORIGIN" allowed.headers
+
+          curl --silent --show-error --dump-header denied.headers --output /dev/null --request OPTIONS "$PROD_API_URL/health" \
+            --header "Origin: https://evil.invalid" \
+            --header "Access-Control-Request-Method: GET"
+          if grep -qi '^access-control-allow-origin:' denied.headers; then
+            echo "::error::Production API exposed CORS to an unapproved origin"
+            exit 1
+          fi
+
+          for endpoint in dev-owner dev-role; do
+            code="$(curl --silent --show-error --output "$endpoint.json" --write-out '%{http_code}' --request POST "$PROD_API_URL/auth/$endpoint" --header 'Content-Type: application/json' --data '{}')"
+            if [[ "$code" != "403" && "$code" != "404" ]]; then
+              echo "::error::Production dev login endpoint $endpoint returned HTTP $code"
+              cat "$endpoint.json"
+              exit 1
+            fi
+          done
+
+          code="$(curl --silent --show-error --output me.json --write-out '%{http_code}' "$PROD_API_URL/me")"
+          if [[ "$code" != "401" ]]; then
+            echo "::error::Production /me without auth returned HTTP $code"
+            cat me.json
+            exit 1
+          fi
+
+          echo "PROD exact deployment and safety smoke passed for ${GITHUB_SHA}."
