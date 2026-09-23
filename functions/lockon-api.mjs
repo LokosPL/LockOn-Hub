@@ -42,6 +42,7 @@ const SERVICE_INTAKE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECH
 const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
+const MEETING_MANAGE_ROLES = new Set(['OWNER', 'BOSS']);
 const CUSTOMER_QUOTE_STAFF_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const FINANCE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const DEV_TEST_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER', 'SUPPORT']);
@@ -561,6 +562,70 @@ const visiblePointIds = async (user) => {
   const { rows } = await q('SELECT point_id AS id FROM user_point_access WHERE user_id=$1', [user.id]);
   return rows.map((r) => r.id);
 };
+
+const meetingCanManage = (user, meeting) =>
+  MEETING_MANAGE_ROLES.has(user.role_code) ||
+  meeting?.created_by_user_id === user.id ||
+  meeting?.host_user_id === user.id;
+
+const meetingEligible = async (user, meetingId) => {
+  if (MEETING_MANAGE_ROLES.has(user.role_code)) return true;
+  const row=(await q(
+    "SELECT EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=$1 AND (a.audience_type='ALL' OR (a.audience_type='USER' AND a.user_id=$2) OR (a.audience_type='POINT' AND EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=$2 AND upa.point_id=a.point_id)))) AS allowed",
+    [meetingId,user.id]
+  )).rows[0];
+  return row?.allowed===true;
+};
+
+const meetingView = (row, user) => ({
+  id:row.id,
+  title:row.title,
+  description:row.description||'',
+  startsAt:row.starts_at,
+  plannedMinutes:Number(row.planned_minutes||60),
+  status:row.status,
+  maxParticipants:Number(row.max_participants||50),
+  allowParticipantAudio:row.allow_participant_audio===true,
+  allowParticipantScreenShare:row.allow_participant_screen_share===true,
+  registeredCount:Number(row.registered_count||0),
+  registeredByMe:row.registered_by_me===true,
+  canManage:meetingCanManage(user,row),
+  createdByUserId:row.created_by_user_id,
+  createdByName:operationalIdentityName(row.creator_name,row.creator_email,row.creator_role)||'ServiceOS',
+  hostUserId:row.host_user_id,
+  hostName:operationalIdentityName(row.host_name,row.host_email,row.host_role)||'Prowadzący',
+  audience:Array.isArray(row.audience)?row.audience:[],
+  startedAt:row.started_at||null,
+  endedAt:row.ended_at||null,
+  cancelledAt:row.cancelled_at||null,
+  createdAt:row.created_at,
+  updatedAt:row.updated_at
+});
+
+const listMeetingsForUser = async (user) => {
+  const global=MEETING_MANAGE_ROLES.has(user.role_code);
+  const visibility=global
+    ? 'true'
+    : "(m.created_by_user_id=$1 OR m.host_user_id=$1 OR EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=m.id AND (a.audience_type='ALL' OR (a.audience_type='USER' AND a.user_id=$1) OR (a.audience_type='POINT' AND EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=$1 AND upa.point_id=a.point_id)))))";
+  const sql=
+    "SELECT m.*,cu.name AS creator_name,cu.email AS creator_email,cu.role_code AS creator_role,hu.name AS host_name,hu.email AS host_email,hu.role_code AS host_role,"+
+    "(SELECT count(*)::int FROM meeting_registrations r WHERE r.meeting_id=m.id AND r.status='REGISTERED') AS registered_count,"+
+    "EXISTS(SELECT 1 FROM meeting_registrations r WHERE r.meeting_id=m.id AND r.user_id=$1 AND r.status='REGISTERED') AS registered_by_me,"+
+    "COALESCE((SELECT json_agg(json_build_object('type',a.audience_type,'pointId',a.point_id,'pointName',p.name,'userId',a.user_id,'userName',operational.name)) FROM meeting_audience a LEFT JOIN points p ON p.id=a.point_id LEFT JOIN LATERAL (SELECT CASE WHEN au.role_code='OWNER' THEN $2 ELSE COALESCE(NULLIF(au.name,''),au.email) END AS name FROM users au WHERE au.id=a.user_id) operational ON true WHERE a.meeting_id=m.id),'[]'::json) AS audience "+
+    "FROM meetings m JOIN users cu ON cu.id=m.created_by_user_id JOIN users hu ON hu.id=m.host_user_id WHERE "+visibility+
+    (global?"":" AND m.status<>'CANCELLED'")+
+    " ORDER BY CASE m.status WHEN 'LIVE' THEN 0 WHEN 'SCHEDULED' THEN 1 WHEN 'ENDED' THEN 2 ELSE 3 END,m.starts_at ASC,m.created_at DESC LIMIT 100";
+  const rows=(await q(sql,[user.id,OWNER_OPERATIONAL_NAME])).rows;
+  return rows.map((row)=>meetingView(row,user));
+};
+
+const loadMeeting = async (meetingId) =>
+  (await q("SELECT * FROM meetings WHERE id=$1 LIMIT 1",[meetingId])).rows[0]||null;
+
+const meetingEvent = async (meetingId, actorUserId, eventType, metadata={}) =>
+  q("INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,$4,$5::jsonb)",[
+    makeId('mte'),meetingId,actorUserId||null,eventType,JSON.stringify(metadata||{})
+  ]);
 
 const searchCustomers = async (user, term) => {
   const query = cleanText(term, 120);
