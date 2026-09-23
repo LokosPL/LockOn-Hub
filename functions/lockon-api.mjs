@@ -572,7 +572,7 @@ const searchCustomers = async (user, term) => {
     return rows.map(customerView);
   }
   const { rows } = await q(
-    "SELECT DISTINCT c.id,c.first_name,c.last_name,c.email,c.phone FROM customers c JOIN service_orders s ON s.customer_id=c.id WHERE lower(c.first_name||' '||c.last_name||' '||coalesce(c.email,'')||' '||coalesce(c.phone,'')) LIKE '%'||lower($1)||'%' AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY c.last_name,c.first_name LIMIT 20",
+    "SELECT DISTINCT c.id,c.first_name,c.last_name,c.email,c.phone FROM customers c JOIN service_orders s ON s.customer_id=c.id WHERE lower(c.first_name||' '||c.last_name||' '||coalesce(c.email,'')||' '||coalesce(c.phone,'')) LIKE '%'||lower($1)||'%' AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY c.last_name,c.first_name LIMIT 20",
     [query, user.id]
   );
   return rows.map(customerView);
@@ -938,10 +938,25 @@ const attachTransfers = async (orders) => {
   });
 };
 
+const canReadOrder = async (user, orderId) => {
+  if (GLOBAL_ROLES.has(user.role_code)) return true;
+  const { rowCount } = await q(
+    "SELECT 1 FROM service_orders s WHERE s.id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) LIMIT 1",
+    [orderId, user.id]
+  );
+  return rowCount > 0;
+};
+
+const requireReadableOrder = async (user, orderId) => {
+  if (!(await canReadOrder(user, orderId))) {
+    throw Object.assign(new Error('Brak dostępu do podglądu tego zlecenia.'), { status:403, code:'ORDER_READ_FORBIDDEN' });
+  }
+};
+
 const canSeeOrder = async (user, orderId) => {
   if (GLOBAL_ROLES.has(user.role_code)) return true;
   const { rowCount } = await q(
-    "SELECT 1 FROM service_orders s WHERE s.id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) LIMIT 1",
+    "SELECT 1 FROM service_orders s WHERE s.id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) LIMIT 1",
     [orderId, user.id]
   );
   return rowCount > 0;
@@ -1111,7 +1126,7 @@ const getVisibleOrderByNumber = async (user, number) => {
   let access = '';
   if (!GLOBAL_ROLES.has(user.role_code)) {
     params.push(user.id);
-    access = " AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')))";
+    access = " AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')))";
   }
   const { rows } = await q(
     "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts ca ON ca.customer_id=c.id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
@@ -1134,7 +1149,7 @@ const listVisibleOrders = async (user,paging=null) => {
     return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT $2 OFFSET $3",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT $2 OFFSET $3",
     [user.id,limit,offset]
   );
   return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
@@ -1174,7 +1189,7 @@ const searchVisibleOrders = async (user, term) => {
      LEFT JOIN users tech ON tech.id=s.assigned_technician_id
      WHERE ${commonMatch}
        AND (
-         EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))
+         EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)))
          OR EXISTS(
            SELECT 1 FROM service_order_transfers t
            JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id)
@@ -1197,7 +1212,7 @@ const listVisibleCustomerOrders = async (user, customerId) => {
     return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY s.created_at DESC LIMIT 100",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY s.created_at DESC LIMIT 100",
     [customerId, user.id]
   );
   return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
@@ -2134,7 +2149,7 @@ const requireCustomerAccountAccess = async (user, customerId, accessMode = 'SUPP
   const ids=await visiblePointIds(user);
   if (!ids.length) throw Object.assign(new Error('Brak dostępu do tego klienta.'),{status:403,code:'CUSTOMER_FORBIDDEN'});
   const visible=(await q(
-    "SELECT 1 WHERE EXISTS(SELECT 1 FROM service_orders s WHERE s.customer_id=$1 AND COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[])) OR EXISTS(SELECT 1 FROM customer_quote_requests r WHERE r.customer_id=$1 AND (r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) LIMIT 1",
+    "SELECT 1 WHERE EXISTS(SELECT 1 FROM service_orders s WHERE s.customer_id=$1 AND (COALESCE(s.home_point_id,s.point_id)=ANY($2::text[]) OR COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[]))) OR EXISTS(SELECT 1 FROM customer_quote_requests r WHERE r.customer_id=$1 AND (r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) LIMIT 1",
     [customerId,ids]
   )).rows[0];
   if (!visible) throw Object.assign(new Error('Brak dostępu do tego klienta.'),{status:403,code:'CUSTOMER_FORBIDDEN'});
@@ -2153,7 +2168,7 @@ const customerAccountManagementOverview = async (user, search = '', accessMode =
   const supportView=hasSupportAccess(user);
   const ids=GLOBAL_ROLES.has(user.role_code) ? [] : await visiblePointIds(user);
   const params=[GLOBAL_ROLES.has(user.role_code),ids];
-  let filter=" WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[])) OR EXISTS(SELECT 1 FROM customer_quote_requests r0 WHERE r0.customer_id=c.id AND (r0.requested_point_id=ANY($2::text[]) OR r0.routed_point_id=ANY($2::text[]))))";
+  let filter=" WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND (COALESCE(s0.home_point_id,s0.point_id)=ANY($2::text[]) OR COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[]))) OR EXISTS(SELECT 1 FROM customer_quote_requests r0 WHERE r0.customer_id=c.id AND (r0.requested_point_id=ANY($2::text[]) OR r0.routed_point_id=ANY($2::text[]))))";
   const term=cleanText(search,120);
   if (term) {
     params.push('%'+term+'%');
@@ -2165,7 +2180,7 @@ const customerAccountManagementOverview = async (user, search = '', accessMode =
     "a.notify_service_updates,a.notify_ready_for_pickup,a.notify_quote_updates,a.notify_messages,"+
     "(SELECT count(*)::int FROM customer_portal_sessions ps WHERE ps.customer_id=c.id AND ps.expires_at>now()) AS active_sessions,"+
     "(SELECT max(ps.last_seen_at) FROM customer_portal_sessions ps WHERE ps.customer_id=c.id AND ps.expires_at>now()) AS last_seen_at,"+
-    "(SELECT count(*)::int FROM service_orders s WHERE s.customer_id=c.id AND ($1::boolean OR COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[]))) AS order_count,"+
+    "(SELECT count(*)::int FROM service_orders s WHERE s.customer_id=c.id AND ($1::boolean OR COALESCE(s.home_point_id,s.point_id)=ANY($2::text[]) OR COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[]))) AS order_count,"+
     "(SELECT count(*)::int FROM customer_quote_requests r WHERE r.customer_id=c.id AND r.status IN ('OPEN','QUOTED') AND ($1::boolean OR r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) AS open_quote_count "+
     "FROM customers c LEFT JOIN customer_portal_accounts a ON a.customer_id=c.id"+filter+
     " ORDER BY c.updated_at DESC,c.last_name,c.first_name LIMIT 250",
@@ -4351,7 +4366,7 @@ const route = async (request) => {
     if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do historii zlecenia.'),{status:403});
     const order=(await q('SELECT id,point_id FROM service_orders WHERE id=$1 LIMIT 1',[historyMatch[1]])).rows[0];
     if(!order)return json(request,{error:'NOT_FOUND'},404);
-    await requireOrder(u,order.id);
+    await requireReadableOrder(u,order.id);
     const {rows}=await q(
       "SELECT h.id,h.from_status,h.to_status,h.note,h.created_at,h.changed_by_user_id,usr.name AS changed_by_name,usr.email AS changed_by_email,usr.role_code AS changed_by_role FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.created_at ASC,h.id ASC",
       [order.id]
