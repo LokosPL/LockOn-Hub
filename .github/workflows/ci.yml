@@ -2,6 +2,7 @@ name: Verify LockOn ServiceOS
 
 on:
   push:
+    branches: ["main", "release/**"]
     paths:
       - "src/**"
       - "electron/**"
