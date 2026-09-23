@@ -5363,7 +5363,7 @@ const route = async (request) => {
 
     let acceptedBy=null;
     if(next==='ACCEPTED'){
-      if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))throw Object.assign(new Error('Brak uprawnień do przyjęcia urządzenia.'),{status:403});
+      if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przyjęcia urządzenia.'),{status:403});
       acceptedBy=u.id;
     }
 
