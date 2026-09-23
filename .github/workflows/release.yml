@@ -100,6 +100,18 @@ jobs:
           }
 
           $prodSha = [string]$prod.head_sha
+
+          $smokeUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&event=workflow_run&status=success&per_page=100"
+          $smokeResponse = Invoke-RestMethod -Uri $smokeUrl -Headers $headers -Method Get
+          $smoke = $smokeResponse.workflow_runs |
+            Where-Object { $_.name -eq 'Production API smoke' -and $_.conclusion -eq 'success' -and $_.head_sha -eq $prodSha } |
+            Sort-Object created_at -Descending |
+            Select-Object -First 1
+          if ($null -eq $smoke) {
+            Write-Error "No successful Production API smoke was found for PROD deployment SHA $prodSha."
+            exit 1
+          }
+
           git merge-base --is-ancestor $prodSha $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) {
             Write-Error "The successful PROD deployment SHA $prodSha is not an ancestor of release SHA $env:GITHUB_SHA."
@@ -121,7 +133,7 @@ jobs:
             exit 1
           }
 
-          Write-Host "Production deployment gate verified from $prodSha. Release-only changes: $($changed -join ', ')."
+          Write-Host "Production deploy + smoke gates verified from $prodSha. Release-only changes: $($changed -join ', ')."
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
