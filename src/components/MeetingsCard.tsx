@@ -259,7 +259,7 @@ export function MeetingsCard({ role }: { role: UserRole }) {
           })}
         </div>
       )}
-      {activeRoom && <MeetingRoom meeting={activeRoom} onClose={()=>setActiveRoom(null)} />}
+      {activeRoom && <MeetingRoom meeting={activeRoom} onClose={()=>setActiveRoom(null)} onMeetingEnded={()=>void load(true)} />}
       {attendanceMeeting && (
         <div className="meeting-attendance-backdrop" role="dialog" aria-modal="true">
           <div className="meeting-attendance-modal">
