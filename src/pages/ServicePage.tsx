@@ -1234,7 +1234,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             <Mail size={13}/>
             {(gmail?.connected || auth.gmailConnected)
               ? <span>Wiadomości będą wysyłane jako: <strong>{gmail?.email || auth.gmailEmail || auth.user?.email || 'Twoje konto Google'}</strong></span>
-              : <span>Gmail pracownika wymaga połączenia. <strong>Zaloguj się ponownie przez Google</strong>, aby wysyłać wiadomości jako Ty.</span>}
+              : <>
+                  <span>Gmail pracownika wymaga ponownego połączenia.</span>
+                  <button type="button" className="button tiny secondary" disabled={gmailBusy || !pointId} onClick={()=>void connectGmail()}>
+                    {gmailBusy?'Łączenie…':'Połącz ponownie Gmail'}
+                  </button>
+                </>}
           </div>}
         </div>
         <div className="service-tabs">
