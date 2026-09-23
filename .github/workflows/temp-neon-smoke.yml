@@ -2,7 +2,7 @@ name: Temp Neon integration smoke
 
 on:
   push:
-    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "feature/service-intake-automation-*", "fix/service-card-*", "release/**"]
+    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "feature/service-intake-automation-*", "feature/1.0.0.20-*", "fix/service-card-*", "release/**"]
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
@@ -64,6 +64,73 @@ jobs:
             --outfile=central-api-dist/index.mjs
           zip -j temp-neon-lockonapi.zip central-api-dist/index.mjs
           sha256sum temp-neon-lockonapi.zip central-api-dist/index.mjs
+
+      - name: Apply 1.0.0.20 migrations to TEMP only
+        if: steps.neon_credential.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          const {Client}=require('pg');
+          const apiKey=process.env.NEON_API_KEY;
+          const project=process.env.NEON_PROJECT_ID;
+          const branch=process.env.NEON_BRANCH_ID;
+          const headers={Authorization:'Bearer '+apiKey,Accept:'application/json'};
+          const get=async(url)=>{
+            const response=await fetch(url,{headers,redirect:'error'});
+            const body=await response.json().catch(()=>({}));
+            if(!response.ok)throw new Error('Neon API '+response.status+': '+JSON.stringify(body).slice(0,500));
+            return body;
+          };
+          const main=async()=>{
+            const dbPayload=await get(`https://console.neon.tech/api/v2/projects/${project}/branches/${branch}/databases`);
+            const databases=Array.isArray(dbPayload.databases)?dbPayload.databases:[];
+            const database=databases.find((item)=>item.name==='neondb')||databases[0];
+            if(!database?.name)throw new Error('TEMP branch has no database');
+            let role=database.owner_name||database.ownerName||'';
+            if(!role){
+              const rolePayload=await get(`https://console.neon.tech/api/v2/projects/${project}/branches/${branch}/roles`);
+              const roles=Array.isArray(rolePayload.roles)?rolePayload.roles:[];
+              role=(roles.find((item)=>item.protected!==true)||roles[0])?.name||'';
+            }
+            if(!role)throw new Error('TEMP branch has no usable database role');
+            const qs=new URLSearchParams({
+              branch_id:branch,
+              database_name:database.name,
+              role_name:role,
+              pooled:'false'
+            });
+            const connection=await get(`https://console.neon.tech/api/v2/projects/${project}/connection_uri?${qs}`);
+            const uri=connection.uri||connection.connection_uri||connection.connectionUri;
+            if(!uri)throw new Error('Neon connection URI response did not contain a URI');
+            const client=new Client({connectionString:uri,connectionTimeoutMillis:15000});
+            await client.connect();
+            try{
+              for(const path of [
+                'database/migrations/2026-09-23-v100020-user-gmail-per-user.sql',
+                'database/migrations/2026-09-23-v100020-meetings.sql',
+                'database/migrations/2026-09-23-v100020-meeting-invites.sql'
+              ]){
+                const sql=fs.readFileSync(path,'utf8');
+                await client.query(sql);
+                console.log('Applied TEMP migration:',path);
+              }
+              const expected=[
+                '2026-09-23-v100020-user-gmail-per-user',
+                '2026-09-23-v100020-meetings',
+                '2026-09-23-v100020-meeting-invites'
+              ];
+              const result=await client.query('SELECT version FROM schema_migrations WHERE version = ANY($1::text[])',[expected]);
+              const actual=new Set(result.rows.map((row)=>row.version));
+              for(const version of expected)if(!actual.has(version))throw new Error('TEMP migration marker missing: '+version);
+              console.log('TEMP 1.0.0.20 schema verified.');
+            }finally{
+              await client.end();
+            }
+          };
+          main().catch((error)=>{console.error(error instanceof Error?error.message:error);process.exit(1);});
+          NODE
 
       - name: Upload exact temp Neon bundle
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -181,7 +248,15 @@ jobs:
             exit 1
           fi
 
+      - name: Block stale TEMP smoke when exact deploy is unavailable
+        if: steps.neon_credential.outputs.available != 'true'
+        shell: bash
+        run: |
+          echo "::error::Brak NEON_API_KEY: exact 1.0.0.20 bundle i migracje nie zostały wdrożone na TEMP. Stary endpoint nie może zaliczyć gate."
+          exit 1
+
       - name: Temp health, CORS and authenticated smoke
+        if: steps.neon_credential.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
