@@ -112,6 +112,48 @@ const deliveryLabel = (status: NotificationHistoryItem['status']) => ({
   CANCELLED: 'Anulowano'
 }[status]);
 
+const relativeTimePl = (value?: string | null) => {
+  if (!value) return 'brak daty';
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return 'brak daty';
+  const diff = Math.max(0, Date.now() - timestamp);
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return 'przed chwilą';
+  if (minutes < 60) return minutes === 1 ? 'minutę temu' : minutes < 5 ? `${minutes} minuty temu` : `${minutes} minut temu`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? 'godzinę temu' : hours < 5 ? `${hours} godziny temu` : `${hours} godzin temu`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return days === 1 ? 'wczoraj' : `${days} dni temu`;
+  return new Date(value).toLocaleDateString('pl-PL');
+};
+
+const transferStatusPl = (status: ServiceTransfer['status']) => ({
+  REQUESTED: 'Przygotowanie do wysyłki',
+  IN_TRANSIT: 'Telefon jest w drodze',
+  DELIVERED: 'Telefon dotarł i czeka na przyjęcie',
+  ACCEPTED: 'Telefon został przyjęty',
+  REJECTED: 'Przekazanie zostało odrzucone',
+  CANCELLED: 'Przekazanie zostało anulowane'
+}[status]);
+
+const FRONTDESK_STEPS = ['Przyjęcie','Przekazanie','W serwisie','Naprawa','Powrót','Gotowy','Wydany'];
+
+const frontDeskStepIndex = (order: ServiceOrderSummary) => {
+  if (order.status === 'COMPLETED') return 6;
+  if (order.status === 'READY') return 5;
+  if (order.openTransfer?.kind === 'RETURN_HOME') return 4;
+  if (order.returnRequired && order.status === 'REPAIR_DONE') return 4;
+  if (order.openTransfer?.kind === 'OUTBOUND_SERVICE') {
+    return order.openTransfer.status === 'DELIVERED' ? 2 : 1;
+  }
+  const homePointId = order.homePointId || order.pointId;
+  const outsideHome = Boolean(order.currentPointId && order.currentPointId !== homePointId);
+  if (outsideHome) return ['RECEIVED','DIAGNOSIS'].includes(order.status) ? 2 : 3;
+  if (['DIAGNOSIS','WAITING_PARTS','IN_REPAIR'].includes(order.status)) return 3;
+  if (order.status === 'REPAIR_DONE') return 4;
+  return 0;
+};
+
 const isTransferredToService = (order: ServiceOrderSummary) =>
   order.openTransfer?.kind === 'OUTBOUND_SERVICE' ||
   Boolean(order.homePointId && order.currentPointId && order.currentPointId !== order.homePointId) ||
@@ -359,6 +401,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       [order.id]: current[order.id] ?? (order.repairSummary || '')
     }));
     setError('');
+    if (effectiveRole === 'USER') {
+      void ensureOrderHistory(order.id);
+      void ensureServicePoints();
+    }
   };
 
   const setPanelOpen = (orderId:string, panel:string, open:boolean) => {
