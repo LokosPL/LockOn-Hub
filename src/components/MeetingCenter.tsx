@@ -6,6 +6,7 @@ import {
 import type {
   MeetingAudienceOptions, MeetingAudienceType, MeetingCreateInput, MeetingSummary, UserRole
 } from '../types/electron';
+import { MeetingRoom } from './MeetingRoom';
 
 interface MeetingCenterProps {
   role: UserRole;
@@ -43,6 +44,7 @@ export function MeetingCenter({ role, currentUserId }: MeetingCenterProps) {
   const [notice,setNotice]=useState('');
   const [error,setError]=useState('');
   const [creating,setCreating]=useState(false);
+  const [activeMeetingId,setActiveMeetingId]=useState<string|null>(null);
   const [form,setForm]=useState<MeetingCreateInput>({
     title:'',
     description:'',
@@ -84,6 +86,7 @@ export function MeetingCenter({ role, currentUserId }: MeetingCenterProps) {
     }),[meetings]);
   const primary=upcoming[0]??null;
   const later=upcoming.slice(1,5);
+  const activeMeeting=activeMeetingId?meetings.find((item)=>item.id===activeMeetingId)??null:null;
 
   const openCreate=async()=>{
     setCreating(true);setError('');setNotice('');
@@ -128,6 +131,8 @@ export function MeetingCenter({ role, currentUserId }: MeetingCenterProps) {
         action==='start'?'Spotkanie zostało rozpoczęte.':
         action==='end'?'Spotkanie zostało zakończone.':'Spotkanie zostało anulowane.');
       await load(true);
+      if(action==='start')setActiveMeetingId(item.id);
+      if(action==='end'||action==='cancel')setActiveMeetingId((current)=>current===item.id?null:current);
     }catch(e){setError(e instanceof Error?e.message:'Nie udało się wykonać akcji spotkania.');}
     finally{setBusyId(null);}
   };
@@ -171,9 +176,10 @@ export function MeetingCenter({ role, currentUserId }: MeetingCenterProps) {
             : <button className="button primary" disabled={Boolean(busyId)} onClick={()=>void act(primary,'register')}><UserPlus size={14}/> Zapisz się</button>
         )}
         {primary.canHost&&primary.status==='SCHEDULED'&&<button className="button primary" disabled={Boolean(busyId)} onClick={()=>void act(primary,'start')}><Radio size={14}/> Rozpocznij</button>}
+        {primary.status==='LIVE'&&(primary.canHost||primary.registered)&&<button className="button primary" disabled={Boolean(busyId)} onClick={()=>setActiveMeetingId(primary.id)}><Radio size={14}/> Wejdź do pokoju</button>}
+        {primary.status==='LIVE'&&!primary.canHost&&!primary.registered&&<button className="button primary" disabled={Boolean(busyId)} onClick={()=>void act(primary,'register')}><UserPlus size={14}/> Zapisz się, aby dołączyć</button>}
         {primary.canHost&&primary.status==='LIVE'&&<button className="button danger-soft" disabled={Boolean(busyId)} onClick={()=>void act(primary,'end')}><Square size={14}/> Zakończ</button>}
         {primary.canHost&&primary.status==='SCHEDULED'&&<button className="button secondary" disabled={Boolean(busyId)} onClick={()=>void act(primary,'cancel')}><XCircle size={14}/> Anuluj</button>}
-        {primary.status==='LIVE'&&!primary.canHost&&<div className="meeting-live-placeholder"><Radio size={14}/><span>Spotkanie trwa. Pokój audio pojawi się w tym miejscu w następnym etapie.</span></div>}
       </div>
     </article> : <div className="meeting-empty">
       <CalendarClock size={24}/>
@@ -188,9 +194,11 @@ export function MeetingCenter({ role, currentUserId }: MeetingCenterProps) {
           ? <button className="button tiny secondary" disabled={Boolean(busyId)} onClick={()=>void act(item,'unregister')}>Wypisz</button>
           : <button className="button tiny secondary" disabled={Boolean(busyId)} onClick={()=>void act(item,'register')}>Zapisz</button>)}
         {item.canHost&&item.status==='SCHEDULED'&&<button className="button tiny secondary" disabled={Boolean(busyId)} onClick={()=>void act(item,'start')}>Start</button>}
+        {item.status==='LIVE'&&(item.canHost||item.registered)&&<button className="button tiny primary" disabled={Boolean(busyId)} onClick={()=>setActiveMeetingId(item.id)}>Dołącz</button>}
       </article>)}
     </div>}
 
+    {activeMeeting&&activeMeeting.status==='LIVE'&&<MeetingRoom meeting={activeMeeting} currentUserId={currentUserId} onClose={()=>setActiveMeetingId(null)}/>}
     {creating&&canHost&&<div className="meeting-create-backdrop" role="presentation">
       <section className="meeting-create-dialog" role="dialog" aria-modal="true" aria-labelledby="meeting-create-title">
         <div className="meeting-create-head">
