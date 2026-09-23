@@ -350,7 +350,7 @@ jobs:
           const d=require('./user-customers.json'), customerId=process.argv[2];
           const customer=d.customers?.find((item)=>item.id===customerId);
           if(!customer)throw new Error('Home-point USER lost their customer while phone is away');
-          if(customer.activeSessions!==0||customer.googleEmail!==null||customer.blocked!==false)throw new Error('Front-desk customer API leaked portal administration metadata');
+          if(customer.activeSessions!==0||customer.googleLinked!==false||customer.googleEmail!==null||customer.blocked!==false)throw new Error('Front-desk customer API leaked portal administration metadata');
           NODE
 
           user_api GET "/service/customers/$user_customer_id" > user-customer-detail.json
