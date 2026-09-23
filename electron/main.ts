@@ -1006,6 +1006,10 @@ const registerIpc = () => {
     const token = requireSessionToken();
     return backendRequest('/meetings', { method:'POST', body:JSON.stringify(payload ?? {}) }, token);
   });
+  secureHandle('meetings:update', async (meetingId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}`, { method:'PATCH', body:JSON.stringify(payload ?? {}) }, token);
+  });
   secureHandle('meetings:action', async (meetingId: string, action: 'register'|'unregister'|'start'|'end'|'cancel') => {
     const token = requireSessionToken();
     const safeMeetingId = safeId(meetingId, 'mtg');
