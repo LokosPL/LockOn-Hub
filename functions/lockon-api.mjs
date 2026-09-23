@@ -642,10 +642,11 @@ const meetingRoomName = (meetingId) => 'lockon-' + String(meetingId).replace(/[^
 const meetingParticipantIdentity = (meetingId,userId) =>
   'p_' + crypto.createHash('sha256').update(meetingId+':'+userId).digest('hex').slice(0,28);
 
-const meetingPublishSources = (meeting,user,isManager) => {
+const meetingPublishSources = (meeting,user,isManager,control=null) => {
   if (isManager) return [TrackSource.MICROPHONE,TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO];
   const sources=[];
-  if(meeting.allow_participant_audio===true)sources.push(TrackSource.MICROPHONE);
+  const microphoneAllowed=control?.microphone_allowed===true || (control?.microphone_allowed!==false && meeting.allow_participant_audio===true);
+  if(microphoneAllowed)sources.push(TrackSource.MICROPHONE);
   if(meeting.allow_participant_screen_share===true)sources.push(TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO);
   return sources;
 };
@@ -653,7 +654,9 @@ const meetingPublishSources = (meeting,user,isManager) => {
 const createMeetingJoinToken = async (meeting,user) => {
   if(!livekitConfigured())throw Object.assign(new Error('Usługa spotkań audio nie jest jeszcze skonfigurowana.'),{status:503,code:'LIVEKIT_NOT_CONFIGURED'});
   const isManager=meetingCanManage(user,meeting);
-  const sources=meetingPublishSources(meeting,user,isManager);
+  const control=isManager?null:(await q("SELECT microphone_allowed,removed_at FROM meeting_participant_controls WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meeting.id,user.id])).rows[0]||null;
+  if(control?.removed_at)throw Object.assign(new Error('Prowadzący usunął Cię z tego spotkania.'),{status:403,code:'MEETING_REMOVED'});
+  const sources=meetingPublishSources(meeting,user,isManager,control);
   const room=meetingRoomName(meeting.id);
   const identity=meetingParticipantIdentity(meeting.id,user.id);
   const token=new AccessToken(LIVEKIT_API_KEY,LIVEKIT_API_SECRET,{
@@ -677,8 +680,8 @@ const createMeetingJoinToken = async (meeting,user) => {
     identity,
     canManage:isManager,
     permissions:{
-      microphone:isManager||meeting.allow_participant_audio===true,
-      screenShare:isManager||meeting.allow_participant_screen_share===true
+      microphone:sources.includes(TrackSource.MICROPHONE),
+      screenShare:sources.includes(TrackSource.SCREEN_SHARE)
     }
   };
 };
@@ -4183,6 +4186,7 @@ const route = async (request) => {
       await remove('meeting_email_sender');
       await remove('meeting_events');
       await remove('meeting_attendance');
+      await remove('meeting_participant_controls');
       await remove('meeting_registrations');
       await remove('meeting_audience');
       await remove('meetings');
@@ -4216,6 +4220,7 @@ const route = async (request) => {
         "'meeting_audience',(SELECT count(*) FROM meeting_audience)," +
         "'meeting_registrations',(SELECT count(*) FROM meeting_registrations)," +
         "'meeting_attendance',(SELECT count(*) FROM meeting_attendance)," +
+        "'meeting_participant_controls',(SELECT count(*) FROM meeting_participant_controls)," +
         "'meeting_events',(SELECT count(*) FROM meeting_events)," +
         "'meeting_email_outbox',(SELECT count(*) FROM meeting_email_outbox)," +
         "'meeting_email_sender',(SELECT count(*) FROM meeting_email_sender)," +
@@ -4504,13 +4509,13 @@ const route = async (request) => {
     if(!meeting)return json(request,{error:'NOT_FOUND'},404);
     if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN'},403);
     const {rows}=await q(
-      "SELECT usr.id AS user_id,usr.name,usr.email,usr.role_code,r.status AS registration_status,r.registered_at,a.first_joined_at,a.last_joined_at,a.last_left_at,a.total_seconds,a.join_count FROM meeting_registrations r JOIN users usr ON usr.id=r.user_id LEFT JOIN meeting_attendance a ON a.meeting_id=r.meeting_id AND a.user_id=r.user_id WHERE r.meeting_id=$1 ORDER BY r.registered_at ASC",
+      "SELECT usr.id AS user_id,usr.name,usr.email,usr.role_code,r.status AS registration_status,r.registered_at,a.first_joined_at,a.last_joined_at,a.last_left_at,a.total_seconds,a.join_count FROM (SELECT user_id FROM meeting_registrations WHERE meeting_id=$1 UNION SELECT user_id FROM meeting_attendance WHERE meeting_id=$1) x JOIN users usr ON usr.id=x.user_id LEFT JOIN meeting_registrations r ON r.meeting_id=$1 AND r.user_id=x.user_id LEFT JOIN meeting_attendance a ON a.meeting_id=$1 AND a.user_id=x.user_id ORDER BY COALESCE(r.registered_at,a.first_joined_at) ASC",
       [meetingId]
     );
     return json(request,{meetingId,attendance:rows.map((row)=>({
       userId:row.user_id,
       name:operationalIdentityName(row.name,row.email,row.role_code)||'Użytkownik',
-      registrationStatus:row.registration_status,
+      registrationStatus:row.registration_status||'NOT_REGISTERED',
       registeredAt:row.registered_at,
       joined:Boolean(row.first_joined_at),
       firstJoinedAt:row.first_joined_at||null,
@@ -4550,14 +4555,28 @@ const route = async (request) => {
     const body=await readJson(request),identity=cleanText(body.identity,120),action=String(body.action||'').toUpperCase();
     if(!identity||!['MUTE','REMOVE','ALLOW_MIC','BLOCK_MIC'].includes(action))return json(request,{error:'MEETING_MODERATION_ACTION'},400);
     const room=meetingRoomName(meetingId),client=livekitRooms();
+    const participant=await client.getParticipant(room,identity);
+    let participantUserId='';
+    try{
+      const metadata=JSON.parse(participant.metadata||'{}');
+      participantUserId=cleanText(metadata?.serviceOsUserId,120);
+    }catch{}
+    if(!participantUserId)return json(request,{error:'MEETING_PARTICIPANT_IDENTITY',message:'Nie udało się powiązać uczestnika z kontem ServiceOS.'},409);
     if(action==='REMOVE'){
+      await q(
+        "INSERT INTO meeting_participant_controls(meeting_id,user_id,removed_at,updated_by_user_id,updated_at) VALUES($1,$2,now(),$3,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET removed_at=now(),updated_by_user_id=$3,updated_at=now()",
+        [meetingId,participantUserId,u.id]
+      );
       await client.removeParticipant(room,identity);
     }else if(action==='MUTE'){
-      const participant=await client.getParticipant(room,identity);
       const mic=(participant.tracks||[]).find((track)=>track.source===TrackSource.MICROPHONE);
       if(mic)await client.mutePublishedTrack(room,identity,mic.sid,true);
     }else{
       const allowMic=action==='ALLOW_MIC';
+      await q(
+        "INSERT INTO meeting_participant_controls(meeting_id,user_id,microphone_allowed,updated_by_user_id,updated_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET microphone_allowed=$3,updated_by_user_id=$4,updated_at=now()",
+        [meetingId,participantUserId,allowMic,u.id]
+      );
       const sources=[];
       if(allowMic)sources.push(TrackSource.MICROPHONE);
       if(meeting.allow_participant_screen_share===true)sources.push(TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO);
@@ -4565,12 +4584,11 @@ const route = async (request) => {
         permission:{canSubscribe:true,canPublish:sources.length>0,canPublishData:false,canPublishSources:sources}
       });
       if(!allowMic){
-        const participant=await client.getParticipant(room,identity).catch(()=>null);
-        const mic=participant?.tracks?.find((track)=>track.source===TrackSource.MICROPHONE);
+        const mic=(participant.tracks||[]).find((track)=>track.source===TrackSource.MICROPHONE);
         if(mic)await client.mutePublishedTrack(room,identity,mic.sid,true).catch(()=>undefined);
       }
     }
-    await meetingEvent(meetingId,u.id,'MODERATION',{identity,action});
+    await meetingEvent(meetingId,u.id,'MODERATION',{identity,participantUserId,action});
     await audit(session,'MEETING_MODERATION','meeting',meetingId,null,{identity,action});
     return json(request,{ok:true});
   }
@@ -4631,6 +4649,9 @@ const route = async (request) => {
       [meetingId,target,meeting.status]
     );
     if(!result.rows[0])return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
+    if((target==='ENDED'||target==='CANCELLED')&&livekitConfigured()){
+      await livekitRooms().deleteRoom(meetingRoomName(meetingId)).catch(()=>undefined);
+    }
     await meetingEvent(meetingId,u.id,target,{});
     if(target==='ENDED'||target==='CANCELLED'){
       await q("UPDATE meeting_attendance SET total_seconds=total_seconds+GREATEST(0,LEAST(43200,EXTRACT(EPOCH FROM (now()-last_joined_at))::int)),last_left_at=now(),updated_at=now() WHERE meeting_id=$1 AND last_joined_at IS NOT NULL AND (last_left_at IS NULL OR last_left_at<last_joined_at)",[meetingId]);
