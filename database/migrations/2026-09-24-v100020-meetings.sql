@@ -74,6 +74,34 @@ CREATE TABLE IF NOT EXISTS meeting_events (
 );
 CREATE INDEX IF NOT EXISTS meeting_events_meeting_idx ON meeting_events(meeting_id,created_at DESC);
 
+CREATE TABLE IF NOT EXISTS meeting_email_sender (
+  id text PRIMARY KEY CHECK (id='default'),
+  connected_by_user_id text REFERENCES users(id) ON DELETE SET NULL,
+  sender_email text NOT NULL,
+  refresh_token_ciphertext text NOT NULL,
+  oauth_client_secret_ciphertext text,
+  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','REVOKED','ERROR')),
+  last_error text,
+  connected_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Preserve a known OWNER/admin Gmail only for internal meeting invitations.
+-- This legacy credential is never used again for customer service messages.
+INSERT INTO meeting_email_sender(
+  id,connected_by_user_id,sender_email,refresh_token_ciphertext,
+  oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at
+)
+SELECT
+  'default',pe.connected_by_user_id,pe.sender_email,pe.refresh_token_ciphertext,
+  pe.oauth_client_secret_ciphertext,pe.status,pe.last_error,pe.connected_at,pe.updated_at
+FROM point_email_senders pe
+JOIN users u ON u.id=pe.connected_by_user_id
+WHERE u.role_code='OWNER' AND pe.refresh_token_ciphertext IS NOT NULL
+ORDER BY pe.updated_at DESC
+LIMIT 1
+ON CONFLICT(id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS meeting_email_outbox (
   id text PRIMARY KEY,
   meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
