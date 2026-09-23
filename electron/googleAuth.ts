@@ -46,6 +46,7 @@ export interface AuthState {
   requestedPoint?: BackendRequestedPoint | null;
   gmailConnected?: boolean;
   gmailStatus?: string | null;
+  gmailEmail?: string | null;
   message?: string;
 }
 
@@ -154,6 +155,7 @@ const toAuthState = (
     requestedPoint: payload.user.requestedPoint ?? null,
     gmailConnected: payload.gmail?.connected === true,
     gmailStatus: payload.gmail?.reason ?? payload.gmail?.status ?? null,
+    gmailEmail: payload.gmail?.email ?? null,
     message
   };
 };
@@ -352,27 +354,24 @@ const performGoogleLogin = async (development: boolean): Promise<AuthState> => {
           const pointId = String(payload.activePointId ?? '').trim();
           const canAutoConnectGmail =
             role !== 'OWNER' &&
-            ['BOSS', 'COORDINATOR'].includes(role) &&
             payload.user.status === 'ACTIVE' &&
-            Boolean(pointId) &&
             Boolean(tokens.refresh_token) &&
             String(tokens.scope ?? '').split(/\s+/).includes('https://www.googleapis.com/auth/gmail.send');
 
           if (canAutoConnectGmail) {
             try {
-              await backendRequest('/integrations/gmail/connect', {
+              payload.gmail = await backendRequest('/integrations/gmail/connect', {
                 method: 'POST',
                 signal: AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS),
                 body: JSON.stringify({
-                  pointId,
+                  pointId: pointId || null,
                   refreshToken: tokens.refresh_token,
                   idToken: tokens.id_token,
                   clientSecret
                 })
               }, payload.token);
-              payload.gmail = { connected:true, pointId, status:'ACTIVE' };
             } catch {
-              payload.gmail = { connected:false, pointId, reason:'GMAIL_AUTO_CONNECT_FAILED' };
+              payload.gmail = { connected:false, pointId:pointId || null, reason:'GMAIL_AUTO_CONNECT_FAILED' };
             }
           }
         }
