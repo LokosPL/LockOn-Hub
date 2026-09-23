@@ -380,6 +380,23 @@ CREATE TABLE IF NOT EXISTS point_email_senders (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- 2026-09-24 ServiceOS 1.0.0.20: OAuth sender belongs to the employee, not to a point.
+CREATE TABLE IF NOT EXISTS user_gmail_credentials (
+  user_id text PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  google_sub text,
+  sender_email text NOT NULL,
+  refresh_token_ciphertext text NOT NULL,
+  oauth_client_secret_ciphertext text,
+  granted_scopes text[] NOT NULL DEFAULT '{}'::text[],
+  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','REVOKED','ERROR')),
+  last_error text,
+  connected_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS user_gmail_credentials_google_sub_uq ON user_gmail_credentials(google_sub) WHERE google_sub IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS user_gmail_credentials_sender_email_uq ON user_gmail_credentials(lower(sender_email));
+
+
 CREATE TABLE IF NOT EXISTS assistant_knowledge (
   slug text PRIMARY KEY,
   title text NOT NULL,
