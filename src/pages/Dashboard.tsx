@@ -20,6 +20,7 @@ import {
   Wrench
 } from 'lucide-react';
 import { StatusBadge } from '../components/StatusBadge';
+import { MeetingCenter } from '../components/MeetingCenter';
 import type { NavigationKey } from '../components/Sidebar';
 import type { AppInfo, DashboardData, UpdateState, WeatherData } from '../types/electron';
 import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
@@ -30,6 +31,7 @@ interface DashboardProps {
   pointName: string;
   role: UserRole;
   userName: string;
+  currentUserId?: string | null;
   weatherCity: string;
 }
 
@@ -75,7 +77,7 @@ type Shortcut = {
   action: () => void;
 };
 
-export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, weatherCity }: DashboardProps) {
+export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, currentUserId, weatherCity }: DashboardProps) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [update, setUpdate] = useState<UpdateState>(initialUpdate);
   const [updateActionBusy, setUpdateActionBusy] = useState(false);
@@ -275,6 +277,8 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, w
           )}
         </aside>
       </section>
+
+      <MeetingCenter role={role} currentUserId={currentUserId}/>
 
       <section className="start-section">
         <div className="start-section-heading">
