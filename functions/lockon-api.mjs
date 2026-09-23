@@ -1318,17 +1318,6 @@ const escapeHtml = (value) => String(value ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-const loadActiveMailSender = async (pointId) => {
-  const { rows } = await q(
-    "SELECT point_id AS sender_point_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,connected_at FROM point_email_senders WHERE status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN point_id=$1 THEN 0 ELSE 1 END,connected_at DESC NULLS LAST,updated_at DESC LIMIT 1",
-    [pointId]
-  );
-  const sender = rows[0] || null;
-  if (!sender) return null;
-  if (!GOOGLE_DESKTOP_CLIENT_SECRET && !sender.oauth_client_secret_ciphertext) return null;
-  return sender;
-};
-
 const loadUserMailSender = async (userId) => {
   if (!userId) return null;
   const { rows } = await q(
@@ -3949,6 +3938,7 @@ const route = async (request) => {
       await remove('devices');
       await remove('customers');
       await remove('settlements');
+      await remove('user_gmail_credentials');
       await remove('point_email_senders');
       await remove('point_notification_settings');
       await remove('support_messages');
@@ -3973,6 +3963,7 @@ const route = async (request) => {
         "'devices',(SELECT count(*) FROM devices)," +
         "'revenue_entries',(SELECT count(*) FROM revenue_entries)," +
         "'settlements',(SELECT count(*) FROM settlements)," +
+        "'user_gmail_credentials',(SELECT count(*) FROM user_gmail_credentials)," +
         "'point_email_senders',(SELECT count(*) FROM point_email_senders)," +
         "'point_notification_settings',(SELECT count(*) FROM point_notification_settings)," +
         "'support_conversations',(SELECT count(*) FROM support_conversations)," +
@@ -5449,56 +5440,26 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/integrations/gmail'){
     const session=await requireActive(request),u=session.user,pointId=cleanText(url.searchParams.get('pointId'),80);
-    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do konfiguracji Gmail.'),{status:403,code:'GMAIL_FORBIDDEN'});
-    await requirePoint(u,pointId);
-    const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,refresh_token_ciphertext,oauth_client_secret_ciphertext,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
-    let row=rows[0]||null;
-    let inherited=false;
+    if(u.role_code==='OWNER')return json(request,{connected:false,pointId:pointId||null,needsReconnect:false,connectionState:'NOT_CONNECTED',reason:'OWNER_PRIVACY',checkedAt:nowIso()});
+    if(pointId)await requirePoint(u,pointId);
+    const row=(await q(
+      "SELECT user_id,sender_email,status,last_error,connected_at,updated_at,refresh_token_ciphertext,oauth_client_secret_ciphertext,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM user_gmail_credentials WHERE user_id=$1 LIMIT 1",
+      [u.id]
+    )).rows[0]||null;
     const checkedAt=nowIso();
-    if(!row){
-      const fallback=await loadActiveMailSender(pointId);
-      if(!fallback)return json(request,{connected:false,pointId,needsReconnect:false,connectionState:'NOT_CONNECTED',checkedAt});
-      row={
-        point_id:fallback.sender_point_id,
-        sender_email:fallback.sender_email,
-        status:fallback.status,
-        last_error:null,
-        connected_at:fallback.connected_at,
-        refresh_token_ciphertext:fallback.refresh_token_ciphertext,
-        oauth_client_secret_ciphertext:fallback.oauth_client_secret_ciphertext,
-        refresh_complete:Boolean(fallback.refresh_token_ciphertext),
-        legacy_secret_complete:Boolean(fallback.oauth_client_secret_ciphertext)
-      };
-      inherited=true;
-    }
+    if(!row)return json(request,{connected:false,pointId:pointId||null,needsReconnect:false,connectionState:'NOT_CONNECTED',reason:'NOT_CONNECTED',checkedAt});
 
     const credentialsComplete=row.refresh_complete===true&&Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||row.legacy_secret_complete);
-    if(!credentialsComplete){
+    if(!credentialsComplete||row.status==='REVOKED'){
       return json(request,{
         connected:false,
         needsReconnect:true,
         connectionState:'REAUTH_REQUIRED',
-        pointId,
-        senderPointId:row.point_id,
-        inherited,
-        email:operationalIdentityEmail(row.sender_email),
+        pointId:pointId||null,
+        inherited:false,
+        email:operationalIdentityEmail(row.sender_email,u.role_code),
         status:row.status,
-        lastError:'Połączenie Gmail jest niekompletne i wymaga ponownej autoryzacji.',
-        connectedAt:row.connected_at,
-        checkedAt
-      });
-    }
-    if(row.status==='REVOKED'){
-      return json(request,{
-        connected:false,
-        needsReconnect:true,
-        connectionState:'REAUTH_REQUIRED',
-        pointId,
-        senderPointId:row.point_id,
-        inherited,
-        email:operationalIdentityEmail(row.sender_email),
-        status:row.status,
-        lastError:row.last_error||'Zgoda Google dla Gmail wygasła albo została cofnięta.',
+        lastError:row.last_error||'Połączenie Gmail wymaga ponownej autoryzacji.',
         connectedAt:row.connected_at,
         checkedAt
       });
@@ -5509,16 +5470,15 @@ const route = async (request) => {
       const legacyClientSecret=row.oauth_client_secret_ciphertext?decryptSecret(row.oauth_client_secret_ciphertext):'';
       await refreshGmailAccess(refreshToken,legacyClientSecret);
       if(row.status!=='ACTIVE'||row.last_error){
-        await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1",[row.point_id]);
+        await q("UPDATE user_gmail_credentials SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE user_id=$1",[u.id]);
       }
       return json(request,{
         connected:true,
         needsReconnect:false,
         connectionState:'CONNECTED',
-        pointId,
-        senderPointId:row.point_id,
-        inherited,
-        email:operationalIdentityEmail(row.sender_email),
+        pointId:pointId||null,
+        inherited:false,
+        email:operationalIdentityEmail(row.sender_email,u.role_code),
         status:'ACTIVE',
         lastError:null,
         connectedAt:row.connected_at,
@@ -5528,31 +5488,19 @@ const route = async (request) => {
       const reauth=isGmailReauthError(error);
       const message=cleanText(error instanceof Error?error.message:error,500);
       if(reauth){
-        await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1",[pointId,message]);
-        return json(request,{
-          connected:false,
-          needsReconnect:true,
-          connectionState:'REAUTH_REQUIRED',
-          pointId,
-        senderPointId:row.point_id,
-        inherited,
-          email:operationalIdentityEmail(row.sender_email),
-          status:'REVOKED',
-          lastError:message,
-          connectedAt:row.connected_at,
-          checkedAt
-        });
+        await q("UPDATE user_gmail_credentials SET status='REVOKED',last_error=$2,updated_at=now() WHERE user_id=$1",[u.id,message]);
+      }else{
+        await q("UPDATE user_gmail_credentials SET last_error=$2,updated_at=now() WHERE user_id=$1",[u.id,message]);
       }
       return json(request,{
         connected:false,
-        needsReconnect:false,
-        connectionState:'TEMPORARY_ERROR',
-        pointId,
-        senderPointId:row.point_id,
-        inherited,
-        email:operationalIdentityEmail(row.sender_email),
-        status:row.status,
-        lastError:'Nie udało się teraz potwierdzić połączenia Gmail. ServiceOS spróbuje ponownie automatycznie.',
+        needsReconnect:reauth,
+        connectionState:reauth?'REAUTH_REQUIRED':'TEMPORARY_ERROR',
+        pointId:pointId||null,
+        inherited:false,
+        email:operationalIdentityEmail(row.sender_email,u.role_code),
+        status:reauth?'REVOKED':row.status,
+        lastError:reauth?message:'Nie udało się teraz potwierdzić połączenia Gmail. ServiceOS spróbuje ponownie automatycznie.',
         connectedAt:row.connected_at,
         checkedAt
       });
@@ -5563,50 +5511,57 @@ const route = async (request) => {
     const session=await requireActive(request),u=session.user;
     if(u.role_code==='OWNER')throw Object.assign(new Error('Konto OWNER nie jest używane jako nadawca operacyjny.'),{status:403,code:'OWNER_PRIVACY'});
     const body=await readJson(request),pointId=cleanText(body.pointId,80);
-    await requirePoint(u,pointId);
+    if(pointId)await requirePoint(u,pointId);
 
     const tokens=await exchangeDesktopAuthorizationCode(body,'/gmail/callback');
-    if(!tokens?.refresh_token) return json(request,{error:'REFRESH_TOKEN',message:'Google nie zwrócił refresh tokena. Odłącz wcześniejszy dostęp ServiceOS w koncie Google i spróbuj ponownie.'},400);
-    if(!tokens?.id_token) return json(request,{error:'GOOGLE_ID_TOKEN',message:'Google nie zwrócił tokena tożsamości.'},400);
-
+    if(!tokens?.refresh_token)return json(request,{error:'REFRESH_TOKEN',message:'Google nie zwrócił refresh tokena. Odłącz wcześniejszy dostęp ServiceOS w koncie Google i spróbuj ponownie.'},400);
+    if(!tokens?.id_token)return json(request,{error:'GOOGLE_ID_TOKEN',message:'Google nie zwrócił tokena tożsamości.'},400);
     const profile=await verifyGoogle(String(tokens.id_token),GOOGLE_DESKTOP_CLIENT_ID);
+    if(profile.sub!==u.google_sub&&normalizeEmail(profile.email)!==normalizeEmail(u.email))return json(request,{error:'GMAIL_IDENTITY_MISMATCH',message:'Połącz Gmail tego samego konta Google, którym jesteś zalogowany w ServiceOS.'},409);
     await refreshGmailAccess(String(tokens.refresh_token),'');
+    const scopes=String(tokens.scope||'').split(/\s+/).filter(Boolean);
     await q(
       "INSERT INTO user_gmail_credentials(user_id,google_sub,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,granted_scopes,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,$5::text[],'ACTIVE',NULL,now(),now()) ON CONFLICT(user_id) DO UPDATE SET google_sub=EXCLUDED.google_sub,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,granted_scopes=EXCLUDED.granted_scopes,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
-      [u.id,profile.sub,profile.email,encryptSecret(String(tokens.refresh_token)),String(tokens.scope||'').split(/\s+/).filter(Boolean)]
+      [u.id,profile.sub,profile.email,encryptSecret(String(tokens.refresh_token)),scopes]
     );
-    await q(
+    if(pointId)await q(
       "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,updated_by_user_id,updated_at) VALUES($1,true,$2::text[],'LockOn ServiceOS',$3,now()) ON CONFLICT(point_id) DO NOTHING",
       [pointId,[...DEFAULT_NOTIFY_STATUSES],u.id]
     );
-    const recovery=await recoverNoSenderNotifications(pointId);
-    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
-    return json(request,{connected:true,needsReconnect:false,pointId,email:operationalIdentityEmail(profile.email),status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    const recovery=await recoverNoSenderNotificationsForUser(u.id);
+    await audit(session,'GMAIL_CONNECTED','user',u.id,pointId||null,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER_USER',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    return json(request,{connected:true,needsReconnect:false,pointId:pointId||null,email:operationalIdentityEmail(profile.email,u.role_code),status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
   }
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/connect'){
-    const session=await requireActive(request),u=session.user;if(u.role_code==='OWNER')throw Object.assign(new Error('Konto OWNER nie jest używane jako nadawca operacyjny.'),{status:403,code:'OWNER_PRIVACY'});
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code==='OWNER')throw Object.assign(new Error('Konto OWNER nie jest używane jako nadawca operacyjny.'),{status:403,code:'OWNER_PRIVACY'});
     const body=await readJson(request),pointId=cleanText(body.pointId,80),refreshToken=cleanText(body.refreshToken,4096),idToken=cleanText(body.idToken,8192),clientSecret=cleanText(body.clientSecret,4096);
-    await requirePoint(u,pointId);
+    if(pointId)await requirePoint(u,pointId);
     if(!refreshToken||!idToken||!clientSecret)return json(request,{error:'TOKEN',message:'Brak kompletnych danych autoryzacji Google.'},400);
 
     const profile=await verifyGoogle(idToken,GOOGLE_DESKTOP_CLIENT_ID);
+    if(profile.sub!==u.google_sub&&normalizeEmail(profile.email)!==normalizeEmail(u.email))return json(request,{error:'GMAIL_IDENTITY_MISMATCH',message:'Połącz Gmail tego samego konta Google, którym jesteś zalogowany w ServiceOS.'},409);
     await refreshGmailAccess(refreshToken,clientSecret);
-
-    await q("INSERT INTO user_gmail_credentials(user_id,google_sub,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,granted_scopes,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,$6::text[],'ACTIVE',NULL,now(),now()) ON CONFLICT(user_id) DO UPDATE SET google_sub=EXCLUDED.google_sub,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,granted_scopes=EXCLUDED.granted_scopes,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",[u.id,profile.sub,profile.email,encryptSecret(refreshToken),encryptSecret(clientSecret),['https://www.googleapis.com/auth/gmail.send']]);
     await q(
+      "INSERT INTO user_gmail_credentials(user_id,google_sub,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,granted_scopes,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,$6::text[],'ACTIVE',NULL,now(),now()) ON CONFLICT(user_id) DO UPDATE SET google_sub=EXCLUDED.google_sub,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,granted_scopes=EXCLUDED.granted_scopes,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
+      [u.id,profile.sub,profile.email,encryptSecret(refreshToken),encryptSecret(clientSecret),['https://www.googleapis.com/auth/gmail.send']]
+    );
+    if(pointId)await q(
       "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,updated_by_user_id,updated_at) VALUES($1,true,$2::text[],'LockOn ServiceOS',$3,now()) ON CONFLICT(point_id) DO NOTHING",
       [pointId,[...DEFAULT_NOTIFY_STATUSES],u.id]
     );
-    const recovery=await recoverNoSenderNotifications(pointId);
-
-    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
-    return json(request,{connected:true,needsReconnect:false,pointId,email:operationalIdentityEmail(profile.email),status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    const recovery=await recoverNoSenderNotificationsForUser(u.id);
+    await audit(session,'GMAIL_CONNECTED','user',u.id,pointId||null,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER_USER',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    return json(request,{connected:true,needsReconnect:false,pointId:pointId||null,email:operationalIdentityEmail(profile.email,u.role_code),status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
   }
 
   if(method==='DELETE'&&url.pathname==='/integrations/gmail'){
-    const session=await requireActive(request),u=session.user;if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień.'),{status:403});
-    const pointId=cleanText(url.searchParams.get('pointId'),80);await requirePoint(u,pointId);await q('DELETE FROM point_email_senders WHERE point_id=$1',[pointId]);await audit(session,'GMAIL_DISCONNECTED','point',pointId,pointId,{});
+    const session=await requireActive(request),u=session.user;
+    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    if(pointId)await requirePoint(u,pointId);
+    await q('DELETE FROM user_gmail_credentials WHERE user_id=$1',[u.id]);
+    await audit(session,'GMAIL_DISCONNECTED','user',u.id,pointId||null,{});
     return json(request,{ok:true});
   }
 
@@ -5676,11 +5631,11 @@ const route = async (request) => {
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/test'){
     const session=await requireActive(request),u=session.user;
-    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do testowania Gmail.'),{status:403});
+    if(u.role_code==='OWNER')throw Object.assign(new Error('Konto OWNER nie jest używane jako nadawca operacyjny.'),{status:403,code:'OWNER_PRIVACY'});
     const body=await readJson(request),pointId=cleanText(body.pointId,80);
-    await requirePoint(u,pointId);
-    const senderBase=await loadActiveMailSender(pointId);
-    if(!senderBase)return json(request,{error:'NO_SENDER',message:'Brak aktywnego firmowego nadawcy Gmail.'},409);
+    if(pointId)await requirePoint(u,pointId);
+    const senderBase=await loadUserMailSender(u.id);
+    if(!senderBase)return json(request,{error:'NO_USER_SENDER',message:'Twoje konto Google nie ma aktywnej zgody Gmail.'},409);
     const point=(await q("SELECT name FROM points WHERE id=$1 LIMIT 1",[pointId])).rows[0];
     const settings=await mailSettingsForPoint(pointId);
     const sender={
@@ -5694,15 +5649,15 @@ const route = async (request) => {
     const htmlBody='<!doctype html><html lang="pl"><body style="background:#111318;color:#eceff3;font-family:Arial,sans-serif;padding:28px"><div style="max-width:600px;margin:auto;border:1px solid #2a2f37;border-radius:16px;background:#171a20;padding:22px"><div style="color:#ff7b45;font-size:12px;font-weight:700">LOCKON SERVICEOS</div><h2 style="margin:8px 0 12px">Test powiadomień Gmail</h2><p>Integracja dla punktu <strong>'+escapeHtml(sender.point_name)+'</strong> działa poprawnie.</p><p style="color:#89939e">Nadawca: '+escapeHtml(sender.sender_email)+'</p></div></body></html>';
     try{
       const sent=await sendGmail(sender,recipient,subject,textBody,htmlBody,sender.sender_display_name);
-      await q("UPDATE point_email_senders SET last_error=NULL,status='ACTIVE',updated_at=now() WHERE point_id=$1",[sender.sender_point_id]);
-      await audit(session,'GMAIL_TEST_SENT','point',pointId,pointId,{recipient,messageId:sent.id,senderPointId:sender.sender_point_id,inherited:sender.sender_point_id!==pointId});
+      await q("UPDATE user_gmail_credentials SET last_error=NULL,status='ACTIVE',updated_at=now() WHERE user_id=$1",[u.id]);
+      await audit(session,'GMAIL_TEST_SENT','user',u.id,pointId||null,{recipient,messageId:sent.id,senderEmail:sender.sender_email});
       return json(request,{ok:true,recipient,messageId:sent.id});
     }catch(error){
       const message=cleanText(error instanceof Error?error.message:error,500);
       if(isGmailReauthError(error)){
-        await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1",[sender.sender_point_id,message]);
+        await q("UPDATE user_gmail_credentials SET status='REVOKED',last_error=$2,updated_at=now() WHERE user_id=$1",[u.id,message]);
       }else{
-        await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1",[sender.sender_point_id,message]);
+        await q("UPDATE user_gmail_credentials SET last_error=$2,updated_at=now() WHERE user_id=$1",[u.id,message]);
       }
       throw Object.assign(new Error(message),{status:502,code:isGmailReauthError(error)?'GMAIL_REAUTH_REQUIRED':'GMAIL_TEST_FAILED'});
     }
