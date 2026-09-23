@@ -18,7 +18,8 @@ export interface RequestedPoint { pointName: string; city: string; requestedRole
 export interface AuthState {
   configured: boolean; authenticated: boolean; development: boolean; localStarterLoginAllowed: boolean;
   user: AuthUser | null; point: AuthPoint | null; points: AuthPoint[]; role: UserRole | null; status: AccountStatus | null;
-  technicianSplitPercent?:number|null; supportEnabled?:boolean; requestedPoint?: RequestedPoint | null; message?: string;
+  technicianSplitPercent?:number|null; supportEnabled?:boolean; requestedPoint?: RequestedPoint | null;
+  gmailConnected?:boolean; gmailStatus?:string|null; gmailEmail?:string|null; message?: string;
 }
 export interface BrowserState { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean; }
 export interface BrowserBounds { x: number; y: number; width: number; height: number; }
