@@ -4470,6 +4470,36 @@ const route = async (request) => {
     return json(request,{ok:true,meeting:meetings.find((item)=>item.id===meetingId)||null},201);
   }
 
+  const meetingUpdate=url.pathname.match(/^\/meetings\/([^/]+)$/);
+  if(method==='PATCH'&&meetingUpdate){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingUpdate[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zmieniać tego spotkania.'},403);
+    if(meeting.status!=='SCHEDULED')return json(request,{error:'MEETING_STATE',message:'Termin można zmienić tylko przed rozpoczęciem spotkania.'},409);
+    const body=await readJson(request);
+    const startsAtRaw=cleanText(body.startsAt,80),startsAt=new Date(startsAtRaw);
+    if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy nowy termin spotkania.'},400);
+    if(startsAt.getTime()<Date.now()-10*60_000)return json(request,{error:'MEETING_DATE',message:'Nie można ustawić spotkania w przeszłości.'},400);
+    const oldStartsAt=new Date(meeting.starts_at).toISOString();
+    const newStartsAt=startsAt.toISOString();
+    if(oldStartsAt===newStartsAt){
+      const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
+      return json(request,{ok:true,meeting:view,email:{eligible:0,queued:0,unchanged:true}});
+    }
+    const updated=(await q(
+      "UPDATE meetings SET starts_at=$2,updated_at=now() WHERE id=$1 AND status='SCHEDULED' RETURNING id",
+      [meetingId,newStartsAt]
+    )).rows[0];
+    if(!updated)return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
+    await meetingEvent(meetingId,u.id,'RESCHEDULED',{from:oldStartsAt,to:newStartsAt});
+    await audit(session,'MEETING_RESCHEDULED','meeting',meetingId,null,{from:oldStartsAt,to:newStartsAt});
+    const email=await queueMeetingEmailEvent(meetingId,'RESCHEDULED:'+Date.now()+':'+crypto.randomBytes(4).toString('hex'));
+    await meetingEvent(meetingId,u.id,'EMAIL_RESCHEDULE_QUEUED',email);
+    const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
+    return json(request,{ok:true,meeting:view,email});
+  }
+
   const meetingJoinToken=url.pathname.match(/^\/meetings\/([^/]+)\/join-token$/);
   if(method==='POST'&&meetingJoinToken){
     const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingJoinToken[1],120);
