@@ -279,11 +279,12 @@ jobs:
 
           for endpoint in dev-owner dev-role; do
             code="$(curl --silent --show-error --output "$endpoint.json" --write-out '%{http_code}' --request POST "$PROD_API_URL/auth/$endpoint" --header 'Content-Type: application/json' --data '{}')"
-            if [[ "$code" != "403" && "$code" != "404" ]]; then
+            if [[ "$code" != "404" ]]; then
               echo "::error::Production dev login endpoint $endpoint returned HTTP $code"
               cat "$endpoint.json"
               exit 1
             fi
+            node -e "const d=require('./'+process.argv[1]+'.json');if(d.error!=='NOT_FOUND')throw new Error('Unexpected dev-login response')" "$endpoint"
           done
 
           code="$(curl --silent --show-error --output me.json --write-out '%{http_code}' "$PROD_API_URL/me")"
