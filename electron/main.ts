@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   dialog,
   ipcMain,
   Menu,
@@ -1022,6 +1023,20 @@ const registerIpc = () => {
   secureHandle('meetings:moderate', async (meetingId: string, payload: unknown) => {
     const token = requireSessionToken();
     return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/moderate`, {method:'POST',body:JSON.stringify(payload ?? {})}, token);
+  });
+  secureHandle('meetings:screenSources', async () => {
+    requireSessionToken();
+    const sources = await desktopCapturer.getSources({
+      types:['screen','window'],
+      thumbnailSize:{width:320,height:180},
+      fetchWindowIcons:true
+    });
+    return sources.slice(0,40).map((source)=>({
+      id:source.id,
+      name:String(source.name||'Ekran').slice(0,180),
+      thumbnail:source.thumbnail.isEmpty() ? null : source.thumbnail.toDataURL(),
+      appIcon:source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null
+    }));
   });
 
 
