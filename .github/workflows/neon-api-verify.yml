@@ -61,6 +61,7 @@ jobs:
           grep -Fq 'const loadUserMailSender = async (userId)' functions/lockon-api.mjs
           grep -Fq 'senderUserId:u.id' functions/lockon-api.mjs
           grep -q 'GMAIL_IDENTITY_MISMATCH' functions/lockon-api.mjs
+          grep -q 'googleIdentityMatchesUser' functions/lockon-api.mjs
           ! grep -Fq 'const loadActiveMailSender = async' functions/lockon-api.mjs
           ! grep -Fq 'LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id' functions/lockon-api.mjs
           grep -q 'MEETING_MANAGE_ROLES' functions/lockon-api.mjs
@@ -78,6 +79,9 @@ jobs:
           grep -q 'canPublishSources' functions/lockon-api.mjs
           grep -q '/moderate' functions/lockon-api.mjs
           grep -q 'queueMeetingEmailEvent' functions/lockon-api.mjs
+          grep -q 'MEETING_RESCHEDULED' functions/lockon-api.mjs
+          grep -q "method==='PATCH'&&meetingUpdate" functions/lockon-api.mjs
+          grep -q "'RESCHEDULED:'" functions/lockon-api.mjs
           grep -q "value === null || value === undefined || value === ''" functions/lockon-api.mjs
           grep -q 'consultant_requested_at' functions/lockon-api.mjs
           grep -q 'customer_portal_code' functions/lockon-api.mjs
