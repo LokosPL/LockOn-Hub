@@ -5383,3 +5383,21 @@ input,textarea,select{line-height:1.45}
 .meeting-audience-picker label>span{display:grid;gap:2px;min-width:0}.meeting-audience-picker strong{font-size:10px;color:#dce2e7}.meeting-audience-picker small{font-size:9px;color:#74808b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:900px){.meeting-audience-picker>div{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:600px){.meeting-audience-picker>div{grid-template-columns:1fr}}
+
+
+.meeting-reschedule-editor {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle, rgba(255,255,255,.08));
+}
+.meeting-reschedule-editor input {
+  min-width: 220px;
+}
+@media (max-width: 760px) {
+  .meeting-reschedule-editor { align-items: stretch; flex-direction: column; }
+  .meeting-reschedule-editor input { min-width: 0; width: 100%; }
+}
