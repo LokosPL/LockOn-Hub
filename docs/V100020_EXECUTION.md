@@ -17,10 +17,12 @@ Use this file before doing a broad repository audit on branch `fix/user-frontdes
 - PROD function: `lockonapi`
 - TEMP Neon branch: `br-spring-pond-b1hqe48m`
 - TEMP smoke workflow: `.github/workflows/temp-neon-smoke.yml`
+- PROD exact deploy workflow: `.github/workflows/prod-neon-deploy.yml` (manual only; requires successful TEMP run ID, exact tree match with `main`, `DEPLOY_PROD`, and `NEON_API_KEY`).
 - TEMP workflow already matches `fix/user-frontdesk-flow-*`.
 - When `NEON_API_KEY` is present, TEMP CI applies the two additive 1.0.0.20 migrations, verifies their tables, deploys the exact function bundle, waits for that deployment ID and validates required Google/Gmail/LiveKit environment names before smoke.
 - When `NEON_API_KEY` is absent, TEMP CI still builds/uploads/stages the exact bundle but fails fast before HTTP smoke so a stale deployment can never be mistaken for the candidate.
 - Known external blocker: GitHub Actions currently has no usable `NEON_API_KEY`, and the connected Neon tool has rejected branch calls because of a `project_id` contract mismatch. Do not call TEMP green until an exact candidate is actually deployed and smoked.
+- PROD deployment is fail-closed: it can run only from `main`, validates the supplied successful TEMP smoke run, compares its exact Git tree with `main`, applies only the two additive 1.0.0.20 migrations, deploys the exact bundle, waits for that deployment ID and performs production health/CORS/auth safety smoke. It never publishes the desktop release.
 
 ## Current architecture
 
@@ -63,7 +65,7 @@ Use this file before doing a broad repository audit on branch `fix/user-frontdes
 - [x] F — isolated invitation outbox, create/cancel/reschedule events.
 - [ ] G — exact TEMP deployment of the final candidate.
 - [ ] G — full TEMP smoke including migrations, Gmail isolation and meeting flows.
-- [ ] G — PROD deployment only after TEMP green.
+- [ ] G — PROD deployment only after TEMP green via the manual exact-deploy workflow.
 - [ ] G — production smoke + CodeQL + final release gate.
 - [ ] G — only then bump/open 1.0.0.20 release markers and publish.
 
