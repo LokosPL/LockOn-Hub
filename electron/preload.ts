@@ -63,7 +63,9 @@ contextBridge.exposeInMainWorld('lockOn', {
     joinToken: (meetingId: string) => ipcRenderer.invoke('meetings:joinToken', meetingId),
     participants: (meetingId: string) => ipcRenderer.invoke('meetings:participants', meetingId),
     moderate: (meetingId: string, payload: unknown) => ipcRenderer.invoke('meetings:moderate', meetingId, payload),
-    screenSources: () => ipcRenderer.invoke('meetings:screenSources')
+    screenSources: () => ipcRenderer.invoke('meetings:screenSources'),
+    attendanceAction: (meetingId: string, action:'JOIN'|'LEAVE') => ipcRenderer.invoke('meetings:attendanceAction', meetingId, action),
+    attendance: (meetingId: string) => ipcRenderer.invoke('meetings:attendance', meetingId)
   },
   service: {
     searchCustomers: (query: string) => ipcRenderer.invoke('service:searchCustomers', query),
