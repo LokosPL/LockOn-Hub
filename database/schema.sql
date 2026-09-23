@@ -1043,6 +1043,18 @@ CREATE TABLE IF NOT EXISTS meeting_events (
 );
 CREATE INDEX IF NOT EXISTS meeting_events_meeting_idx ON meeting_events(meeting_id,created_at DESC);
 
+CREATE TABLE IF NOT EXISTS meeting_email_sender (
+  id text PRIMARY KEY CHECK (id='default'),
+  connected_by_user_id text REFERENCES users(id) ON DELETE SET NULL,
+  sender_email text NOT NULL,
+  refresh_token_ciphertext text NOT NULL,
+  oauth_client_secret_ciphertext text,
+  status text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','REVOKED','ERROR')),
+  last_error text,
+  connected_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS meeting_email_outbox (
   id text PRIMARY KEY,
   meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
