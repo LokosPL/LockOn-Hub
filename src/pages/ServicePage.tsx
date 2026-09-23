@@ -522,7 +522,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     setComplaintSearchBusy(true);
     setError('');
     try {
-      setComplaintMatches(await window.lockOn.service.searchOrders(clean));
+      const found = await window.lockOn.service.searchOrders(clean);
+      setComplaintMatches(found.filter((order)=>order.handlingMode!=='TRANSFER_ONLY'));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się znaleźć wcześniejszej naprawy.');
     } finally {
@@ -536,6 +537,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     const lastName = order.customerLastName || fallbackParts.slice(1).join(' ') || '';
     setComplaintOriginal(order);
     setComplaintMatches([]);
+    setMatches([]);
+    setQuery('');
     setComplaintQuery('#' + String(order.orderNumber ?? ''));
     setForm((current) => ({
       ...current,
@@ -1097,14 +1100,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           <p>Przyjęcie telefonu, reklamacje, statusy oraz centralne powiadomienia klienta.</p>
         </div>
         <div className="service-tabs">
-          {isActualTechnician && <button className={tab === 'CALENDAR' ? 'active' : ''} onClick={() => setTab('CALENDAR')}><CalendarDays size={15}/> Plan pracy</button>}
-          <button className={tab === 'NEW' ? 'active' : ''} onClick={() => { setIntakeStage('TYPE'); setTab('NEW'); }}><ClipboardPlus size={15}/> Nowe zlecenie</button>
-          <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia{transferredToServiceCount>0&&<b className="service-tab-count" title="Telefony przekazane do serwisu">{transferredToServiceCount}</b>}</button>
-          <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
-          {canHandleCustomerQuotes && <button className={tab === 'QUOTES' ? 'active' : ''} onClick={() => {setTab('QUOTES');void loadCustomerQuotes(pointId);}}><MessageSquareText size={15}/> Wyceny klientów{customerQuotes.filter((item)=>item.status==='OPEN').length > 0 && <b className="service-tab-count">{customerQuotes.filter((item)=>item.status==='OPEN').length}</b>}</button>}
-          {canEditCosts && <button className={tab === 'INVOICES' ? 'active' : ''} onClick={() => setTab('INVOICES')}><FileArchive size={15}/> Magazyn faktur</button>}
-          {isActualTechnician && <button className={tab === 'TECH_NOTES' ? 'active' : ''} onClick={() => setTab('TECH_NOTES')}><NotebookPen size={15}/> Moje notatki</button>}
-          {canManageGmail && <button className={tab === 'EMAILS' ? 'active' : ''} onClick={() => { setTab('EMAILS'); void loadMailData(pointId); }}><BellRing size={15}/> Powiadomienia</button>}
+          {isActualTechnician && <button className={tab === 'CALENDAR' ? 'active' : ''} onClick={() => switchServiceTab('CALENDAR')}><CalendarDays size={15}/> Plan pracy</button>}
+          <button className={tab === 'NEW' ? 'active' : ''} onClick={() => { setIntakeStage('TYPE'); switchServiceTab('NEW'); }}><ClipboardPlus size={15}/> Nowe zlecenie</button>
+          <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => switchServiceTab('ORDERS')}><ClipboardList size={15}/> Zlecenia{transferredToServiceCount>0&&<b className="service-tab-count" title="Telefony przekazane do serwisu">{transferredToServiceCount}</b>}</button>
+          <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {switchServiceTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
+          {canHandleCustomerQuotes && <button className={tab === 'QUOTES' ? 'active' : ''} onClick={() => {switchServiceTab('QUOTES');void loadCustomerQuotes(pointId);}}><MessageSquareText size={15}/> Wyceny klientów{customerQuotes.filter((item)=>item.status==='OPEN').length > 0 && <b className="service-tab-count">{customerQuotes.filter((item)=>item.status==='OPEN').length}</b>}</button>}
+          {canEditCosts && <button className={tab === 'INVOICES' ? 'active' : ''} onClick={() => switchServiceTab('INVOICES')}><FileArchive size={15}/> Magazyn faktur</button>}
+          {isActualTechnician && <button className={tab === 'TECH_NOTES' ? 'active' : ''} onClick={() => switchServiceTab('TECH_NOTES')}><NotebookPen size={15}/> Moje notatki</button>}
+          {canManageGmail && <button className={tab === 'EMAILS' ? 'active' : ''} onClick={() => { switchServiceTab('EMAILS'); void loadMailData(pointId); }}><BellRing size={15}/> Powiadomienia</button>}
         </div>
       </section>
 
@@ -1426,7 +1429,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           </section>
         </div>;
       })()}
-      {isActualTechnician && pointId && <MonthlyInvoicePrompt pointId={pointId} onOpenWarehouse={() => setTab('INVOICES')}/>} 
+      {isActualTechnician && pointId && <MonthlyInvoicePrompt pointId={pointId} onOpenWarehouse={() => switchServiceTab('INVOICES')}/>} 
       {showGmailOnboarding && (
         <section className="panel-card service-mail-card">
           <div className="service-mail-copy">
@@ -1474,7 +1477,6 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                     <h2>Co przyjmujesz?</h2>
                     <p>Wybierz typ, a formularz pozostanie w tym samym dużym panelu ServiceOS.</p>
                   </div>
-                  <button className="service-order-details-close" title="Zamknij" onClick={()=>setTab(isActualTechnician?'CALENDAR':'ORDERS')}><XCircle size={20}/></button>
                 </header>
                 <section className="service-intake-type-screen">
                   <div className="service-order-type-picker service-order-type-picker-v3" role="group" aria-label="Typ zlecenia">
