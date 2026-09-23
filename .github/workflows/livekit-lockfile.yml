@@ -1,0 +1,28 @@
+name: Generate 1.0.0.20 LiveKit lockfile
+
+on:
+  push:
+    branches: ["feature/1.0.0.20-user-gmail-meetings"]
+    paths:
+      - "package.json"
+      - ".github/workflows/livekit-lockfile.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - name: Generate exact npm lockfile
+        run: npm install --package-lock-only --ignore-scripts
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: livekit-package-lock
+          path: package-lock.json
+          if-no-files-found: error
