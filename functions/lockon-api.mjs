@@ -3305,8 +3305,9 @@ const route = async (request) => {
     const {rows}=await q("SELECT id FROM notification_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY available_at ASC,created_at ASC LIMIT 25");
     const results=[];
     for(const row of rows)results.push({id:row.id,...(await processNotification(row.id))});
-    console.log('[notification worker]',{triggerId,scheduledAt:triggerBody?.data?.scheduled_at||null,processed:results.length});
-    return json(request,{ok:true,processed:results.length,results});
+    const meetingInvites=await processMeetingInvitationQueue(20);
+    console.log('[notification worker]',{triggerId,scheduledAt:triggerBody?.data?.scheduled_at||null,customerProcessed:results.length,meetingInvitesProcessed:meetingInvites.length});
+    return json(request,{ok:true,processed:results.length+meetingInvites.length,customerNotifications:results,meetingInvites});
   }
 
   if (method === 'OPTIONS') return new Response(null, { status: 204, headers: secureHeaders(request) });
@@ -3659,7 +3660,9 @@ const route = async (request) => {
       await client.query("INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,'MEETING_CREATED',$4::jsonb)",[makeId('mte'),id,u.id,JSON.stringify({audienceType,pointIds,userIds})]);
       await client.query('COMMIT');
       await audit(session,'MEETING_CREATED','meeting',id,null,{startsAt:startsAt.toISOString(),audienceType});
-      return json(request,{meeting:await meetingPayload({...meeting,host_name:u.name,host_email:u.email,host_role:u.role_code,registered_count:0},u)},201);
+      const invitations=await queueMeetingInvitationEmails(meeting,u,'INVITE');
+      await meetingEvent(id,'INVITATIONS_QUEUED',u.id,null,invitations);
+      return json(request,{meeting:await meetingPayload({...meeting,host_name:u.name,host_email:u.email,host_role:u.role_code,registered_count:0},u),invitations},201);
     }catch(error){
       try{await client.query('ROLLBACK');}catch{}
       throw error;
@@ -3725,6 +3728,11 @@ const route = async (request) => {
       await q("UPDATE meeting_attendance SET total_seconds=total_seconds+CASE WHEN current_session_started_at IS NULL THEN 0 ELSE GREATEST(0,extract(epoch from (now()-current_session_started_at)))::bigint END,current_session_started_at=NULL,last_left_at=COALESCE(last_left_at,now()),updated_at=now() WHERE meeting_id=$1",[meetingId]);
       await meetingEvent(meetingId,'CANCELLED',u.id,null,{});
       await audit(session,'MEETING_CANCELLED','meeting',meetingId,null,{});
+      const hostUser=await loadUser(meeting.host_user_id);
+      if(hostUser){
+        const invitations=await queueMeetingInvitationEmails(meeting,hostUser,'CANCELLED');
+        await meetingEvent(meetingId,'CANCELLATION_EMAILS_QUEUED',u.id,null,invitations);
+      }
     }
     const fresh=await loadMeeting(meetingId);
     return json(request,{meeting:await meetingPayload(fresh,u)});
@@ -6184,7 +6192,8 @@ const route = async (request) => {
     const session=await requireActive(request);if(!GLOBAL_ROLES.has(session.user.role_code))throw Object.assign(new Error('Brak uprawnień.'),{status:403});
     const {rows}=await q("SELECT id FROM notification_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY created_at ASC LIMIT 20");
     const results=[];for(const row of rows)results.push({id:row.id,...(await processNotification(row.id))});
-    return json(request,{processed:results.length,results});
+    const meetingInvites=await processMeetingInvitationQueue(20);
+    return json(request,{processed:results.length+meetingInvites.length,customerNotifications:results,meetingInvites});
   }
 
   if(method==='GET'&&url.pathname==='/support/conversation'){
