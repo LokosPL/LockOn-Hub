@@ -1432,12 +1432,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </div>
 
                         {order.openTransfer && <div className="service-process-logistics">
-                          <div><Truck size={18}/><span><strong>{order.openTransfer.kind==='RETURN_HOME'?'Telefon wraca do punktu macierzystego':'Telefon jest w przekazaniu'}</strong><small>{order.openTransfer.fromPointName} → {order.openTransfer.toPointName}</small></span></div>
+                          <div><Truck size={18}/><span><strong>{isFrontdesk
+                              ? (order.openTransfer.kind==='RETURN_HOME'?'Telefon wraca do Twojego punktu':'Telefon jest w drodze do serwisu')
+                              : (order.openTransfer.kind==='RETURN_HOME'?'Telefon wraca do punktu macierzystego':'Telefon jest w przekazaniu')}</strong><small>{order.openTransfer.fromPointName} → {order.openTransfer.toPointName}</small></span></div>
                           <div className="service-stage-actions">
                             {order.openTransfer.status==='IN_TRANSIT'&&canActTransferDestination&&<button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'DELIVERED')}>Telefon dotarł do punktu</button>}
                             {order.openTransfer.status==='DELIVERED'&&canActTransferDestination&&<button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'ACCEPTED')}><PackageCheck size={14}/> Przyjmij telefon w punkcie</button>}
                             {order.openTransfer.status==='IN_TRANSIT'&&canActTransferSource&&<button className="button secondary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'CANCELLED')}>Anuluj wysyłkę</button>}
-                            {!canActTransferDestination&&!canActTransferSource&&<small>Akcję potwierdza punkt, w którym telefon fizycznie się znajduje lub do którego właśnie dotarł.</small>}
+                            {!canActTransferDestination&&!canActTransferSource&&<small>{isFrontdesk?'Teraz nic nie musisz robić. Drugi punkt potwierdzi odbiór telefonu.':'Akcję potwierdza punkt, w którym telefon fizycznie się znajduje lub do którego właśnie dotarł.'}</small>}
                           </div>
                         </div>}
 
@@ -1454,10 +1456,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </div>}
 
                         {!order.openTransfer&&order.returnRequired&&order.status==='REPAIR_DONE'&&<div className="service-process-logistics">
-                          <div><RotateCcw size={18}/><span><strong>Naprawa zakończona poza punktem macierzystym</strong><small>Teraz odeślij telefon. Po przyjęciu w punkcie macierzystym ServiceOS pokaże krok z gwarancją i odbiorem.</small></span></div>
+                          <div><RotateCcw size={18}/><span><strong>{isFrontdesk?'Naprawa skończona — telefon ma wrócić do punktu przyjęcia':'Naprawa zakończona poza punktem macierzystym'}</strong><small>{isFrontdesk?'Po powrocie telefonu zobaczysz krok przygotowania go do odbioru przez klienta.':'Teraz odeślij telefon. Po przyjęciu w punkcie macierzystym ServiceOS pokaże krok z gwarancją i odbiorem.'}</small></span></div>
                           {canTransferHere
-                            ? <button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}>Odeślij do punktu macierzystego</button>
-                            : <small>Zwrot rozpoczyna osoba pracująca w punkcie, w którym telefon znajduje się teraz.</small>}
+                            ? <button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}>{isFrontdesk?'Wyślij telefon z powrotem do punktu przyjęcia':'Odeślij do punktu macierzystego'}</button>
+                            : <small>{isFrontdesk?'Teraz nic nie musisz robić. Punkt, w którym jest telefon, rozpocznie jego powrót.':'Zwrot rozpoczyna osoba pracująca w punkcie, w którym telefon znajduje się teraz.'}</small>}
                         </div>}
 
                         {isFrontdesk&&!order.openTransfer&&order.status==='RECEIVED'&&canTransferHere&&<div className="service-stage-actions service-frontdesk-stage-action">
@@ -1609,7 +1611,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                               <option value="">{isFrontdesk?'Wybierz serwis, do którego wysyłasz telefon…':'Wybierz serwis docelowy…'}</option>
                               {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                             </select>
-                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
+                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder={isFrontdesk?'Krótka informacja dla serwisu, np. co zgłasza klient':'Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej'}/>
                             <button className="button secondary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/>{isFrontdesk?' Przekaż telefon do serwisu':' Wyślij do serwisu'}</button>
                           </div>
                         ) : <div className="service-history-empty">Brak aktywnego transportu.</div>}
