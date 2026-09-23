@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  desktopCapturer,
   ipcMain,
   Menu,
   screen,
@@ -58,6 +59,7 @@ let mainReady: Promise<void> = Promise.resolve();
 let rendererBootReady: Promise<void> = Promise.resolve();
 let resolveRendererBootReady: (() => void) | null = null;
 let localApiProcess: ChildProcess | null = null;
+let selectedDisplaySourceId: string | null = null;
 
 const resetRendererBootGate = () => {
   rendererBootReady = new Promise<void>((resolve) => {
@@ -1035,6 +1037,24 @@ const registerIpc = () => {
     const token = requireSessionToken();
     return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/participants/${encodeURIComponent(safeId(userId,'usr'))}/remove`, { method:'POST', body:'{}' }, token);
   });
+  secureHandle('meetings:listDisplaySources', async () => {
+    requireSessionToken();
+    const sources = await desktopCapturer.getSources({ types:['screen','window'], thumbnailSize:{width:240,height:135}, fetchWindowIcons:true });
+    return sources.slice(0,40).map((source)=>({
+      id:source.id,
+      name:String(source.name||'Ekran').slice(0,160),
+      thumbnailDataUrl:source.thumbnail?.isEmpty()?null:source.thumbnail.toDataURL(),
+      appIconDataUrl:source.appIcon?.isEmpty()?null:source.appIcon?.toDataURL()||null
+    }));
+  });
+  secureHandle('meetings:selectDisplaySource', async (sourceId: string) => {
+    requireSessionToken();
+    const clean=String(sourceId??'').trim().slice(0,220);
+    const sources=await desktopCapturer.getSources({types:['screen','window'],thumbnailSize:{width:0,height:0},fetchWindowIcons:false});
+    if(!sources.some((source)=>source.id===clean))throw new Error('Wybrane okno lub ekran nie jest już dostępne.');
+    selectedDisplaySourceId=clean;
+    return {ok:true};
+  });
 
 
   secureHandle('service:searchCustomers', async (query: string) => {
@@ -1435,8 +1455,33 @@ app.whenReady().then(async () => {
   const startupDeepLink = process.argv.find((arg) => arg.startsWith(APP_PROTOCOL + '://'));
   if (startupDeepLink) handleProtocolUrl(startupDeepLink);
 
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  session.defaultSession.setPermissionCheckHandler(() => false);
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const trusted=isTrustedRendererUrl(webContents.getURL());
+    if(!trusted)return callback(false);
+    if(permission==='display-capture')return callback(true);
+    if(permission==='media'){
+      const mediaTypes='mediaTypes' in details && Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
+      return callback(mediaTypes.length>0 && mediaTypes.every((type)=>type==='audio'));
+    }
+    callback(false);
+  });
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, _origin, details) => {
+    if(!webContents||!isTrustedRendererUrl(webContents.getURL()))return false;
+    if(permission==='display-capture')return true;
+    if(permission==='media')return details.mediaType==='audio';
+    return false;
+  });
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    const frameUrl=request.frame?.url||request.securityOrigin||'';
+    if(!isTrustedRendererUrl(frameUrl)){callback({});return;}
+    const requestedSourceId=selectedDisplaySourceId;
+    selectedDisplaySourceId=null;
+    if(!requestedSourceId){callback({});return;}
+    const sources=await desktopCapturer.getSources({types:['screen','window'],thumbnailSize:{width:0,height:0},fetchWindowIcons:false});
+    const source=sources.find((item)=>item.id===requestedSourceId);
+    if(!source){callback({});return;}
+    callback({video:source});
+  },{useSystemPicker:process.platform==='darwin'});
 
   await createSplashWindow();
   await runStartupSequence();
