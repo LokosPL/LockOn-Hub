@@ -1206,3 +1206,65 @@ jobs:
           NODE
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data '{}' > owner-hotline-cleanup.json
+
+      - name: Temp meeting lifecycle and LiveKit token smoke
+        if: steps.neon_credential.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          boss_token="$(node -e "const d=require('./role-BOSS.json');if(!d.token)process.exit(1);process.stdout.write(d.token)")"
+          user_token="$(node -e "const d=require('./role-USER.json');if(!d.token)process.exit(1);process.stdout.write(d.token)")"
+          user_id="$(node -e "const d=require('./role-USER.json');if(!d.user?.id)process.exit(1);process.stdout.write(d.user.id)")"
+          starts_at="$(node -e "process.stdout.write(new Date(Date.now()+5*60*1000).toISOString())")"
+
+          node -e "process.stdout.write(JSON.stringify({
+            title:'CI Spotkanie 1.0.0.20 '+process.env.GITHUB_RUN_ID,
+            description:'TEMP E2E lifecycle + LiveKit join token',
+            startsAt:process.argv[1],
+            expectedDurationMinutes:30,
+            audienceType:'USERS',
+            userIds:[process.argv[2]],
+            allowParticipantAudio:true,
+            allowParticipantScreenShare:false,
+            maxParticipants:8
+          }))" "$starts_at" "$user_id" > meeting-create-body.json
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data @meeting-create-body.json > meeting-created.json
+
+          meeting_id="$(node -e "const d=require('./meeting-created.json');if(!d.meeting?.id||d.meeting.status!=='SCHEDULED')throw new Error('Meeting create failed');process.stdout.write(d.meeting.id)")"
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/meetings"             --header "Authorization: Bearer $user_token" > meeting-user-list.json
+          node -e "const d=require('./meeting-user-list.json'),id=process.argv[1];if(!(d.meetings||[]).some(x=>x.id===id))throw new Error('Eligible USER cannot see meeting')" "$meeting_id"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings/$meeting_id/register"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json" --data '{}' > meeting-registered.json
+          node -e "const d=require('./meeting-registered.json');if(d.meeting?.registered!==true)throw new Error('USER registration failed')"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings/$meeting_id/start"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json" --data '{}' > meeting-started.json
+          node -e "const d=require('./meeting-started.json');if(d.meeting?.status!=='LIVE')throw new Error('Meeting start failed')"
+
+          join_http="$(curl --silent --show-error --output meeting-join.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/meetings/$meeting_id/join"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json" --data '{}')"
+          if [[ "$join_http" == "503" ]]; then
+            echo "::error::TEMP exact backend is deployed, but LiveKit credentials are not configured in the TEMP Neon Function environment."
+            cat meeting-join.json
+            exit 1
+          fi
+          if [[ "$join_http" != "201" ]]; then
+            echo "::error::Meeting join token expected HTTP 201, got $join_http"
+            cat meeting-join.json
+            exit 1
+          fi
+          node - <<'NODE'
+          const d=require('./meeting-join.json');
+          if(!/^wss:///i.test(d.serverUrl||''))throw new Error('Missing secure LiveKit serverUrl');
+          if(String(d.participantToken||'').split('.').length!==3)throw new Error('Missing LiveKit JWT');
+          if(!d.participantIdentity)throw new Error('Missing opaque participant identity');
+          NODE
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/meetings/$meeting_id/attendance"             --header "Authorization: Bearer $boss_token" > meeting-attendance.json
+          node -e "const d=require('./meeting-attendance.json');if(!Array.isArray(d.attendance))throw new Error('Attendance payload invalid')"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings/$meeting_id/end"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json" --data '{}' > meeting-ended.json
+          node -e "const d=require('./meeting-ended.json');if(d.meeting?.status!=='ENDED')throw new Error('Meeting end failed')"
+
+          echo "TEMP meeting lifecycle passed: audience visibility, registration, start, signed LiveKit join token, attendance endpoint, end."
+
