@@ -56,6 +56,8 @@ contextBridge.exposeInMainWorld('lockOn', {
     getWeather: (city: string) => ipcRenderer.invoke('data:getWeather', city)
   },
   service: {
+    listCustomers: (query?: string) => ipcRenderer.invoke('service:listCustomers', query),
+    updateCustomerProfile: (customerId: string, payload: unknown) => ipcRenderer.invoke('service:updateCustomerProfile', customerId, payload),
     searchCustomers: (query: string) => ipcRenderer.invoke('service:searchCustomers', query),
     searchOrders: (query: string) => ipcRenderer.invoke('service:searchOrders', query),
     getCustomer: (customerId: string) => ipcRenderer.invoke('service:getCustomer', customerId),
