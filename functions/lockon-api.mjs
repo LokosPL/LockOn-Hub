@@ -23,6 +23,9 @@ const SITE_ORIGINS = new Set(
 const GMAIL_TOKEN_KEY = String(process.env.LOCKON_GMAIL_TOKEN_KEY || '');
 const PUBLIC_PORTAL_URL = String(process.env.LOCKON_SITE_ORIGIN || 'https://app.serviceos.pl').trim().replace(/\/$/,'') || 'https://app.serviceos.pl';
 const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
+const LIVEKIT_URL = String(process.env.LOCKON_LIVEKIT_URL || process.env.LIVEKIT_URL || '').trim().replace(/\/$/,'');
+const LIVEKIT_API_KEY = String(process.env.LOCKON_LIVEKIT_API_KEY || process.env.LIVEKIT_API_KEY || '').trim();
+const LIVEKIT_API_SECRET = String(process.env.LOCKON_LIVEKIT_API_SECRET || process.env.LIVEKIT_API_SECRET || '').trim();
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 90;
@@ -131,6 +134,71 @@ const splitRevenueAmount = (amount, technicianPercent) => {
 };
 const tokenHash = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const b64url = (value) => Buffer.from(value).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+
+const livekitConfigured = () => Boolean(LIVEKIT_URL && LIVEKIT_API_KEY && LIVEKIT_API_SECRET);
+const livekitHttpUrl = () => LIVEKIT_URL.replace(/^wss:/i,'https:').replace(/^ws:/i,'http:').replace(/\/$/,'');
+const signLiveKitJwt = (claims, ttlSeconds = 180) => {
+  if(!livekitConfigured())throw Object.assign(new Error('Spotkania audio nie są jeszcze skonfigurowane.'),{status:503,code:'LIVEKIT_NOT_CONFIGURED'});
+  const now=Math.floor(Date.now()/1000);
+  const header=b64url(JSON.stringify({alg:'HS256',typ:'JWT'}));
+  const payload=b64url(JSON.stringify({iss:LIVEKIT_API_KEY,nbf:now-5,exp:now+Math.max(30,Math.min(900,ttlSeconds)),...claims}));
+  const unsigned=header+'.'+payload;
+  const signature=b64url(crypto.createHmac('sha256',LIVEKIT_API_SECRET).update(unsigned).digest());
+  return unsigned+'.'+signature;
+};
+const verifyLiveKitWebhook = (body, authHeader) => {
+  if(!livekitConfigured())throw Object.assign(new Error('LiveKit nie jest skonfigurowany.'),{status:503,code:'LIVEKIT_NOT_CONFIGURED'});
+  const token=String(authHeader||'').replace(/^Bearer\s+/i,'').trim();
+  const parts=token.split('.');
+  if(parts.length!==3)throw Object.assign(new Error('Nieprawidłowy podpis webhooka.'),{status:401,code:'LIVEKIT_WEBHOOK_AUTH'});
+  let header,claims;
+  try{
+    header=JSON.parse(Buffer.from(parts[0],'base64url').toString('utf8'));
+    claims=JSON.parse(Buffer.from(parts[1],'base64url').toString('utf8'));
+  }catch{throw Object.assign(new Error('Nieprawidłowy token webhooka.'),{status:401,code:'LIVEKIT_WEBHOOK_AUTH'});}
+  if(header?.alg!=='HS256'||claims?.iss!==LIVEKIT_API_KEY)throw Object.assign(new Error('Nieprawidłowy issuer webhooka.'),{status:401,code:'LIVEKIT_WEBHOOK_AUTH'});
+  const expected=crypto.createHmac('sha256',LIVEKIT_API_SECRET).update(parts[0]+'.'+parts[1]).digest();
+  const supplied=Buffer.from(parts[2],'base64url');
+  if(expected.length!==supplied.length||!crypto.timingSafeEqual(expected,supplied))throw Object.assign(new Error('Nieprawidłowy podpis webhooka.'),{status:401,code:'LIVEKIT_WEBHOOK_AUTH'});
+  const now=Math.floor(Date.now()/1000);
+  if(Number(claims.exp||0)<now-30||Number(claims.nbf||0)>now+30)throw Object.assign(new Error('Webhook LiveKit wygasł.'),{status:401,code:'LIVEKIT_WEBHOOK_AUTH'});
+  if(!claims.sha256)throw Object.assign(new Error('Webhook LiveKit nie zawiera sumy payloadu.'),{status:401,code:'LIVEKIT_WEBHOOK_HASH'});
+  const bodyHash=crypto.createHash('sha256').update(body).digest();
+  const signedHash=Buffer.from(String(claims.sha256),'base64');
+  if(bodyHash.length!==signedHash.length||!crypto.timingSafeEqual(bodyHash,signedHash))throw Object.assign(new Error('Payload webhooka LiveKit ma nieprawidłową sumę.'),{status:401,code:'LIVEKIT_WEBHOOK_HASH'});
+  return claims;
+};
+const livekitParticipantGrant = (meeting,isHost) => {
+  const sources=isHost
+    ? ['microphone','screen_share','screen_share_audio']
+    : [
+        ...(meeting.allow_participant_audio===true?['microphone']:[]),
+        ...(meeting.allow_participant_screen_share===true?['screen_share','screen_share_audio']:[])
+      ];
+  return {
+    room:meeting.livekit_room_name,
+    roomJoin:true,
+    roomAdmin:isHost===true,
+    canSubscribe:true,
+    canPublish:sources.length>0,
+    canPublishData:false,
+    canPublishSources:sources
+  };
+};
+const livekitRoomAdminCall = async (meeting,method,payload) => {
+  const token=signLiveKitJwt({sub:'svc_'+crypto.randomBytes(8).toString('hex'),video:{room:meeting.livekit_room_name,roomAdmin:true}},60);
+  const response=await fetch(livekitHttpUrl()+'/twirp/livekit.RoomService/'+method,{
+    method:'POST',
+    headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+    body:JSON.stringify(payload||{})
+  });
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok){
+    const message=cleanText(data?.msg||data?.message||data?.error||('LiveKit '+method+' HTTP '+response.status),300);
+    throw Object.assign(new Error(message),{status:502,code:'LIVEKIT_ROOM_API'});
+  }
+  return data;
+};
 
 const publicAuthAttempts = new Map();
 const requestClientAddress = (request) => {
