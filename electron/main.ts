@@ -993,6 +993,33 @@ const registerIpc = () => {
     return fetchStartWeather(city);
   });
 
+  secureHandle('meetings:list', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/meetings', {}, token);
+  });
+  secureHandle('meetings:getAudienceOptions', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/meetings/audience-options', {}, token);
+  });
+  secureHandle('meetings:get', async (meetingId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}`, {}, token);
+  });
+  secureHandle('meetings:create', async (payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest('/meetings', { method:'POST', body:JSON.stringify(payload) }, token);
+  });
+  for (const action of ['register','unregister','start','end','cancel'] as const) {
+    secureHandle(`meetings:${action}`, async (meetingId: string) => {
+      const token = requireSessionToken();
+      return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/${action}`, { method:'POST', body:'{}' }, token);
+    });
+  }
+  secureHandle('meetings:getAttendance', async (meetingId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/attendance`, {}, token);
+  });
+
 
   secureHandle('service:searchCustomers', async (query: string) => {
     const token = requireSessionToken();
