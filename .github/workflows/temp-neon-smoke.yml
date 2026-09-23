@@ -2,7 +2,7 @@ name: Temp Neon integration smoke
 
 on:
   push:
-    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "feature/service-intake-automation-*", "fix/service-card-*", "release/**"]
+    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "feature/service-intake-automation-*", "fix/service-card-*", "fix/user-frontdesk-flow-*", "release/**"]
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
