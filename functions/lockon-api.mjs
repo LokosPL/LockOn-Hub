@@ -4674,13 +4674,13 @@ const route = async (request) => {
     if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zarządzać tym spotkaniem.'},403);
     const target=action==='start'?'LIVE':action==='end'?'ENDED':'CANCELLED';
     const allowed=action==='start'?['SCHEDULED']:action==='end'?['LIVE']:['SCHEDULED','LIVE'];
+    if(!allowed.includes(meeting.status))return json(request,{error:'MEETING_STATE',message:'Ta zmiana etapu spotkania nie jest teraz dostępna.'},409);
     if(action==='start'){
       const client=livekitRooms();
       const room=meetingRoomName(meetingId);
       const existing=await client.listRooms([room]);
       if(!existing.length)await client.createRoom({name:room,maxParticipants:Number(meeting.max_participants||50),emptyTimeout:15*60,departureTimeout:5*60,metadata:JSON.stringify({meetingId})});
     }
-    if(!allowed.includes(meeting.status))return json(request,{error:'MEETING_STATE',message:'Ta zmiana etapu spotkania nie jest teraz dostępna.'},409);
     const result=await q(
       "UPDATE meetings SET status=$2,started_at=CASE WHEN $2='LIVE' THEN COALESCE(started_at,now()) ELSE started_at END,ended_at=CASE WHEN $2='ENDED' THEN now() ELSE ended_at END,cancelled_at=CASE WHEN $2='CANCELLED' THEN now() ELSE cancelled_at END,updated_at=now() WHERE id=$1 AND status=$3 RETURNING *",
       [meetingId,target,meeting.status]
