@@ -118,13 +118,29 @@ jobs:
             "isActualTechnician ? 'CALENDAR' : 'ORDERS'",
             "service-stage-actions",
             "canShowWarranty",
-            "canManageWarrantyHere"
+            "canManageWarrantyHere",
+            "canTransferService = canCreateService",
+            "canCompletePickupHere = effectiveRole === 'USER'"
           ) | ForEach-Object {
             if (-not $service.Contains($_)) { throw "Missing service hotfix UX contract: $_" }
+          }
+          $styles = Get-Content src/styles.css -Raw
+          if (-not $styles.Contains(".service-order-workspace-frontdesk .service-workspace-collapse.service-transfer-card")) {
+            throw "USER front-desk must keep logistics controls visible."
           }
           $central = Get-Content functions/lockon-api.mjs -Raw
           @("WARRANTY_ACTIVE_POINT_REQUIRED","WARRANTY_WRONG_ACTIVE_POINT","WARRANTY_DEVICE_IN_TRANSFER") | ForEach-Object {
             if (-not $central.Contains($_)) { throw "Missing warranty physical-location contract: $_" }
+          }
+          @(
+            "requireCustomerAccountAccess(u,customerNotificationPrefsMatch[1],'SERVICE')",
+            "const canCompletePickup=u.role_code==='USER'&&next==='COMPLETED'",
+            "const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER'])"
+          ) | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing USER front-desk API contract: $_" }
+          }
+          if ($central.Contains("if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))")) {
+            throw "Legacy service-scan guard still blocks USER from receiving transferred devices."
           }
           $browser = Get-Content src/pages/BrowserPage.tsx -Raw
           @("actionBusy","browser-action-error") | ForEach-Object {
