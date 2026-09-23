@@ -3456,6 +3456,42 @@ const route = async (request) => {
 
   if (method === 'GET' && url.pathname === '/health') return json(request, { ok: true, service: 'LockOn ServiceOS Central API', time: nowIso() });
 
+  if(method==='POST'&&url.pathname==='/integrations/livekit/webhook'){
+    const raw=await request.text();
+    verifyLiveKitWebhook(raw,request.headers.get('authorization'));
+    let event;
+    try{event=JSON.parse(raw);}catch{return json(request,{error:'LIVEKIT_WEBHOOK_JSON'},400);}
+    const eventName=cleanText(event?.event,80),roomName=cleanText(event?.room?.name,180);
+    const meeting=roomName?(await q("SELECT * FROM meetings WHERE livekit_room_name=$1 LIMIT 1",[roomName])).rows[0]:null;
+    if(!meeting)return json(request,{ok:true,ignored:true});
+    const sourceId=cleanText(event?.id,160);
+    const participantId=cleanText(event?.participant?.identity,120);
+    const eventId=sourceId?'lk_'+sourceId:makeId('mte');
+    const inserted=(await q(
+      "INSERT INTO meeting_events(id,meeting_id,actor_user_id,target_user_id,event_type,metadata) VALUES($1,$2,NULL,$3,$4,$5::jsonb) ON CONFLICT(id) DO NOTHING RETURNING id",
+      [eventId,meeting.id,participantId||null,'LIVEKIT_'+eventName.toUpperCase(),JSON.stringify({sourceEventId:sourceId||null})]
+    )).rows[0];
+    if(!inserted)return json(request,{ok:true,duplicate:true});
+    const user=participantId?await loadUser(participantId):null;
+    if(user&&eventName==='participant_joined'){
+      await q(
+        "INSERT INTO meeting_attendance(meeting_id,user_id,join_count,first_joined_at,last_joined_at,current_session_started_at,updated_at) VALUES($1,$2,1,now(),now(),now(),now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET join_count=meeting_attendance.join_count+CASE WHEN meeting_attendance.current_session_started_at IS NULL THEN 1 ELSE 0 END,first_joined_at=COALESCE(meeting_attendance.first_joined_at,now()),last_joined_at=now(),current_session_started_at=COALESCE(meeting_attendance.current_session_started_at,now()),updated_at=now()",
+        [meeting.id,user.id]
+      );
+    }else if(user&&eventName==='participant_left'){
+      await q(
+        "UPDATE meeting_attendance SET total_seconds=total_seconds+CASE WHEN current_session_started_at IS NULL THEN 0 ELSE GREATEST(0,extract(epoch from (now()-current_session_started_at)))::bigint END,current_session_started_at=NULL,last_left_at=now(),updated_at=now() WHERE meeting_id=$1 AND user_id=$2",
+        [meeting.id,user.id]
+      );
+    }else if(eventName==='room_finished'){
+      await q(
+        "UPDATE meeting_attendance SET total_seconds=total_seconds+CASE WHEN current_session_started_at IS NULL THEN 0 ELSE GREATEST(0,extract(epoch from (now()-current_session_started_at)))::bigint END,current_session_started_at=NULL,last_left_at=COALESCE(last_left_at,now()),updated_at=now() WHERE meeting_id=$1",
+        [meeting.id]
+      );
+    }
+    return json(request,{ok:true});
+  }
+
 
   if(method==='GET'&&url.pathname==='/meetings'){
     const session=await requireActive(request);
@@ -3607,6 +3643,83 @@ const route = async (request) => {
       firstJoinedAt:row.first_joined_at||null,lastJoinedAt:row.last_joined_at||null,lastLeftAt:row.last_left_at||null,
       present:Boolean(row.current_session_started_at),totalSeconds:Number(row.total_seconds||0)
     }))});
+  }
+
+  const meetingJoin=url.pathname.match(/^\/meetings\/([^/]+)\/join$/);
+  if(method==='POST'&&meetingJoin){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingJoin[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    await requireMeetingVisible(meetingId,u);
+    const isHost=u.role_code==='OWNER'||(MEETING_HOST_ROLES.has(u.role_code)&&meeting.host_user_id===u.id);
+    if(meeting.status!=='LIVE')return json(request,{error:'MEETING_NOT_LIVE',message:'Prowadzący nie rozpoczął jeszcze spotkania.'},409);
+    if(!isHost){
+      const registration=(await q("SELECT status FROM meeting_registrations WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meetingId,u.id])).rows[0];
+      if(registration?.status!=='REGISTERED')return json(request,{error:'MEETING_REGISTRATION_REQUIRED',message:'Najpierw zapisz się na spotkanie.'},403);
+    }
+    if(!livekitConfigured())return json(request,{error:'LIVEKIT_NOT_CONFIGURED',message:'Pokój audio nie jest jeszcze skonfigurowany przez administratora.'},503);
+    const token=signLiveKitJwt({
+      sub:u.id,
+      name:supportIdentityName(u.name,u.email,u.role_code)||'Uczestnik',
+      metadata:JSON.stringify({meetingId:meeting.id,role:u.role_code||null,host:isHost}),
+      video:livekitParticipantGrant(meeting,isHost)
+    },180);
+    await meetingEvent(meetingId,'JOIN_TOKEN_ISSUED',u.id,u.id,{host:isHost});
+    return json(request,{
+      serverUrl:LIVEKIT_URL.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:'),
+      participantToken:token,
+      participantIdentity:u.id,
+      meeting:await meetingPayload(meeting,u)
+    },201);
+  }
+
+  const meetingPermissions=url.pathname.match(/^\/meetings\/([^/]+)\/participants\/([^/]+)\/permissions$/);
+  if(method==='POST'&&meetingPermissions){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingPermissions[1],120),targetUserId=cleanText(meetingPermissions[2],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    requireMeetingHost(meeting,u);
+    if(meeting.status!=='LIVE')return json(request,{error:'MEETING_NOT_LIVE'},409);
+    const target=await loadUser(targetUserId);
+    if(!target)return json(request,{error:'USER_NOT_FOUND'},404);
+    const body=await readJson(request);
+    const canUseAudio=body.canPublishAudio===true;
+    const canShareScreen=body.canShareScreen===true;
+    const sources=[...(canUseAudio?['microphone']:[]),...(canShareScreen?['screen_share','screen_share_audio']:[])];
+    await livekitRoomAdminCall(meeting,'UpdateParticipant',{
+      room:meeting.livekit_room_name,
+      identity:targetUserId,
+      permission:{canSubscribe:true,canPublish:sources.length>0,canPublishData:false,canPublishSources:sources}
+    });
+    await meetingEvent(meetingId,'PERMISSIONS_CHANGED',u.id,targetUserId,{canPublishAudio:canUseAudio,canShareScreen});
+    await audit(session,'MEETING_PERMISSIONS_CHANGED','meeting',meetingId,null,{targetUserId,canPublishAudio:canUseAudio,canShareScreen});
+    return json(request,{ok:true,userId:targetUserId,canPublishAudio:canUseAudio,canShareScreen});
+  }
+
+  const meetingMute=url.pathname.match(/^\/meetings\/([^/]+)\/participants\/([^/]+)\/mute$/);
+  if(method==='POST'&&meetingMute){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingMute[1],120),targetUserId=cleanText(meetingMute[2],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    requireMeetingHost(meeting,u);
+    const body=await readJson(request),trackSid=cleanText(body.trackSid,120);
+    if(!trackSid)return json(request,{error:'TRACK_REQUIRED'},400);
+    await livekitRoomAdminCall(meeting,'MutePublishedTrack',{room:meeting.livekit_room_name,identity:targetUserId,trackSid,muted:true});
+    await meetingEvent(meetingId,'MICROPHONE_MUTED',u.id,targetUserId,{trackSid});
+    await audit(session,'MEETING_MICROPHONE_MUTED','meeting',meetingId,null,{targetUserId});
+    return json(request,{ok:true});
+  }
+
+  const meetingRemove=url.pathname.match(/^\/meetings\/([^/]+)\/participants\/([^/]+)\/remove$/);
+  if(method==='POST'&&meetingRemove){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingRemove[1],120),targetUserId=cleanText(meetingRemove[2],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    requireMeetingHost(meeting,u);
+    await livekitRoomAdminCall(meeting,'RemoveParticipant',{room:meeting.livekit_room_name,identity:targetUserId});
+    await meetingEvent(meetingId,'PARTICIPANT_REMOVED',u.id,targetUserId,{});
+    await audit(session,'MEETING_PARTICIPANT_REMOVED','meeting',meetingId,null,{targetUserId});
+    return json(request,{ok:true});
   }
 
   if (method === 'POST' && url.pathname === '/auth/google-code') {
