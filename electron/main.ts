@@ -994,6 +994,18 @@ const registerIpc = () => {
   });
 
 
+  secureHandle('service:listCustomers', async (query = '') => {
+    const token = requireSessionToken();
+    const safeQuery = String(query ?? '').trim().slice(0, 120);
+    return backendRequest('/service/customers' + (safeQuery ? '?q='+encodeURIComponent(safeQuery) : ''), {}, token);
+  });
+  secureHandle('service:updateCustomerProfile', async (customerId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/service/customers/${encodeURIComponent(safeId(customerId, 'cst'))}/profile`, {
+      method:'POST',
+      body:JSON.stringify(payload)
+    }, token);
+  });
   secureHandle('service:searchCustomers', async (query: string) => {
     const token = requireSessionToken();
     const safeQuery = String(query ?? '').trim().slice(0, 120);
