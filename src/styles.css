@@ -5005,3 +5005,160 @@ input,textarea,select{line-height:1.45}
 .service-order-workspace-frontdesk .service-stage-card {
   order: 3;
 }
+
+
+/* Service flow hotfix 1.0.0.17 */
+.service-intake-page-shell,
+.service-order-details-page {
+  width: 100%;
+  min-width: 0;
+}
+.service-intake-inline,
+.service-order-details-inline {
+  overflow: hidden;
+  border-radius: 22px;
+  backdrop-filter: none;
+  transform: none;
+  animation: none;
+  contain: layout paint style;
+}
+.service-intake-inline .service-intake-details-head,
+.service-order-details-inline .service-order-details-header {
+  border-radius: 22px 22px 0 0;
+}
+.service-intake-inline .service-intake-details-footer {
+  border-radius: 0 0 22px 22px;
+}
+.service-order-details-inline .service-order-workspace {
+  border-radius: 0 0 22px 22px;
+}
+.service-order-type-picker-v3 > button {
+  border-radius: 16px;
+}
+.service-complaint-source {
+  grid-column: 1 / -1;
+  border-color: rgba(62,203,134,.28);
+  background: rgba(62,203,134,.045);
+}
+.service-complaint-source-grid {
+  display: grid;
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.service-complaint-source-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255,255,255,.025);
+  min-width: 0;
+}
+.service-complaint-source-grid span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.service-complaint-source-grid strong,
+.service-complaint-source-grid small {
+  overflow-wrap: anywhere;
+}
+.service-complaint-source-grid small {
+  color: var(--muted);
+}
+.service-stage-guided {
+  border-color: rgba(255,111,54,.34);
+  background: linear-gradient(135deg,rgba(255,111,54,.055),rgba(255,255,255,.012));
+}
+.service-process-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 13px;
+}
+.service-process-step {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.service-process-step > span {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+.service-process-step > strong {
+  font-size: 18px;
+  line-height: 1.25;
+}
+.service-process-location {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-width: 42%;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.045);
+  color: var(--muted);
+  font-size: 12px;
+}
+.service-process-location span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.service-process-logistics {
+  display: grid;
+  gap: 11px;
+  margin-top: 13px;
+  padding: 13px 14px;
+  border: 1px solid rgba(75,144,255,.27);
+  border-radius: 14px;
+  background: rgba(75,144,255,.055);
+}
+.service-process-logistics > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.service-process-logistics > div:first-child > span {
+  display: grid;
+  gap: 3px;
+}
+.service-process-logistics small {
+  color: var(--muted);
+}
+.service-stage-guided .service-stage-actions {
+  margin-top: 13px;
+}
+.service-stage-guided .service-stage-primary {
+  min-height: 42px;
+}
+.service-order-details-inline details:not([open]) > .service-collapse-body {
+  display: none;
+}
+.service-order-details-inline .service-workspace-collapse {
+  content-visibility: auto;
+  contain-intrinsic-size: 56px;
+}
+.service-orders-list .service-order-row {
+  contain: content;
+}
+
+@media (max-width: 900px) {
+  .service-complaint-source-grid {
+    grid-template-columns: 1fr;
+  }
+  .service-process-heading {
+    display: grid;
+  }
+  .service-process-location {
+    max-width: 100%;
+    width: fit-content;
+  }
+}
