@@ -167,7 +167,7 @@ export default function App() {
             />
           )}
           {active === 'administration' && <AdministrationPage focusUserId={focusUserId} />}
-          {active === 'customers' && <CustomerAccountsPage />}
+          {active === 'customers' && <CustomerAccountsPage effectiveRole={effectiveRole!} />}
           {active === 'service' && <ServicePage auth={auth} effectiveRole={effectiveRole!} focusOrderId={focusOrderId} />}
           {active === 'earnings' && <EarningsPage auth={auth} effectiveRole={effectiveRole!} />}
           {active === 'browser' && <BrowserPage />}
