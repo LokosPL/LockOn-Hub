@@ -3764,16 +3764,24 @@ const route = async (request) => {
     await requireMeetingVisible(meetingId,u);
     const isHost=u.role_code==='OWNER'||(MEETING_HOST_ROLES.has(u.role_code)&&meeting.host_user_id===u.id);
     if(meeting.status!=='LIVE')return json(request,{error:'MEETING_NOT_LIVE',message:'Prowadzący nie rozpoczął jeszcze spotkania.'},409);
+    let permissionOverride=null;
     if(!isHost){
       const registration=(await q("SELECT status FROM meeting_registrations WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meetingId,u.id])).rows[0];
       if(registration?.status!=='REGISTERED')return json(request,{error:'MEETING_REGISTRATION_REQUIRED',message:'Najpierw zapisz się na spotkanie.'},403);
+      permissionOverride=(await q("SELECT can_publish_audio,can_share_screen,removed_at FROM meeting_participant_permissions WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meetingId,u.id])).rows[0]||null;
+      if(permissionOverride?.removed_at)return json(request,{error:'MEETING_REMOVED',message:'Prowadzący usunął Cię z tego spotkania.'},403);
     }
     if(!livekitConfigured())return json(request,{error:'LIVEKIT_NOT_CONFIGURED',message:'Pokój audio nie jest jeszcze skonfigurowany przez administratora.'},503);
+    const effectiveMeeting=permissionOverride?{
+      ...meeting,
+      allow_participant_audio:permissionOverride.can_publish_audio===true,
+      allow_participant_screen_share:permissionOverride.can_share_screen===true
+    }:meeting;
     const token=signLiveKitJwt({
       sub:u.id,
       name:supportIdentityName(u.name,u.email,u.role_code)||'Uczestnik',
       metadata:JSON.stringify({meetingId:meeting.id,role:u.role_code||null,host:isHost}),
-      video:livekitParticipantGrant(meeting,isHost)
+      video:livekitParticipantGrant(effectiveMeeting,isHost)
     },180);
     await meetingEvent(meetingId,'JOIN_TOKEN_ISSUED',u.id,u.id,{host:isHost});
     return json(request,{
@@ -3794,8 +3802,16 @@ const route = async (request) => {
     const target=await loadUser(targetUserId);
     if(!target)return json(request,{error:'USER_NOT_FOUND'},404);
     const body=await readJson(request);
-    const canUseAudio=body.canPublishAudio===true;
-    const canShareScreen=body.canShareScreen===true;
+    const current=(await q("SELECT can_publish_audio,can_share_screen,removed_at FROM meeting_participant_permissions WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meetingId,targetUserId])).rows[0]||null;
+    const hasAudio=Object.prototype.hasOwnProperty.call(body,'canPublishAudio');
+    const hasScreen=Object.prototype.hasOwnProperty.call(body,'canShareScreen');
+    if(!hasAudio&&!hasScreen)return json(request,{error:'MEETING_PERMISSION_CHANGE_REQUIRED'},400);
+    const canUseAudio=hasAudio?body.canPublishAudio===true:(current?current.can_publish_audio===true:meeting.allow_participant_audio===true);
+    const canShareScreen=hasScreen?body.canShareScreen===true:(current?current.can_share_screen===true:meeting.allow_participant_screen_share===true);
+    await q(
+      "INSERT INTO meeting_participant_permissions(meeting_id,user_id,can_publish_audio,can_share_screen,removed_at,updated_by_user_id,updated_at) VALUES($1,$2,$3,$4,NULL,$5,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET can_publish_audio=EXCLUDED.can_publish_audio,can_share_screen=EXCLUDED.can_share_screen,updated_by_user_id=EXCLUDED.updated_by_user_id,updated_at=now()",
+      [meetingId,targetUserId,canUseAudio,canShareScreen,u.id]
+    );
     const sources=[...(canUseAudio?['microphone']:[]),...(canShareScreen?['screen_share','screen_share_audio']:[])];
     await livekitRoomAdminCall(meeting,'UpdateParticipant',{
       room:meeting.livekit_room_name,
@@ -3827,6 +3843,12 @@ const route = async (request) => {
     const meeting=await loadMeeting(meetingId);
     if(!meeting)return json(request,{error:'NOT_FOUND'},404);
     requireMeetingHost(meeting,u);
+    const target=await loadUser(targetUserId);
+    if(!target)return json(request,{error:'USER_NOT_FOUND'},404);
+    await q(
+      "INSERT INTO meeting_participant_permissions(meeting_id,user_id,can_publish_audio,can_share_screen,removed_at,updated_by_user_id,updated_at) VALUES($1,$2,false,false,now(),$3,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET can_publish_audio=false,can_share_screen=false,removed_at=now(),updated_by_user_id=$3,updated_at=now()",
+      [meetingId,targetUserId,u.id]
+    );
     await livekitRoomAdminCall(meeting,'RemoveParticipant',{room:meeting.livekit_room_name,identity:targetUserId});
     await meetingEvent(meetingId,'PARTICIPANT_REMOVED',u.id,targetUserId,{});
     await audit(session,'MEETING_PARTICIPANT_REMOVED','meeting',meetingId,null,{targetUserId});
@@ -4490,6 +4512,7 @@ const route = async (request) => {
         deleted[table]=Number(result.rowCount||0);
       };
       await remove('meeting_email_outbox');
+      await remove('meeting_participant_permissions');
       await remove('meeting_events');
       await remove('meeting_attendance');
       await remove('meeting_registrations');
@@ -4540,6 +4563,7 @@ const route = async (request) => {
         "'user_point_access',(SELECT count(*) FROM user_point_access)," +
         "'notification_outbox',(SELECT count(*) FROM notification_outbox)," +
         "'meeting_email_outbox',(SELECT count(*) FROM meeting_email_outbox)," +
+        "'meeting_participant_permissions',(SELECT count(*) FROM meeting_participant_permissions)," +
         "'meeting_events',(SELECT count(*) FROM meeting_events)," +
         "'meeting_attendance',(SELECT count(*) FROM meeting_attendance)," +
         "'meeting_registrations',(SELECT count(*) FROM meeting_registrations)," +
