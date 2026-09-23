@@ -1167,9 +1167,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             <label><input type="checkbox" checked={notificationChoice.serviceUpdates} onChange={(e)=>setNotificationChoice((current)=>current?{...current,serviceUpdates:e.target.checked}:current)}/><span><strong>Postęp naprawy</strong><small>Diagnoza, części, naprawa i zmiany etapu.</small></span></label>
             <label><input type="checkbox" checked={notificationChoice.readyForPickup} onChange={(e)=>setNotificationChoice((current)=>current?{...current,readyForPickup:e.target.checked}:current)}/><span><strong>Gotowe do odbioru</strong><small>Osobna wiadomość, gdy urządzenie czeka w punkcie.</small></span></label>
           </div>
+          {error&&<div className="service-notification-choice-error">{error}</div>}
           <div className="service-notification-choice-actions">
             <small>Ustawienie zapisuje się na koncie klienta i może zostać później zmienione w jego portalu.</small>
-            <button className="button primary" disabled={notificationChoiceBusy} onClick={()=>void saveCustomerNotificationChoice()}>{notificationChoiceBusy?'Zapisywanie…':'Zapisz wybór i przejdź dalej'}</button>
+            <button type="button" className="button primary" disabled={notificationChoiceBusy} onClick={()=>void saveCustomerNotificationChoice()}>{notificationChoiceBusy?'Zapisywanie…':'Zapisz wybór i przejdź dalej'}</button>
           </div>
         </section>
       </div>}
