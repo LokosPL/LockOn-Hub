@@ -1395,6 +1395,15 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const primaryStageBlocked = primaryStageAction?.status==='READY' && (order.canMarkReady===false || !order.warrantyReady);
         const stageSteps=['Przyjęto','Diagnoza','Części','Naprawa','Zakończono','Gotowe','Wydano'];
         const stageIndex=({RECEIVED:0,DIAGNOSIS:1,WAITING_PARTS:2,IN_REPAIR:3,REPAIR_DONE:4,READY:5,COMPLETED:6} as Record<string,number>)[order.status] ?? 0;
+        const isFrontdesk=effectiveRole==='USER';
+        const frontdeskState=frontdeskProcess(order,serviceClock);
+        const visibleStageSteps=isFrontdesk?[...FRONTDESK_STEPS]:stageSteps;
+        const visibleStageIndex=isFrontdesk?frontdeskState.index:stageIndex;
+        const visibleStageProgress=isFrontdesk
+          ? Math.max(8,Math.round((visibleStageIndex/Math.max(1,visibleStageSteps.length-1))*100))
+          : (order.workflow?.progressPercent ?? 10);
+        const visibleStageTitle=isFrontdesk?frontdeskState.title:(order.workflow?.nextAction || 'Sprawdź zlecenie.');
+        const visibleStageDescription=isFrontdesk?frontdeskState.description:'Najważniejsza czynność jest pokazana jako pierwsza.';
         return <div className="service-order-details-page">
           <section className="service-order-details-dialog service-order-details-inline" aria-label={`Szczegóły zlecenia #${order.orderNumber}`}>
             <header className="service-order-details-header">
@@ -1406,27 +1415,19 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               <button className="button secondary small service-order-details-back" title="Wróć do listy" onClick={()=>setExpandedOrderId(null)}>← Wróć do zleceń</button>
             </header>
             <div className={`service-order-workspace ${effectiveRole==='USER'?'service-order-workspace-frontdesk':''}`}>
-                      <section className="service-order-keyfacts">
-                        <article><span>Klient</span><strong>{order.customerName}</strong><small>{order.customerPhone || order.customerEmail || 'Brak kontaktu'}</small></article>
-                        <article><span>Telefon</span><strong>{formatDeviceLabel(order.brand,order.model)}</strong><small>{order.imei ? 'IMEI ' + order.imei : readableSerialNumber(order.serialNumber) ? 'S/N ' + readableSerialNumber(order.serialNumber) : 'Brak IMEI / S/N'}</small></article>
-                        <article><span>Zgłoszenie</span><strong>{order.issueDescription}</strong><small>{order.assignedTechnicianName ? 'Serwisant: ' + order.assignedTechnicianName : 'Serwisant jeszcze nieprzypisany'}</small></article>
-                        <article><span>Termin</span><strong>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL') : 'Nie podano'}</strong><small>{order.repairSummary || 'Opis wykonanej naprawy pojawi się po zakończeniu.'}</small></article>
-                      </section>
-
-                      {effectiveRole === 'USER' && <section className="service-frontdesk-card">
-                        <div><PackageCheck size={18}/><span><strong>Obsługa klienta przy ladzie</strong><small>{order.status === 'READY' ? 'Telefon jest gotowy. Sprawdź dane klienta i wykonaj krok wydania poniżej.' : 'Tu zobaczysz tylko informacje potrzebne do rozmowy z klientem.'}</small></span></div>
-                        <div className="service-frontdesk-meta"><span>{order.statusLabel}</span><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span>{order.warrantyExpiresAt&&<span>Gwarancja do {new Date(order.warrantyExpiresAt).toLocaleDateString('pl-PL')}</span>}</div>
-                      </section>}
-
                       <section className="service-workspace-card service-stage-card service-stage-guided">
                         <div className="service-process-heading">
-                          <div className="service-process-step"><span>KROK {Math.min(stageIndex+1,stageSteps.length)} Z {stageSteps.length}</span><strong>{order.workflow?.nextAction || 'Sprawdź zlecenie.'}</strong></div>
+                          <div className="service-process-step">
+                            <span>KROK {Math.min(visibleStageIndex+1,visibleStageSteps.length)} Z {visibleStageSteps.length}</span>
+                            <strong>{visibleStageTitle}</strong>
+                            <small>{visibleStageDescription}</small>
+                          </div>
                           <div className="service-process-location"><MapPin size={14}/><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span></div>
                         </div>
                         <div className="service-stage-overview">
-                          <div className="service-stage-progress"><span style={{width:`${order.workflow?.progressPercent ?? 10}%`}}/></div>
-                          <div className="service-repair-stage-rail service-repair-stage-rail-compact">
-                            {stageSteps.map((label,index)=><span key={label} className={index<stageIndex?'done':index===stageIndex?'current':index===stageIndex+1?'next':''}>{label}</span>)}
+                          <div className="service-stage-progress"><span style={{width:`${visibleStageProgress}%`}}/></div>
+                          <div className={`service-repair-stage-rail service-repair-stage-rail-compact ${isFrontdesk?'service-frontdesk-stage-rail':''}`}>
+                            {visibleStageSteps.map((label,index)=><span key={label} className={index<visibleStageIndex?'done':index===visibleStageIndex?'current':index===visibleStageIndex+1?'next':''}>{label}</span>)}
                           </div>
                         </div>
 
@@ -1454,12 +1455,16 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
                         {!order.openTransfer&&order.returnRequired&&order.status==='REPAIR_DONE'&&<div className="service-process-logistics">
                           <div><RotateCcw size={18}/><span><strong>Naprawa zakończona poza punktem macierzystym</strong><small>Teraz odeślij telefon. Po przyjęciu w punkcie macierzystym ServiceOS pokaże krok z gwarancją i odbiorem.</small></span></div>
-                          {canTransferHere&&canEditStatus
+                          {canTransferHere
                             ? <button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}>Odeślij do punktu macierzystego</button>
                             : <small>Zwrot rozpoczyna osoba pracująca w punkcie, w którym telefon znajduje się teraz.</small>}
                         </div>}
 
-                        {!order.openTransfer&&order.handlingMode!=='TRANSFER_ONLY'&&<div className="service-stage-actions">
+                        {isFrontdesk&&!order.openTransfer&&order.status==='RECEIVED'&&canTransferHere&&<div className="service-stage-actions service-frontdesk-stage-action">
+                          <button type="button" className="button primary service-stage-primary" onClick={()=>document.getElementById('service-logistics-'+order.id)?.scrollIntoView({behavior:'smooth',block:'start'})}><Truck size={14}/> Przekaż telefon do serwisu</button>
+                          <small>Niżej wybierzesz punkt, do którego ma pojechać telefon.</small>
+                        </div>}
+                                                {!order.openTransfer&&order.handlingMode!=='TRANSFER_ONLY'&&<div className="service-stage-actions">
                           {primaryStageAction && (canEditOrderHere || (primaryStageAction.status==='COMPLETED' && canCompletePickupHere)) && <button
                             type="button"
                             className="button primary service-stage-primary"
@@ -1485,6 +1490,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           </details>}
                         </div>}
                       </section>
+
+                      <section className="service-order-keyfacts">
+                        <article><span>Klient</span><strong>{order.customerName}</strong><small>{order.customerPhone || order.customerEmail || 'Brak kontaktu'}</small></article>
+                        <article><span>Telefon</span><strong>{formatDeviceLabel(order.brand,order.model)}</strong><small>{order.imei ? 'IMEI ' + order.imei : readableSerialNumber(order.serialNumber) ? 'S/N ' + readableSerialNumber(order.serialNumber) : 'Brak IMEI / S/N'}</small></article>
+                        <article><span>Zgłoszenie</span><strong>{order.issueDescription}</strong><small>{order.assignedTechnicianName ? 'Serwisant: ' + order.assignedTechnicianName : 'Serwisant jeszcze nieprzypisany'}</small></article>
+                        <article><span>Termin</span><strong>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL') : 'Nie podano'}</strong><small>{order.repairSummary || 'Opis wykonanej naprawy pojawi się po zakończeniu.'}</small></article>
+                      </section>
+
+                      {effectiveRole === 'USER' && <section className="service-frontdesk-card">
+                        <div><PackageCheck size={18}/><span><strong>Obsługa klienta przy ladzie</strong><small>{order.status === 'READY' ? 'Telefon jest gotowy. Sprawdź dane klienta i wykonaj krok wydania poniżej.' : 'Tu zobaczysz tylko informacje potrzebne do rozmowy z klientem.'}</small></span></div>
+                        <div className="service-frontdesk-meta"><span>{order.statusLabel}</span><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span>{order.warrantyExpiresAt&&<span>Gwarancja do {new Date(order.warrantyExpiresAt).toLocaleDateString('pl-PL')}</span>}</div>
+                      </section>}
 
                       {canUseOrderFinance && ['WAITING_PARTS','IN_REPAIR'].includes(order.status) && (
                         <section className="service-stage-task-card">
