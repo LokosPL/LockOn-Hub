@@ -383,6 +383,51 @@ jobs:
       - name: Build renderer
         run: npm run build:web
 
+      - name: Verify meetings authorization and dashboard contracts
+        shell: pwsh
+        run: |
+          $api = Get-Content functions/lockon-api.mjs -Raw
+          @(
+            "MEETING_HOST_ROLES = new Set(['OWNER', 'BOSS'])",
+            "url.pathname==='/meetings'",
+            "url.pathname==='/meetings/audience-options'",
+            "MEETING_CREATE_FORBIDDEN",
+            "MEETING_FORBIDDEN",
+            "MEETING_HOST_REQUIRED",
+            "meeting_registrations",
+            "meeting_attendance",
+            "meeting_events"
+          ) | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing meeting backend contract: $_" }
+          }
+          $migration = Get-Content database/migrations/2026-09-23-v100020-meetings.sql -Raw
+          @(
+            "CREATE TABLE IF NOT EXISTS meetings",
+            "CREATE TABLE IF NOT EXISTS meeting_audience_points",
+            "CREATE TABLE IF NOT EXISTS meeting_audience_users",
+            "CREATE TABLE IF NOT EXISTS meeting_registrations",
+            "CREATE TABLE IF NOT EXISTS meeting_attendance",
+            "CREATE TABLE IF NOT EXISTS meeting_events"
+          ) | ForEach-Object {
+            if (-not $migration.Contains($_)) { throw "Missing meeting schema contract: $_" }
+          }
+          $meetingUi = Get-Content src/components/MeetingCenter.tsx -Raw
+          @(
+            "SPOTKANIA PRACOWNIKÓW",
+            "Utwórz spotkanie",
+            "Zapisz się",
+            "Wypisz się",
+            "Rozpocznij",
+            "allowParticipantAudio",
+            "allowParticipantScreenShare"
+          ) | ForEach-Object {
+            if (-not $meetingUi.Contains($_)) { throw "Missing meeting UI contract: $_" }
+          }
+          $dashboard = Get-Content src/pages/Dashboard.tsx -Raw
+          if (-not $dashboard.Contains("<MeetingCenter role={role} currentUserId={currentUserId}/>")) {
+            throw "Start dashboard must render MeetingCenter."
+          }
+
       - name: Build self-contained packaged API
         run: npm run build:server
 
