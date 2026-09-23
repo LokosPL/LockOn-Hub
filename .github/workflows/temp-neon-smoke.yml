@@ -249,6 +249,156 @@ jobs:
 
           echo "Role matrix passed: OWNER, BOSS, COORDINATOR, TECHNICIAN, USER, SUPPORT."
 
+      - name: Temp USER front-desk service E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
+          user_point="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.activePointId||d.points?.[0]?.id||'')")"
+          owner_token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
+          [ -n "$user_point" ]
+
+          user_api() {
+            local method="$1" path="$2" body="${3:-}"
+            if [ -n "$body" ]; then
+              curl --silent --show-error --fail-with-body --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data "$body"
+            else
+              curl --silent --show-error --fail-with-body --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $user_token"
+            fi
+          }
+
+          owner_api() {
+            local method="$1" path="$2" body="${3:-}"
+            if [ -n "$body" ]; then
+              curl --silent --show-error --fail-with-body --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data "$body"
+            else
+              curl --silent --show-error --fail-with-body --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $owner_token"
+            fi
+          }
+
+          user_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$user_point")" > user-active-point.json
+          user_api GET /service/service-points > user-service-points.json
+          destination="$(node - <<'NODE' "$user_point"
+          const points=require('./user-service-points.json'), current=process.argv[2];
+          const destination=points.find((p)=>p.id!==current && (p.effectiveAcceptsExternalRepairs||p.acceptsExternalRepairs||p.effectiveServiceEnabled||p.serviceEnabled));
+          if(!destination) throw new Error('USER front-desk E2E needs a second service point');
+          process.stdout.write(destination.id);
+          NODE
+          )"
+
+          suffix="user-frontdesk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          node - <<'NODE' "$suffix" > user-intake-body.json
+          const suffix=process.argv[2];
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'USER '+suffix,
+            email:suffix+'@invalid.test',
+            phone:'+48123123123',
+            brand:'LockOn',
+            model:'USER FrontDesk',
+            deviceNotes:'USER front-desk TEMP E2E',
+            issueDescription:'Test przyjęcia telefonu przez rolę USER.',
+            orderType:'REPAIR',
+            estimatedCost:199.99
+          }));
+          NODE
+          user_api POST /service/orders "$(cat user-intake-body.json)" > user-intake.json
+          user_order_id="$(node -e "const d=require('./user-intake.json');if(!d.order?.id)throw new Error('USER intake failed');process.stdout.write(d.order.id)")"
+          user_customer_id="$(node -e "const d=require('./user-intake.json');if(!d.customer?.id)throw new Error('USER intake customer missing');process.stdout.write(d.customer.id)")"
+
+          user_api POST "/customer-accounts/$user_customer_id/notification-preferences" '{"serviceUpdates":false,"readyForPickup":true,"quoteUpdates":false,"messages":true}' > user-notification-prefs.json
+          node - <<'NODE'
+          const d=require('./user-notification-prefs.json');
+          if(d.preferences?.serviceUpdates!==false||d.preferences?.readyForPickup!==true||d.preferences?.quoteUpdates!==false||d.preferences?.messages!==true){
+            throw new Error('USER could not persist customer notification preferences');
+          }
+          NODE
+
+          user_api POST "/service/orders/$user_order_id/transfer" "$(node -e "process.stdout.write(JSON.stringify({kind:'OUTBOUND_SERVICE',toPointId:process.argv[1],note:'USER outbound TEMP E2E'}))" "$destination")" > user-outbound.json
+          node - <<'NODE' "$user_point" "$destination"
+          const d=require('./user-outbound.json'), from=process.argv[2], to=process.argv[3];
+          if(d.transfer?.status!=='IN_TRANSIT'||d.transfer?.fromPointId!==from||d.transfer?.toPointId!==to)throw new Error('USER could not send device to another point');
+          NODE
+
+          owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$destination")" > owner-user-destination.json
+          node - <<'NODE' "$suffix" > user-incoming-body.json
+          const suffix=process.argv[2];
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'INCOMING '+suffix,
+            email:'incoming-'+suffix+'@invalid.test',
+            phone:'+48123123124',
+            brand:'LockOn',
+            model:'Incoming USER',
+            deviceNotes:'Incoming transfer for USER TEMP E2E',
+            issueDescription:'Test ręcznego przyjęcia przekazania przez USER.',
+            orderType:'REPAIR',
+            estimatedCost:179.99
+          }));
+          NODE
+          owner_api POST /service/orders "$(cat user-incoming-body.json)" > user-incoming-order.json
+          incoming_order_id="$(node -e "const d=require('./user-incoming-order.json');process.stdout.write(d.order.id)")"
+          owner_api POST "/service/orders/$incoming_order_id/transfer" "$(node -e "process.stdout.write(JSON.stringify({kind:'OUTBOUND_SERVICE',toPointId:process.argv[1],note:'Incoming to USER point'}))" "$user_point")" > user-incoming-transfer.json
+          incoming_transfer_id="$(node -e "const d=require('./user-incoming-transfer.json');process.stdout.write(d.transfer.id)")"
+
+          user_api POST "/service/transfers/$incoming_transfer_id/status" '{"status":"DELIVERED","note":"USER potwierdza dostarczenie"}' > user-delivered.json
+          user_api POST "/service/transfers/$incoming_transfer_id/status" '{"status":"ACCEPTED","note":"USER przyjął telefon"}' > user-accepted.json
+          node -e "const d=require('./user-accepted.json');if(d.transfer?.status!=='ACCEPTED')throw new Error('USER manual transfer acceptance failed')"
+
+          owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$destination")" > /dev/null
+          node - <<'NODE' "$suffix" > user-scan-body.json
+          const suffix=process.argv[2];
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'SCAN '+suffix,
+            email:'scan-'+suffix+'@invalid.test',
+            phone:'+48123123125',
+            brand:'LockOn',
+            model:'Scan USER',
+            deviceNotes:'Scan acceptance for USER TEMP E2E',
+            issueDescription:'Test przyjęcia skanem przez USER.',
+            orderType:'REPAIR',
+            estimatedCost:189.99
+          }));
+          NODE
+          owner_api POST /service/orders "$(cat user-scan-body.json)" > user-scan-order.json
+          scan_order_id="$(node -e "const d=require('./user-scan-order.json');process.stdout.write(d.order.id)")"
+          owner_api POST "/service/orders/$scan_order_id/service-card" '{"printMode":"ONLINE_ONLY"}' > user-scan-card.json
+          scan_code="$(node -e "const d=require('./user-scan-card.json');if(!d.staffScanCode)throw new Error('Missing scan code');process.stdout.write(d.staffScanCode)")"
+          owner_api POST "/service/orders/$scan_order_id/transfer" "$(node -e "process.stdout.write(JSON.stringify({kind:'OUTBOUND_SERVICE',toPointId:process.argv[1],note:'Scan incoming to USER'}))" "$user_point")" > user-scan-transfer.json
+          user_api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$scan_code")" > user-scan-accepted.json
+          node -e "const d=require('./user-scan-accepted.json');if(d.scanAction!=='SERVICE_ACCEPTED')throw new Error('USER scan acceptance failed')"
+
+          owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$user_point")" > /dev/null
+          node - <<'NODE' "$suffix" > user-pickup-body.json
+          const suffix=process.argv[2];
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'PICKUP '+suffix,
+            email:'pickup-'+suffix+'@invalid.test',
+            phone:'+48123123126',
+            brand:'LockOn',
+            model:'Pickup USER',
+            deviceNotes:'Pickup by USER TEMP E2E',
+            issueDescription:'Test wydania telefonu klientowi przez USER.',
+            orderType:'REPAIR',
+            estimatedCost:209.99
+          }));
+          NODE
+          owner_api POST /service/orders "$(cat user-pickup-body.json)" > user-pickup-order.json
+          pickup_order_id="$(node -e "const d=require('./user-pickup-order.json');process.stdout.write(d.order.id)")"
+          owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"DIAGNOSIS","note":"CI USER pickup"}' > /dev/null
+          owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"IN_REPAIR","note":"CI USER pickup"}' > /dev/null
+          owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"REPAIR_DONE","note":"CI USER pickup"}' > /dev/null
+          owner_api POST "/service/orders/$pickup_order_id/warranty" '{"months":3,"repairSummary":"Naprawa testowa USER front-desk"}' > /dev/null
+          owner_api POST "/service/orders/$pickup_order_id/warranty-card" '{}' > /dev/null
+          owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"READY","note":"Gotowe do wydania przez USER"}' > user-pickup-ready.json
+          user_api POST "/service/orders/$pickup_order_id/status" '{"status":"COMPLETED","note":"Wydano klientowi przez USER"}' > user-pickup-completed.json
+          node -e "const d=require('./user-pickup-completed.json');if(d.order?.status!=='COMPLETED')throw new Error('USER pickup completion failed')"
+
+          echo "USER front-desk E2E passed: intake, notification choice, outbound, manual accept, scan accept, pickup."
+
       - name: Temp service intake, PDF and logistics E2E
         shell: bash
         run: |
