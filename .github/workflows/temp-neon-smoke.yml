@@ -534,21 +534,17 @@ jobs:
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/me/active-point"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$point_id")" > complaint-point.json
 
           suffix="cmp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          imei="$(printf '870000%09d' "$((GITHUB_RUN_ID % 1000000000))")"
-          imei="${imei:0:15}"
 
-          node - <<'NODE' "$suffix" "$imei" > complaint-original-body.json
-          const [suffix,imei]=process.argv.slice(2);
+          node - <<'NODE' "$suffix" > complaint-original-body.json
+          const [suffix]=process.argv.slice(2);
           process.stdout.write(JSON.stringify({
             firstName:'CI',
             lastName:'Reklamacja '+suffix,
             email:'complaint-'+suffix+'@invalid.test',
             phone:'+48111222333',
             brand:'LockOn',
-            model:'Complaint E2E',
-            imei,
-            serialNumber:'CMP-'+suffix,
-            deviceNotes:'Urządzenie bazowe reklamacji TEMP E2E.',
+            model:'Complaint E2E bez identyfikatora',
+            deviceNotes:'Urządzenie bazowe reklamacji TEMP E2E bez IMEI i numeru seryjnego.',
             issueDescription:'Naprawa bazowa TEMP przed reklamacją.',
             orderType:'REPAIR'
           }));
@@ -556,6 +552,8 @@ jobs:
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data @complaint-original-body.json > complaint-original.json
           original_id="$(node -e "const d=require('./complaint-original.json');if(!d.order?.id)throw new Error('Original repair missing');process.stdout.write(d.order.id)")"
           original_number="$(node -e "const d=require('./complaint-original.json');process.stdout.write(String(d.order.orderNumber||''))")"
+          original_customer_id="$(node -e "const d=require('./complaint-original.json');process.stdout.write(String(d.order.customerId||''))")"
+          original_device_id="$(node -e "const d=require('./complaint-original.json');process.stdout.write(String(d.order.deviceId||''))")"
 
           curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/orders/search?q=$(node -p "encodeURIComponent(process.argv[1])" "$original_number")"             --header "Authorization: Bearer $token" > complaint-search.json
           node - <<'NODE' "$original_id"
@@ -563,17 +561,15 @@ jobs:
           if(!rows.some(x=>x.id===originalId)) throw new Error('Order search did not find original repair');
           NODE
 
-          node - <<'NODE' "$suffix" "$imei" "$original_id" > complaint-body.json
-          const [suffix,imei,originalOrderId]=process.argv.slice(2);
+          node - <<'NODE' "$suffix" "$original_id" > complaint-body.json
+          const [suffix,originalOrderId]=process.argv.slice(2);
           process.stdout.write(JSON.stringify({
             firstName:'CI',
             lastName:'Reklamacja '+suffix,
             email:'complaint-'+suffix+'@invalid.test',
             phone:'+48111222333',
             brand:'LockOn',
-            model:'Complaint E2E',
-            imei,
-            serialNumber:'CMP-'+suffix,
+            model:'Te pola nie powinny tworzyć nowego urządzenia',
             deviceNotes:'Syntetyczna reklamacja TEMP E2E.',
             issueDescription:'Reklamacja TEMP: weryfikacja trybu COMPLAINT_FLOW.',
             orderType:'COMPLAINT',
@@ -583,11 +579,13 @@ jobs:
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data @complaint-body.json > complaint.json
 
-          node - <<'NODE' "$original_id"
-          const d=require('./complaint.json'), originalId=process.argv[2];
+          node - <<'NODE' "$original_id" "$original_customer_id" "$original_device_id"
+          const d=require('./complaint.json'), originalId=process.argv[2], customerId=process.argv[3], deviceId=process.argv[4];
           if(!d.order?.id) throw new Error('Complaint order was not created');
           if(d.order.orderType!=='COMPLAINT') throw new Error('Complaint orderType mismatch');
           if(d.order.originalOrderId!==originalId) throw new Error('Complaint originalOrderId mismatch');
+          if(d.order.customerId!==customerId) throw new Error('Complaint did not reuse original customer');
+          if(d.order.deviceId!==deviceId) throw new Error('Complaint did not reuse original device');
           if(d.order.handlingMode!=='COMPLAINT_FLOW') throw new Error('Complaint did not derive COMPLAINT_FLOW');
           if(d.serviceCard?.required!==true) throw new Error('Complaint did not require service card');
           NODE
