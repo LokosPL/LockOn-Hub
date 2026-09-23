@@ -1,0 +1,44 @@
+name: Update LiveKit lockfile
+
+on:
+  push:
+    branches: ["fix/user-frontdesk-flow-1.0.0.20"]
+    paths:
+      - "package.json"
+      - ".github/workflows/update-lockfile-livekit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-livekit-lockfile
+  cancel-in-progress: true
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/user-frontdesk-flow-1.0.0.20
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Generate exact npm lockfile
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Commit lockfile when changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "chore: lock LiveKit dependencies"
+          git push origin HEAD:fix/user-frontdesk-flow-1.0.0.20
