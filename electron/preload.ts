@@ -55,6 +55,18 @@ contextBridge.exposeInMainWorld('lockOn', {
     getDashboard: () => ipcRenderer.invoke('data:getDashboard'),
     getWeather: (city: string) => ipcRenderer.invoke('data:getWeather', city)
   },
+  meetings: {
+    list: () => ipcRenderer.invoke('meetings:list'),
+    getAudienceOptions: () => ipcRenderer.invoke('meetings:getAudienceOptions'),
+    get: (meetingId: string) => ipcRenderer.invoke('meetings:get', meetingId),
+    create: (payload: unknown) => ipcRenderer.invoke('meetings:create', payload),
+    register: (meetingId: string) => ipcRenderer.invoke('meetings:register', meetingId),
+    unregister: (meetingId: string) => ipcRenderer.invoke('meetings:unregister', meetingId),
+    start: (meetingId: string) => ipcRenderer.invoke('meetings:start', meetingId),
+    end: (meetingId: string) => ipcRenderer.invoke('meetings:end', meetingId),
+    cancel: (meetingId: string) => ipcRenderer.invoke('meetings:cancel', meetingId),
+    getAttendance: (meetingId: string) => ipcRenderer.invoke('meetings:getAttendance', meetingId)
+  },
   service: {
     searchCustomers: (query: string) => ipcRenderer.invoke('service:searchCustomers', query),
     searchOrders: (query: string) => ipcRenderer.invoke('service:searchOrders', query),
