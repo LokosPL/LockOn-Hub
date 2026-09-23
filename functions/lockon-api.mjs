@@ -857,17 +857,13 @@ const deriveOrderWorkflow = (order, transfers, openTransfer, currentPointId, hom
 };
 
 const sortOrdersByWorkflow = (orders) => [...orders].sort((a,b) => {
-  const closedA = CLOSED_ORDER_STATUSES.has(String(a.status || '').toUpperCase());
-  const closedB = CLOSED_ORDER_STATUSES.has(String(b.status || '').toUpperCase());
-  if (closedA !== closedB) return closedA ? 1 : -1;
-  if (closedA && closedB) {
-    const closedAtA = new Date(a.completedAt || a.updatedAt || a.createdAt || 0).getTime();
-    const closedAtB = new Date(b.completedAt || b.updatedAt || b.createdAt || 0).getTime();
-    return closedAtA - closedAtB;
-  }
-  const receivedA = new Date(a.receivedAt || a.createdAt || a.updatedAt || 0).getTime();
-  const receivedB = new Date(b.receivedAt || b.createdAt || b.updatedAt || 0).getTime();
-  return receivedB - receivedA;
+  const rankA = Number(a.workflow?.sortRank ?? 80);
+  const rankB = Number(b.workflow?.sortRank ?? 80);
+  if (rankA !== rankB) return rankA - rankB;
+  const dueA = a.workflow?.dueAt ? new Date(a.workflow.dueAt).getTime() : Number.POSITIVE_INFINITY;
+  const dueB = b.workflow?.dueAt ? new Date(b.workflow.dueAt).getTime() : Number.POSITIVE_INFINITY;
+  if (dueA !== dueB) return dueA - dueB;
+  return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime();
 });
 
 const loadTransfersForOrders = async (orderIds) => {
@@ -1132,13 +1128,13 @@ const listVisibleOrders = async (user,paging=null) => {
   const offset=Number.isFinite(requestedOffset)?Math.max(0,Math.min(Math.trunc(requestedOffset),5000)):0;
   if (GLOBAL_ROLES.has(user.role_code)) {
     const { rows } = await q(
-      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY CASE WHEN s.status IN ('COMPLETED','CANCELLED','REJECTED') THEN 1 ELSE 0 END ASC,CASE WHEN s.status NOT IN ('COMPLETED','CANCELLED','REJECTED') THEN s.received_at END DESC NULLS LAST,CASE WHEN s.status IN ('COMPLETED','CANCELLED','REJECTED') THEN COALESCE(s.completed_at,s.updated_at,s.created_at) END ASC NULLS LAST,s.created_at DESC LIMIT $1 OFFSET $2",
+      "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id ORDER BY s.updated_at DESC,s.created_at DESC LIMIT $1 OFFSET $2",
       [limit,offset]
     );
     return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY CASE WHEN s.status IN ('COMPLETED','CANCELLED','REJECTED') THEN 1 ELSE 0 END ASC,CASE WHEN s.status NOT IN ('COMPLETED','CANCELLED','REJECTED') THEN s.received_at END DESC NULLS LAST,CASE WHEN s.status IN ('COMPLETED','CANCELLED','REJECTED') THEN COALESCE(s.completed_at,s.updated_at,s.created_at) END ASC NULLS LAST,s.created_at DESC LIMIT $2 OFFSET $3",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT $2 OFFSET $3",
     [user.id,limit,offset]
   );
   return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
@@ -4812,48 +4808,39 @@ const route = async (request) => {
     if(imei&&!/^\d{14,16}$/.test(imei))return json(request,{error:'IMEI',message:'IMEI powinien zawierać 14–16 cyfr.'},400);
     const client=await pool.connect();let reused=false,reusedDevice=false;try{
       await client.query('BEGIN');
-      let customer=null;
-      let device=null;
-      let did='';
-      if(originalOrder){
-        customer=(await client.query('SELECT * FROM customers WHERE id=$1 LIMIT 1',[originalOrder.customer_id])).rows[0]||null;
-        device=(await client.query('SELECT * FROM devices WHERE id=$1 AND customer_id=$2 LIMIT 1',[originalOrder.device_id,originalOrder.customer_id])).rows[0]||null;
-        if(!customer||!device){
-          throw Object.assign(new Error('Nie udało się odtworzyć klienta lub urządzenia z wcześniejszego zlecenia.'),{status:409,code:'COMPLAINT_ORIGINAL_DATA_MISSING'});
+      let customer=(await client.query("SELECT * FROM customers WHERE ($1<>'' AND lower(email)=lower($1)) OR ($2<>'' AND phone_normalized=$2) ORDER BY updated_at DESC LIMIT 1",[email,phoneNorm])).rows[0];
+      if(customer){reused=true;await client.query("UPDATE customers SET first_name=$1,last_name=$2,email=COALESCE(NULLIF($3,''),email),phone=COALESCE(NULLIF($4,''),phone),phone_normalized=COALESCE(NULLIF($5,''),phone_normalized),updated_at=now() WHERE id=$6",[firstName,lastName,email,phone,phoneNorm,customer.id]);customer=(await client.query('SELECT * FROM customers WHERE id=$1',[customer.id])).rows[0];}
+      else{
+        const cid=makeId('cst');
+        customer=(await client.query("INSERT INTO customers(id,first_name,last_name,email,phone,phone_normalized,created_by_user_id) VALUES($1,$2,$3,NULLIF($4,''),NULLIF($5,''),NULLIF($6,''),$7) ON CONFLICT DO NOTHING RETURNING *",[cid,firstName,lastName,email,phone,phoneNorm,u.id])).rows[0];
+        if(!customer){
+          reused=true;
+          customer=(await client.query("SELECT * FROM customers WHERE ($1<>'' AND lower(email)=lower($1)) OR ($2<>'' AND phone_normalized=$2) ORDER BY updated_at DESC LIMIT 1",[email,phoneNorm])).rows[0];
+          if(!customer)throw new Error('Nie udało się bezpiecznie rozpoznać istniejącego klienta.');
+          await client.query("UPDATE customers SET first_name=$1,last_name=$2,email=COALESCE(NULLIF($3,''),email),phone=COALESCE(NULLIF($4,''),phone),phone_normalized=COALESCE(NULLIF($5,''),phone_normalized),updated_at=now() WHERE id=$6",[firstName,lastName,email,phone,phoneNorm,customer.id]);
+          customer=(await client.query('SELECT * FROM customers WHERE id=$1',[customer.id])).rows[0];
         }
-        reused=true;
+      }
+      let device=null;
+      if(imei){
+        const byImei=(await client.query("SELECT * FROM devices WHERE imei=$1 ORDER BY updated_at DESC LIMIT 1",[imei])).rows[0];
+        if(byImei&&byImei.customer_id!==customer.id)throw Object.assign(new Error('Urządzenie z tym IMEI jest przypisane do innego klienta.'),{status:409});
+        device=byImei||null;
+      }
+      if(!device&&serialNumber){
+        device=(await client.query("SELECT * FROM devices WHERE customer_id=$1 AND lower(serial_number)=lower($2) ORDER BY updated_at DESC LIMIT 1",[customer.id,serialNumber])).rows[0]||null;
+      }
+      let did='';
+      if(device){
         reusedDevice=true;
         did=device.id;
+        await client.query("UPDATE devices SET brand=COALESCE(NULLIF($1,''),brand),model=COALESCE(NULLIF($2,''),model),imei=COALESCE(NULLIF($3,''),imei),serial_number=COALESCE(NULLIF($4,''),serial_number),notes=$5,updated_at=now() WHERE id=$6",[brandInput,modelInput,imei,serialNumber,deviceNotes,did]);
       }else{
-        customer=(await client.query("SELECT * FROM customers WHERE ($1<>'' AND lower(email)=lower($1)) OR ($2<>'' AND phone_normalized=$2) ORDER BY updated_at DESC LIMIT 1",[email,phoneNorm])).rows[0];
-        if(customer){reused=true;await client.query("UPDATE customers SET first_name=$1,last_name=$2,email=COALESCE(NULLIF($3,''),email),phone=COALESCE(NULLIF($4,''),phone),phone_normalized=COALESCE(NULLIF($5,''),phone_normalized),updated_at=now() WHERE id=$6",[firstName,lastName,email,phone,phoneNorm,customer.id]);customer=(await client.query('SELECT * FROM customers WHERE id=$1',[customer.id])).rows[0];}
-        else{
-          const cid=makeId('cst');
-          customer=(await client.query("INSERT INTO customers(id,first_name,last_name,email,phone,phone_normalized,created_by_user_id) VALUES($1,$2,$3,NULLIF($4,''),NULLIF($5,''),NULLIF($6,''),$7) ON CONFLICT DO NOTHING RETURNING *",[cid,firstName,lastName,email,phone,phoneNorm,u.id])).rows[0];
-          if(!customer){
-            reused=true;
-            customer=(await client.query("SELECT * FROM customers WHERE ($1<>'' AND lower(email)=lower($1)) OR ($2<>'' AND phone_normalized=$2) ORDER BY updated_at DESC LIMIT 1",[email,phoneNorm])).rows[0];
-            if(!customer)throw new Error('Nie udało się bezpiecznie rozpoznać istniejącego klienta.');
-            await client.query("UPDATE customers SET first_name=$1,last_name=$2,email=COALESCE(NULLIF($3,''),email),phone=COALESCE(NULLIF($4,''),phone),phone_normalized=COALESCE(NULLIF($5,''),phone_normalized),updated_at=now() WHERE id=$6",[firstName,lastName,email,phone,phoneNorm,customer.id]);
-            customer=(await client.query('SELECT * FROM customers WHERE id=$1',[customer.id])).rows[0];
-          }
-        }
-        if(imei){
-          const byImei=(await client.query("SELECT * FROM devices WHERE imei=$1 ORDER BY updated_at DESC LIMIT 1",[imei])).rows[0];
-          if(byImei&&byImei.customer_id!==customer.id)throw Object.assign(new Error('Urządzenie z tym IMEI jest przypisane do innego klienta.'),{status:409});
-          device=byImei||null;
-        }
-        if(!device&&serialNumber){
-          device=(await client.query("SELECT * FROM devices WHERE customer_id=$1 AND lower(serial_number)=lower($2) ORDER BY updated_at DESC LIMIT 1",[customer.id,serialNumber])).rows[0]||null;
-        }
-        if(device){
-          reusedDevice=true;
-          did=device.id;
-          await client.query("UPDATE devices SET brand=COALESCE(NULLIF($1,''),brand),model=COALESCE(NULLIF($2,''),model),imei=COALESCE(NULLIF($3,''),imei),serial_number=COALESCE(NULLIF($4,''),serial_number),notes=$5,updated_at=now() WHERE id=$6",[brandInput,modelInput,imei,serialNumber,deviceNotes,did]);
-        }else{
-          did=makeId('dev');
-          await client.query("INSERT INTO devices(id,customer_id,brand,model,imei,serial_number,notes) VALUES($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''))",[did,customer.id,brand,model,imei,serialNumber,deviceNotes]);
-        }
+        did=makeId('dev');
+        await client.query("INSERT INTO devices(id,customer_id,brand,model,imei,serial_number,notes) VALUES($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''))",[did,customer.id,brand,model,imei,serialNumber,deviceNotes]);
+      }
+      if(originalOrder&&(originalOrder.customer_id!==customer.id||originalOrder.device_id!==did)){
+        throw Object.assign(new Error('Wybrane wcześniejsze zlecenie nie pasuje do klienta lub urządzenia reklamacji.'),{status:409,code:'COMPLAINT_ORIGINAL_MISMATCH'});
       }
       const oid=makeId('srv');const order=(await client.query("INSERT INTO service_orders(id,point_id,home_point_id,current_point_id,customer_id,device_id,order_type,original_order_id,handling_mode,issue_description,status,assigned_technician_id,created_by_user_id,estimated_cost,estimated_completion_at) VALUES($1,$2,$2,$2,$3,$4,$5,NULLIF($6,''),$7,$8,'RECEIVED',$9,$10,$11,$12) RETURNING *",[oid,pointId,customer.id,did,orderType,originalOrderId,handlingMode,issue,handlingMode==='TRANSFER_ONLY'?null:assignedTechnicianId,u.id,handlingMode==='TRANSFER_ONLY'?null:estimatedCost,estimatedCompletionAt])).rows[0];
       await client.query("INSERT INTO service_order_status_history(id,service_order_id,from_status,to_status,changed_by_user_id) VALUES($1,$2,NULL,'RECEIVED',$3)",[makeId('hst'),oid,u.id]);
