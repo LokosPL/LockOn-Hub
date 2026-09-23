@@ -76,6 +76,9 @@ export interface MeetingAttendanceItem {
   userId:string; name:string; role?:UserRole|null; registered:boolean; joinCount:number; firstJoinedAt?:string|null;
   lastJoinedAt?:string|null; lastLeftAt?:string|null; present:boolean; totalSeconds:number;
 }
+export interface MeetingJoinCredentials {
+  serverUrl:string; participantToken:string; participantIdentity:string; meeting:MeetingDetail;
+}
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; originalOrderId?:string|null; handlingMode:'STANDARD'|'COMPLAINT_FLOW'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
 export interface ServiceWorkflow {
@@ -244,6 +247,10 @@ declare global {
         end: (meetingId:string) => Promise<{meeting:MeetingDetail}>;
         cancel: (meetingId:string) => Promise<{meeting:MeetingDetail}>;
         getAttendance: (meetingId:string) => Promise<{attendance:MeetingAttendanceItem[]}>;
+        join: (meetingId:string) => Promise<MeetingJoinCredentials>;
+        updateParticipantPermissions: (meetingId:string,userId:string,payload:{canPublishAudio:boolean;canShareScreen:boolean}) => Promise<{ok:true;userId:string;canPublishAudio:boolean;canShareScreen:boolean}>;
+        muteParticipant: (meetingId:string,userId:string,trackSid:string) => Promise<{ok:true}>;
+        removeParticipant: (meetingId:string,userId:string) => Promise<{ok:true}>;
       };
       service: {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
