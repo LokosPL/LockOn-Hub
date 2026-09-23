@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, Clock3, Mic2, MonitorUp, Plus, Radio, UserRound, UsersRound, X } from 'lucide-react';
 import type { MeetingOptions, MeetingSummary, UserRole } from '../types/electron';
+import { MeetingRoom } from './MeetingRoom';
 
 const statusLabel: Record<MeetingSummary['status'], string> = {
   SCHEDULED: 'Zaplanowane',
@@ -23,6 +24,7 @@ export function MeetingsCard({ role }: { role: UserRole }) {
   const [options, setOptions] = useState<MeetingOptions | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
+  const [activeRoom, setActiveRoom] = useState<MeetingSummary | null>(null);
   const [error, setError] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState({
@@ -181,14 +183,16 @@ export function MeetingsCard({ role }: { role: UserRole }) {
                       : <button className="button primary small" disabled={Boolean(busyId)||full} onClick={()=>void perform(meeting.id,'register')}>{full?'Brak miejsc':'Zapisz mnie'}</button>
                   )}
                   {meeting.canManage && meeting.status === 'SCHEDULED' && <><button className="button primary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'start')}>Rozpocznij</button><button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'cancel')}>Anuluj</button></>}
-                  {meeting.canManage && meeting.status === 'LIVE' && <button className="button primary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'end')}>Zakończ</button>}
-                  {!meeting.canManage && meeting.status === 'LIVE' && <span className="meeting-live-note">Spotkanie trwa</span>}
+                  {meeting.status === 'LIVE' && (meeting.canManage || meeting.registeredByMe) && <button className="button primary small" disabled={Boolean(busyId)} onClick={()=>setActiveRoom(meeting)}>Dołącz</button>}
+                  {meeting.canManage && meeting.status === 'LIVE' && <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'end')}>Zakończ</button>}
+                  {!meeting.canManage && meeting.status === 'LIVE' && !meeting.registeredByMe && <span className="meeting-live-note">Zapisz się przed dołączeniem</span>}
                 </div>
               </article>
             );
           })}
         </div>
       )}
+      {activeRoom && <MeetingRoom meeting={activeRoom} onClose={()=>setActiveRoom(null)} />}
     </section>
   );
 }
