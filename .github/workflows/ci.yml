@@ -428,6 +428,43 @@ jobs:
             throw "Start dashboard must render MeetingCenter."
           }
 
+      - name: Verify LiveKit and meeting invitation contracts
+        shell: pwsh
+        run: |
+          $api = Get-Content functions/lockon-api.mjs -Raw
+          @(
+            "LOCKON_LIVEKIT_URL",
+            "signLiveKitJwt",
+            "verifyLiveKitWebhook",
+            "roomJoin:true",
+            "canPublishSources",
+            "/integrations/livekit/webhook",
+            "/join$/",
+            "MutePublishedTrack",
+            "UpdateParticipant",
+            "RemoveParticipant",
+            "meeting_email_outbox",
+            "processMeetingInvitationQueue",
+            "MEETING_INVITE_SENDER_USER_ID"
+          ) | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing LiveKit/meeting invite contract: $_" }
+          }
+          $main = Get-Content electron/main.ts -Raw
+          @("desktopCapturer","setDisplayMediaRequestHandler","permission==='media'","mediaTypes.every((type)=>type==='audio')") | ForEach-Object {
+            if (-not $main.Contains($_)) { throw "Missing secure Electron media permission contract: $_" }
+          }
+          $room = Get-Content src/components/MeetingRoom.tsx -Raw
+          @("setMicrophoneEnabled","setScreenShareEnabled","listDisplaySources","selectDisplaySource","muteParticipant","updateParticipantPermissions","removeParticipant") | ForEach-Object {
+            if (-not $room.Contains($_)) { throw "Missing in-app meeting room contract: $_" }
+          }
+          $inviteMigration = Get-Content database/migrations/2026-09-23-v100020-meeting-invites.sql -Raw
+          @("CREATE TABLE IF NOT EXISTS meeting_email_outbox","dedupe_key text NOT NULL UNIQUE","meeting_email_outbox_retry_idx") | ForEach-Object {
+            if (-not $inviteMigration.Contains($_)) { throw "Missing meeting invitation outbox contract: $_" }
+          }
+          if ($api.Contains("LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id")) {
+            throw "Customer e-mail sender fallback regression detected."
+          }
+
       - name: Build self-contained packaged API
         run: npm run build:server
 
