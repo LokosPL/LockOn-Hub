@@ -163,11 +163,12 @@ export default function App() {
               pointName={pointName}
               role={effectiveRole!}
               userName={auth.user?.name ?? 'Użytkownik'}
+              currentUserId={auth.user?.id}
               weatherCity={weatherCity}
             />
           )}
           {active === 'administration' && <AdministrationPage focusUserId={focusUserId} />}
-          {active === 'customers' && <CustomerAccountsPage />}
+          {active === 'customers' && <CustomerAccountsPage effectiveRole={effectiveRole!} />}
           {active === 'service' && <ServicePage auth={auth} effectiveRole={effectiveRole!} focusOrderId={focusOrderId} />}
           {active === 'earnings' && <EarningsPage auth={auth} effectiveRole={effectiveRole!} />}
           {active === 'browser' && <BrowserPage />}

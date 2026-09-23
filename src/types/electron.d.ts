@@ -18,7 +18,7 @@ export interface RequestedPoint { pointName: string; city: string; requestedRole
 export interface AuthState {
   configured: boolean; authenticated: boolean; development: boolean; localStarterLoginAllowed: boolean;
   user: AuthUser | null; point: AuthPoint | null; points: AuthPoint[]; role: UserRole | null; status: AccountStatus | null;
-  technicianSplitPercent?:number|null; supportEnabled?:boolean; requestedPoint?: RequestedPoint | null; message?: string;
+  technicianSplitPercent?:number|null; supportEnabled?:boolean; requestedPoint?: RequestedPoint | null; gmailConnected?:boolean; gmailEmail?:string|null; gmailStatus?:string|null; message?: string;
 }
 export interface BrowserState { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean; }
 export interface BrowserBounds { x: number; y: number; width: number; height: number; }
@@ -54,6 +54,34 @@ export interface FinancePayload { entries: RevenueEntry[]; points: FinancePointB
 export interface TechnicianSettlementSettings { configured:boolean; technicianPercent:number|null; bossPercent:number|null; }
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
 export interface WeatherData { city:string; region?:string|null; country?:string|null; temperature:number; apparentTemperature:number; minTemperature:number; maxTemperature:number; windSpeed:number; weatherCode:number; condition:string; fetchedAt:string; }
+export type MeetingStatus = 'SCHEDULED'|'LIVE'|'ENDED'|'CANCELLED';
+export type MeetingAudienceType = 'ALL'|'POINTS'|'USERS';
+export interface MeetingSummary {
+  id:string; title:string; description:string; startsAt:string; expectedDurationMinutes:number; status:MeetingStatus;
+  audienceType:MeetingAudienceType; allowParticipantAudio:boolean; allowParticipantScreenShare:boolean; maxParticipants:number;
+  hostUserId:string; hostName:string; registeredCount:number; registered:boolean; canHost:boolean;
+  startedAt?:string|null; endedAt?:string|null; cancelledAt?:string|null; createdAt:string; updatedAt:string;
+}
+export interface MeetingAudienceOptionPoint { id:string; name:string; city:string; }
+export interface MeetingAudienceOptionUser { id:string; name:string; email?:string|null; role?:UserRole|null; }
+export interface MeetingAudienceOptions { points:MeetingAudienceOptionPoint[]; users:MeetingAudienceOptionUser[]; }
+export interface MeetingDetail extends MeetingSummary {
+  audience?:{points:MeetingAudienceOptionPoint[];users:Array<{id:string;name:string;role?:UserRole|null}>}|null;
+}
+export interface MeetingCreateInput {
+  title:string; description?:string; startsAt:string; expectedDurationMinutes:number; audienceType:MeetingAudienceType;
+  pointIds?:string[]; userIds?:string[]; allowParticipantAudio:boolean; allowParticipantScreenShare:boolean; maxParticipants:number;
+}
+export interface MeetingAttendanceItem {
+  userId:string; name:string; role?:UserRole|null; registered:boolean; joinCount:number; firstJoinedAt?:string|null;
+  lastJoinedAt?:string|null; lastLeftAt?:string|null; present:boolean; totalSeconds:number;
+}
+export interface MeetingJoinCredentials {
+  serverUrl:string; participantToken:string; participantIdentity:string; meeting:MeetingDetail;
+}
+export interface MeetingDisplaySource {
+  id:string; name:string; thumbnailDataUrl?:string|null; appIconDataUrl?:string|null;
+}
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; originalOrderId?:string|null; handlingMode:'STANDARD'|'COMPLAINT_FLOW'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
 export interface ServiceWorkflow {
@@ -121,7 +149,7 @@ export interface ServiceTransfer {
   requestedAt:string; shippedAt?:string|null; deliveredAt?:string|null; acceptedAt?:string|null; updatedAt:string;
 }
 export interface ServiceCustomerDetail { customer:ServiceCustomer & {createdAt?:string;updatedAt?:string}; devices:ServiceCustomerDevice[]; orders:ServiceOrderSummary[]; totalVisibleOrders:number; }
-export interface GmailConnectionStatus { connected:boolean; needsReconnect?:boolean; connectionState?:'CONNECTED'|'NOT_CONNECTED'|'REAUTH_REQUIRED'|'TEMPORARY_ERROR'; pointId:string; senderPointId?:string; inherited?:boolean; email?:string; status?:string; lastError?:string|null; connectedAt?:string; checkedAt?:string; recoveredNotifications?:number; }
+export interface GmailConnectionStatus { connected:boolean; needsReconnect?:boolean; connectionState?:'CONNECTED'|'NOT_CONNECTED'|'REAUTH_REQUIRED'|'TEMPORARY_ERROR'|'OWNER_PRIVACY'; pointId:string; senderPointId?:string; inherited?:boolean; email?:string; status?:string; lastError?:string|null; connectedAt?:string; checkedAt?:string; recoveredNotifications?:number; }
 export interface NotificationSettings { pointId:string; automaticEmailEnabled:boolean; notifyStatuses:string[]; senderDisplayName:string; footerText:string; updatedAt?:string; }
 export interface NotificationHistoryItem { id:string; orderId?:string|null; orderNumber?:number|null; recipient:string; status:'PENDING'|'PROCESSING'|'SENT'|'FAILED'|'CANCELLED'; attempts:number; subject?:string|null; providerMessageId?:string|null; lastError?:string|null; availableAt:string; sentAt?:string|null; createdAt:string; updatedAt:string; customerName?:string|null; device?:string|null; }
 export interface GmailTestResult { ok:true; recipient:string; messageId:string; }
@@ -211,6 +239,24 @@ declare global {
         review: (revenueId:string, action:'APPROVE'|'REJECT') => Promise<RevenueEntry>;
       };
       data: { getDashboard: () => Promise<DashboardData>; getWeather: (city:string) => Promise<WeatherData>; };
+      meetings: {
+        list: () => Promise<{meetings:MeetingSummary[]}>;
+        getAudienceOptions: () => Promise<MeetingAudienceOptions>;
+        get: (meetingId:string) => Promise<{meeting:MeetingDetail}>;
+        create: (payload:MeetingCreateInput) => Promise<{meeting:MeetingDetail}>;
+        register: (meetingId:string) => Promise<{meeting:MeetingDetail}>;
+        unregister: (meetingId:string) => Promise<{meeting:MeetingDetail}>;
+        start: (meetingId:string) => Promise<{meeting:MeetingDetail}>;
+        end: (meetingId:string) => Promise<{meeting:MeetingDetail}>;
+        cancel: (meetingId:string) => Promise<{meeting:MeetingDetail}>;
+        getAttendance: (meetingId:string) => Promise<{attendance:MeetingAttendanceItem[]}>;
+        join: (meetingId:string) => Promise<MeetingJoinCredentials>;
+        updateParticipantPermissions: (meetingId:string,userId:string,payload:{canPublishAudio?:boolean;canShareScreen?:boolean}) => Promise<{ok:true;userId:string;canPublishAudio:boolean;canShareScreen:boolean}>;
+        muteParticipant: (meetingId:string,userId:string,trackSid:string) => Promise<{ok:true}>;
+        removeParticipant: (meetingId:string,userId:string) => Promise<{ok:true}>;
+        listDisplaySources: () => Promise<MeetingDisplaySource[]>;
+        selectDisplaySource: (sourceId:string) => Promise<{ok:true}>;
+      };
       service: {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
         searchOrders: (query:string) => Promise<ServiceOrderSummary[]>;

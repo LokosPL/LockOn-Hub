@@ -142,6 +142,40 @@ jobs:
           if ($central.Contains("if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))")) {
             throw "Legacy service-scan guard still blocks USER from receiving transferred devices."
           }
+
+          @(
+            "FRONTDESK_STEPS = ['Przyjęto','Wyślij do serwisu','W serwisie','Naprawa','Wraca do punktu','Do odbioru','Wydany']",
+            "CO TERAZ",
+            "Gdzie jest telefon i co dalej?",
+            "Historia serwisu",
+            "relativeTimePl",
+            "open={effectiveRole==='USER'?true:undefined}"
+          ) | ForEach-Object {
+            if (-not $service.Contains($_)) { throw "Missing simple USER service journey contract: $_" }
+          }
+
+          $roles = Get-Content src/config/roles.ts -Raw
+          if (-not $roles.Contains("navigation: ['dashboard', 'service', 'customers', 'browser', 'settings']")) {
+            throw "USER must have the point-scoped customer workspace in navigation."
+          }
+
+          @(
+            "const frontDesk=effectiveRole==='USER'",
+            "KLIENCI TWOJEGO PUNKTU",
+            "Klienci i ich naprawy",
+            "relativeTimePl"
+          ) | ForEach-Object {
+            if (-not $customer.Contains($_)) { throw "Missing USER customer workspace contract: $_" }
+          }
+
+          @(
+            "const requireReadableOrder",
+            "const serviceView=session.user.role_code==='USER'",
+            "COALESCE(s.home_point_id,s.point_id)"
+          ) | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing home-point read/customer scope contract: $_" }
+          }
+
           $browser = Get-Content src/pages/BrowserPage.tsx -Raw
           @("actionBusy","browser-action-error") | ForEach-Object {
             if (-not $browser.Contains($_)) { throw "Missing browser action guard: $_" }
@@ -242,11 +276,21 @@ jobs:
             "OWNER_PRIVACY",
             "GMAIL_SCOPE_NOT_GRANTED",
             "REFRESH_TOKEN_MISSING",
-            "GMAIL_REUSED_AT_LOGIN",
-            "EXISTING_SERVER_REFRESH_TOKEN",
-            "EXISTING_SENDER_REUSED"
+            "user_gmail_credentials",
+            "SERVER_USER",
+            "EXISTING_USER_SENDER_REUSED",
+            "GMAIL_IDENTITY_MISMATCH",
+            "LEFT JOIN user_gmail_credentials ug ON ug.user_id=n.user_id",
+            "Brak aktywnego Gmaila zalogowanego pracownika."
           ) | ForEach-Object {
             if (-not $central.Contains($_)) { throw "Missing central unified Gmail contract: $_" }
+          }
+          if ($central.Contains("ORDER BY CASE WHEN point_id=$1 THEN 0 ELSE 1 END")) {
+            throw "Service e-mail sender must never fall back to another point/user Gmail."
+          }
+          $migration = Get-Content database/migrations/2026-09-23-v100020-user-gmail-per-user.sql -Raw
+          @("CREATE TABLE IF NOT EXISTS user_gmail_credentials","ON CONFLICT(user_id) DO NOTHING","lower(pe.sender_email)=lower(u.email)") | ForEach-Object {
+            if (-not $migration.Contains($_)) { throw "Missing safe per-user Gmail migration contract: $_" }
           }
 
           $gmail = Get-Content electron/gmailAuth.ts -Raw
@@ -338,6 +382,95 @@ jobs:
 
       - name: Build renderer
         run: npm run build:web
+
+      - name: Verify meetings authorization and dashboard contracts
+        shell: pwsh
+        run: |
+          $api = Get-Content functions/lockon-api.mjs -Raw
+          @(
+            "MEETING_HOST_ROLES = new Set(['OWNER', 'BOSS'])",
+            "url.pathname==='/meetings'",
+            "url.pathname==='/meetings/audience-options'",
+            "MEETING_CREATE_FORBIDDEN",
+            "MEETING_FORBIDDEN",
+            "MEETING_HOST_REQUIRED",
+            "meeting_registrations",
+            "meeting_attendance",
+            "meeting_events"
+          ) | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing meeting backend contract: $_" }
+          }
+          $migration = Get-Content database/migrations/2026-09-23-v100020-meetings.sql -Raw
+          @(
+            "CREATE TABLE IF NOT EXISTS meetings",
+            "CREATE TABLE IF NOT EXISTS meeting_audience_points",
+            "CREATE TABLE IF NOT EXISTS meeting_audience_users",
+            "CREATE TABLE IF NOT EXISTS meeting_registrations",
+            "CREATE TABLE IF NOT EXISTS meeting_attendance",
+            "CREATE TABLE IF NOT EXISTS meeting_events"
+          ) | ForEach-Object {
+            if (-not $migration.Contains($_)) { throw "Missing meeting schema contract: $_" }
+          }
+          $meetingUi = Get-Content src/components/MeetingCenter.tsx -Raw
+          @(
+            "SPOTKANIA PRACOWNIKÓW",
+            "Utwórz spotkanie",
+            "Zapisz się",
+            "Wypisz się",
+            "Rozpocznij",
+            "allowParticipantAudio",
+            "allowParticipantScreenShare"
+          ) | ForEach-Object {
+            if (-not $meetingUi.Contains($_)) { throw "Missing meeting UI contract: $_" }
+          }
+          $dashboard = Get-Content src/pages/Dashboard.tsx -Raw
+          if (-not $dashboard.Contains("<MeetingCenter role={role} currentUserId={currentUserId}/>")) {
+            throw "Start dashboard must render MeetingCenter."
+          }
+
+      - name: Verify LiveKit and meeting invitation contracts
+        shell: pwsh
+        run: |
+          $api = Get-Content functions/lockon-api.mjs -Raw
+          @(
+            "LOCKON_LIVEKIT_URL",
+            "signLiveKitJwt",
+            "verifyLiveKitWebhook",
+            "roomJoin:true",
+            "canPublishSources",
+            "/integrations/livekit/webhook",
+            "/join$/",
+            "MutePublishedTrack",
+            "UpdateParticipant",
+            "RemoveParticipant",
+            "meeting_email_outbox",
+            "processMeetingInvitationQueue",
+            "MEETING_INVITE_SENDER_USER_ID"
+          ) | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing LiveKit/meeting invite contract: $_" }
+          }
+          $main = Get-Content electron/main.ts -Raw
+          @("desktopCapturer","setDisplayMediaRequestHandler","permission==='media'","mediaTypes.every((type)=>type==='audio')") | ForEach-Object {
+            if (-not $main.Contains($_)) { throw "Missing secure Electron media permission contract: $_" }
+          }
+          $room = Get-Content src/components/MeetingRoom.tsx -Raw
+          @("setMicrophoneEnabled","setScreenShareEnabled","listDisplaySources","selectDisplaySource","muteParticipant","updateParticipantPermissions","removeParticipant") | ForEach-Object {
+            if (-not $room.Contains($_)) { throw "Missing in-app meeting room contract: $_" }
+          }
+          $inviteMigration = Get-Content database/migrations/2026-09-23-v100020-meeting-invites.sql -Raw
+          @("CREATE TABLE IF NOT EXISTS meeting_email_outbox","dedupe_key text NOT NULL UNIQUE","meeting_email_outbox_retry_idx") | ForEach-Object {
+            if (-not $inviteMigration.Contains($_)) { throw "Missing meeting invitation outbox contract: $_" }
+          }
+          $moderationMigration = Get-Content database/migrations/2026-09-23-v100020-meeting-moderation.sql -Raw
+          @("CREATE TABLE IF NOT EXISTS meeting_participant_permissions","removed_at timestamptz","meeting_participant_permissions_removed_idx") | ForEach-Object {
+            if (-not $moderationMigration.Contains($_)) { throw "Missing meeting moderation persistence contract: $_" }
+          }
+          @("MEETING_REMOVED","meeting_participant_permissions","can_publish_audio","can_share_screen") | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing server-side meeting moderation contract: $_" }
+          }
+          if ($api.Contains("LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id")) {
+            throw "Customer e-mail sender fallback regression detected."
+          }
 
       - name: Build self-contained packaged API
         run: npm run build:server

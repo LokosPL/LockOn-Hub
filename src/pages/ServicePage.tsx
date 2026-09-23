@@ -112,6 +112,49 @@ const deliveryLabel = (status: NotificationHistoryItem['status']) => ({
   CANCELLED: 'Anulowano'
 }[status]);
 
+const relativeTimePl = (value?: string | null) => {
+  if (!value) return 'brak daty';
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return 'brak daty';
+  const diff = Math.max(0, Date.now() - timestamp);
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return 'przed chwilą';
+  if (minutes < 60) return minutes === 1 ? 'minutę temu' : minutes < 5 ? `${minutes} minuty temu` : `${minutes} minut temu`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? 'godzinę temu' : hours < 5 ? `${hours} godziny temu` : `${hours} godzin temu`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return days === 1 ? 'wczoraj' : `${days} dni temu`;
+  return new Date(value).toLocaleDateString('pl-PL');
+};
+
+const transferStatusPl = (status: ServiceTransfer['status']) => ({
+  REQUESTED: 'Przygotowanie do wysyłki',
+  IN_TRANSIT: 'Telefon jest w drodze',
+  DELIVERED: 'Telefon dotarł i czeka na przyjęcie',
+  ACCEPTED: 'Telefon został przyjęty',
+  REJECTED: 'Przekazanie zostało odrzucone',
+  CANCELLED: 'Przekazanie zostało anulowane'
+}[status]);
+
+const FRONTDESK_STEPS = ['Przyjęto','Wyślij do serwisu','W serwisie','Naprawa','Wraca do punktu','Do odbioru','Wydany'];
+
+const frontDeskStepIndex = (order: ServiceOrderSummary) => {
+  if (order.status === 'COMPLETED') return 6;
+  if (order.status === 'READY') return 5;
+  if (order.openTransfer?.kind === 'RETURN_HOME') return 4;
+  if (order.returnRequired && order.status === 'REPAIR_DONE') return 4;
+  if (order.openTransfer?.kind === 'OUTBOUND_SERVICE') {
+    return order.openTransfer.status === 'DELIVERED' ? 2 : 1;
+  }
+  const homePointId = order.homePointId || order.pointId;
+  const outsideHome = Boolean(order.currentPointId && order.currentPointId !== homePointId);
+  if (outsideHome) return ['RECEIVED','DIAGNOSIS'].includes(order.status) ? 2 : 3;
+  if (['DIAGNOSIS','WAITING_PARTS','IN_REPAIR'].includes(order.status)) return 3;
+  if (order.status === 'REPAIR_DONE') return 4;
+  if (order.status === 'RECEIVED') return 1;
+  return 0;
+};
+
 const isTransferredToService = (order: ServiceOrderSummary) =>
   order.openTransfer?.kind === 'OUTBOUND_SERVICE' ||
   Boolean(order.homePointId && order.currentPointId && order.currentPointId !== order.homePointId) ||
@@ -221,6 +264,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const canEditCosts = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
   const canManageOrderMeta = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
   const canManageGmail = ['OWNER', 'BOSS', 'COORDINATOR'].includes(effectiveRole);
+  const canUsePersonalGmail = auth.role !== 'OWNER' && ['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER'].includes(auth.role ?? '');
   const canHandleCustomerQuotes = ['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN'].includes(effectiveRole);
   const gmailState = gmail?.connectionState ?? (
     gmail?.connected ? 'CONNECTED' :
@@ -359,6 +403,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       [order.id]: current[order.id] ?? (order.repairSummary || '')
     }));
     setError('');
+    if (effectiveRole === 'USER') {
+      void ensureOrderHistory(order.id);
+      void ensureServicePoints();
+    }
   };
 
   const setPanelOpen = (orderId:string, panel:string, open:boolean) => {
@@ -426,7 +474,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   };
 
   const loadGmailStatus = async (selectedPointId = pointId) => {
-    if (!selectedPointId || !canManageGmail) {
+    if (!selectedPointId || (!canUsePersonalGmail && auth.role !== 'OWNER')) {
       setGmail(null);
       return;
     }
@@ -494,7 +542,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     setNotificationSettings(null);
     setNotificationHistory([]);
     void loadGmailStatus(pointId);
-  }, [pointId, canManageGmail]);
+  }, [pointId, canUsePersonalGmail, auth.role]);
 
   useEffect(() => {
     if (tab !== 'ORDERS' || !focusOrderId || expandedOrderId === focusOrderId) return;
@@ -661,8 +709,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         setNotice('Zlecenie utworzone. Potwierdzenie e-mail trafiło do kolejki i zostanie ponowione automatycznie w razie błędu.');
       } else if (created.notification?.reason === 'NO_CUSTOMER_EMAIL') {
         setNotice('Zlecenie utworzone. Klient nie ma adresu e-mail, więc potwierdzenie nie zostało wysłane.');
-      } else if (created.notification?.reason === 'NO_SENDER') {
-        setNotice('Zlecenie utworzone, ale nie znaleziono aktywnego firmowego nadawcy Gmail.');
+      } else if (created.notification?.reason === 'NO_USER_SENDER') {
+        setNotice('Zlecenie utworzone, ale Twoje konto Gmail nie jest połączone. Zaloguj się ponownie przez Google.');
       }
       setForm(makeEmptyForm());
       setMatches([]);
@@ -851,8 +899,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         setNotice('Status zapisany. Dla tego statusu powiadomienia e-mail są wyłączone.');
       } else if (n.reason === 'NO_CUSTOMER_EMAIL') {
         setNotice('Status zapisany. Klient nie ma adresu e-mail.' + settlementText);
-      } else if (n.reason === 'NO_SENDER') {
-        setNotice('Status zapisany, ale nie znaleziono aktywnego firmowego nadawcy Gmail.' + settlementText);
+      } else if (n.reason === 'NO_USER_SENDER') {
+        setNotice('Status zapisany, ale Twoje konto Gmail nie jest połączone. Zaloguj się ponownie przez Google.' + settlementText);
       } else {
         setNotice('Status zapisany.' + settlementText);
       }
@@ -1083,7 +1131,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       setGmail(status);
       setNotice(status.recoveredNotifications
         ? 'Gmail został połączony. ServiceOS odblokował ' + status.recoveredNotifications + ' wcześniejsze wiadomości i rozpoczął ich ponowną wysyłkę.'
-        : 'Gmail został bezpiecznie połączony z tym punktem.');
+        : 'Gmail został bezpiecznie połączony z Twoim kontem pracownika.');
       await loadMailData(pointId);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się połączyć Gmail.');
@@ -1093,8 +1141,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const disconnectGmail = async () => {
     if (!pointId || gmailBusy) return;
     if (!await confirm({
-      title:'Odłączyć Gmail od punktu?',
-      message:'Automatyczne wiadomości przestaną być wysyłane.',
+      title:'Odłączyć Gmail od Twojego konta?',
+      message:'Wiadomości wykonywane przez Ciebie nie będą wysyłane, dopóki ponownie nie zalogujesz Gmail.',
       detail:'Wysyłkę można przywrócić przez ponowne połączenie konta Google.',
       confirmLabel:'Odłącz Gmail',tone:'warning'
     })) return;
@@ -1102,7 +1150,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     try {
       await window.lockOn.gmail.disconnect(pointId);
       setGmail({ connected: false, pointId });
-      setNotice('Gmail został odłączony od punktu.');
+      setNotice('Gmail został odłączony od Twojego konta pracownika.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się odłączyć Gmail.');
     } finally { setGmailBusy(false); }
@@ -1182,6 +1230,17 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           <div className="eyebrow"><ClipboardPlus size={13}/> SERWIS</div>
           <h1>Klienci i naprawy</h1>
           <p>Przyjęcie telefonu, reklamacje, statusy oraz centralne powiadomienia klienta.</p>
+          {canUsePersonalGmail && <div className={'service-mail-identity-strip ' + ((gmail?.connected || auth.gmailConnected) ? 'connected' : 'disconnected')}>
+            <Mail size={13}/>
+            {(gmail?.connected || auth.gmailConnected)
+              ? <span>Wiadomości będą wysyłane jako: <strong>{gmail?.email || auth.gmailEmail || auth.user?.email || 'Twoje konto Google'}</strong></span>
+              : <>
+                  <span>Gmail pracownika wymaga ponownego połączenia.</span>
+                  <button type="button" className="button tiny secondary" disabled={gmailBusy || !pointId} onClick={()=>void connectGmail()}>
+                    {gmailBusy?'Łączenie…':'Połącz ponownie Gmail'}
+                  </button>
+                </>}
+          </div>}
         </div>
         <div className="service-tabs">
           {isActualTechnician && <button className={tab === 'CALENDAR' ? 'active' : ''} onClick={() => switchServiceTab('CALENDAR')}><CalendarDays size={15}/> Plan pracy</button>}
@@ -1282,6 +1341,41 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const primaryStageBlocked = primaryStageAction?.status==='READY' && (order.canMarkReady===false || !order.warrantyReady);
         const stageSteps=['Przyjęto','Diagnoza','Części','Naprawa','Zakończono','Gotowe','Wydano'];
         const stageIndex=({RECEIVED:0,DIAGNOSIS:1,WAITING_PARTS:2,IN_REPAIR:3,REPAIR_DONE:4,READY:5,COMPLETED:6} as Record<string,number>)[order.status] ?? 0;
+        const frontDeskIndex=frontDeskStepIndex(order);
+        const displayedSteps=effectiveRole==='USER'?FRONTDESK_STEPS:stageSteps;
+        const displayedStageIndex=effectiveRole==='USER'?frontDeskIndex:stageIndex;
+        const displayedProgress=effectiveRole==='USER'
+          ? Math.max(8,Math.round((displayedStageIndex/Math.max(1,displayedSteps.length-1))*100))
+          : (order.workflow?.progressPercent ?? 10);
+        const activeTransferMoment=order.openTransfer?.shippedAt||order.openTransfer?.requestedAt||order.openTransfer?.updatedAt;
+        const frontDeskNextAction=(()=>{
+          if(order.status==='COMPLETED')return 'Telefon został wydany klientowi. Zlecenie jest zakończone.';
+          if(['CANCELLED','REJECTED'].includes(order.status))return 'To zlecenie jest zamknięte. Nie trzeba wykonywać kolejnej czynności.';
+          if(order.status==='READY')return 'Telefon jest gotowy. Sprawdź dane klienta i wydaj mu urządzenie.';
+          if(order.openTransfer?.kind==='RETURN_HOME'){
+            if(order.openTransfer.status==='DELIVERED')return 'Telefon wrócił do punktu. Potwierdź jego przyjęcie.';
+            return `Telefon wraca do punktu klienta. Wysłano ${relativeTimePl(activeTransferMoment)}.`;
+          }
+          if(order.openTransfer?.kind==='OUTBOUND_SERVICE'){
+            if(order.openTransfer.status==='DELIVERED')return 'Telefon dotarł do serwisu. Punkt docelowy powinien teraz potwierdzić przyjęcie.';
+            return `Telefon jest w drodze do serwisu. Wysłano ${relativeTimePl(activeTransferMoment)}.`;
+          }
+          if(order.returnRequired&&order.status==='REPAIR_DONE')return 'Naprawa jest zakończona. Teraz telefon trzeba odesłać do punktu, w którym czeka klient.';
+          const homePointId=order.homePointId||order.pointId;
+          const outsideHome=Boolean(order.currentPointId&&order.currentPointId!==homePointId);
+          if(outsideHome){
+            if(order.status==='WAITING_PARTS')return 'Telefon jest w serwisie. Serwis czeka na potrzebne części.';
+            if(order.status==='IN_REPAIR')return 'Telefon jest w serwisie i trwa naprawa.';
+            if(order.status==='DIAGNOSIS')return 'Telefon jest w serwisie i trwa sprawdzanie usterki.';
+            return 'Telefon został przyjęty przez serwis. Czekamy na dalszy etap naprawy.';
+          }
+          if(order.handlingMode==='TRANSFER_ONLY'||order.status==='RECEIVED')return 'Przekaż telefon do serwisu. Wybierz punkt poniżej i rozpocznij wysyłkę.';
+          if(order.status==='WAITING_PARTS')return 'Serwis czeka na części potrzebne do naprawy.';
+          if(order.status==='IN_REPAIR')return 'Telefon jest naprawiany. Na razie nie musisz nic robić.';
+          if(order.status==='DIAGNOSIS')return 'Trwa sprawdzanie telefonu. Na razie nie musisz nic robić.';
+          if(order.status==='REPAIR_DONE')return 'Naprawa jest zakończona. Czekamy na przygotowanie gwarancji i odbioru.';
+          return order.workflow?.nextAction||'Sprawdź, co dzieje się z telefonem.';
+        })();
         return <div className="service-order-details-page">
           <section className="service-order-details-dialog service-order-details-inline" aria-label={`Szczegóły zlecenia #${order.orderNumber}`}>
             <header className="service-order-details-header">
@@ -1307,17 +1401,17 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
                       <section className="service-workspace-card service-stage-card service-stage-guided">
                         <div className="service-process-heading">
-                          <div className="service-process-step"><span>KROK {Math.min(stageIndex+1,stageSteps.length)} Z {stageSteps.length}</span><strong>{order.workflow?.nextAction || 'Sprawdź zlecenie.'}</strong></div>
+                          <div className="service-process-step"><span>{effectiveRole==='USER'?'CO TERAZ':'KROK '+Math.min(displayedStageIndex+1,displayedSteps.length)+' Z '+displayedSteps.length}</span><strong>{effectiveRole==='USER'?frontDeskNextAction:(order.workflow?.nextAction || 'Sprawdź zlecenie.')}</strong></div>
                           <div className="service-process-location"><MapPin size={14}/><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span></div>
                         </div>
                         <div className="service-stage-overview">
-                          <div className="service-stage-progress"><span style={{width:`${order.workflow?.progressPercent ?? 10}%`}}/></div>
+                          <div className="service-stage-progress"><span style={{width:`${displayedProgress}%`}}/></div>
                           <div className="service-repair-stage-rail service-repair-stage-rail-compact">
-                            {stageSteps.map((label,index)=><span key={label} className={index<stageIndex?'done':index===stageIndex?'current':index===stageIndex+1?'next':''}>{label}</span>)}
+                            {displayedSteps.map((label,index)=><span key={label} className={index<displayedStageIndex?'done':index===displayedStageIndex?'current':index===displayedStageIndex+1?'next':''}>{label}</span>)}
                           </div>
                         </div>
 
-                        {order.openTransfer && <div className="service-process-logistics">
+                        {effectiveRole!=='USER'&&order.openTransfer && <div className="service-process-logistics">
                           <div><Truck size={18}/><span><strong>{order.openTransfer.kind==='RETURN_HOME'?'Telefon wraca do punktu macierzystego':'Telefon jest w przekazaniu'}</strong><small>{order.openTransfer.fromPointName} → {order.openTransfer.toPointName}</small></span></div>
                           <div className="service-stage-actions">
                             {order.openTransfer.status==='IN_TRANSIT'&&canActTransferDestination&&<button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'DELIVERED')}>Telefon dotarł do punktu</button>}
@@ -1327,7 +1421,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           </div>
                         </div>}
 
-                        {!order.openTransfer&&order.handlingMode==='TRANSFER_ONLY'&&canTransferHere&&<div className="service-process-logistics">
+                        {effectiveRole!=='USER'&&!order.openTransfer&&order.handlingMode==='TRANSFER_ONLY'&&canTransferHere&&<div className="service-process-logistics">
                           <div><Truck size={18}/><span><strong>Wybierz, dokąd wysłać telefon</strong><small>Po kliknięciu ServiceOS ustawi telefon jako „w drodze”.</small></span></div>
                           <div className="transfer-compose">
                             <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onFocus={()=>void ensureServicePoints()} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
@@ -1339,7 +1433,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           </div>
                         </div>}
 
-                        {!order.openTransfer&&order.returnRequired&&order.status==='REPAIR_DONE'&&<div className="service-process-logistics">
+                        {effectiveRole!=='USER'&&!order.openTransfer&&order.returnRequired&&order.status==='REPAIR_DONE'&&<div className="service-process-logistics">
                           <div><RotateCcw size={18}/><span><strong>Naprawa zakończona poza punktem macierzystym</strong><small>Teraz odeślij telefon. Po przyjęciu w punkcie macierzystym ServiceOS pokaże krok z gwarancją i odbiorem.</small></span></div>
                           {canTransferHere&&canEditStatus
                             ? <button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}>Odeślij do punktu macierzystego</button>
@@ -1360,7 +1454,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             onClick={()=>void changeStatus(order,'WAITING_PARTS')}
                           >Czekam na części</button>}
                           {order.status==='REPAIR_DONE' && !order.warrantyReady && !order.returnRequired && <small className="service-stage-gate">Następny krok: wpisz wykonaną naprawę, ustaw gwarancję i przygotuj kartę poniżej.</small>}
-                          {!canEditOrderHere&&!canCompletePickupHere&&order.status!=='COMPLETED'&&<small>{!operatingPointId?'Wybierz konkretny aktywny punkt, aby wykonać ten krok.':'Ten krok wykonuje punkt, w którym fizycznie znajduje się telefon.'}</small>}
+                          {effectiveRole!=='USER'&&!canEditOrderHere&&!canCompletePickupHere&&order.status!=='COMPLETED'&&<small>{!operatingPointId?'Wybierz konkretny aktywny punkt, aby wykonać ten krok.':'Ten krok wykonuje punkt, w którym fizycznie znajduje się telefon.'}</small>}
                           {canEditOrderHere && <details className="service-stage-more">
                             <summary>Ręczna korekta etapu</summary>
                             <label className="service-stage-select">
@@ -1432,41 +1526,48 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         {openPanels[order.id+':finance']&&<div className="service-collapse-body service-finance-collapse"><OrderCostingCard order={order}/></div>}
                       </details>}
 
-                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" onToggle={(event)=>{if(event.currentTarget.open)void ensureServicePoints();}}>
-                        <summary><Truck size={15}/><span><strong>Logistyka urządzenia</strong><small>{order.openTransfer||order.returnRequired?'Wymaga uwagi — sprawdź transport lub powrót.':'Przekazanie do innego punktu, gdy jest potrzebne.'}</small></span></summary>
+                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" open={effectiveRole==='USER'?true:undefined} onToggle={(event)=>{if(event.currentTarget.open)void ensureServicePoints();}}>
+                        <summary><Truck size={15}/><span><strong>{effectiveRole==='USER'?'Gdzie jest telefon i co dalej?':'Logistyka urządzenia'}</strong><small>{effectiveRole==='USER'?'Tutaj obsługujesz wysyłkę, przyjęcie i powrót telefonu.':order.openTransfer||order.returnRequired?'Wymaga uwagi — sprawdź transport lub powrót.':'Przekazanie do innego punktu, gdy jest potrzebne.'}</small></span></summary>
                         <div className="service-collapse-body">
                         <div className="active-transfer-summary">
-                          <div><MapPin size={15}/><span>Macierzysty: {order.homePointName || order.pointName}</span><b>·</b><strong>Teraz: {order.currentLocationLabel || order.currentPointName || 'W transporcie'}</strong></div>
-                          <small>{order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
+                          <div><MapPin size={15}/><span>{effectiveRole==='USER'?'Punkt klienta':'Macierzysty'}: {order.homePointName || order.pointName}</span><b>·</b><strong>Telefon jest teraz: {order.currentLocationLabel || order.currentPointName || 'w drodze'}</strong></div>
+                          <small>{effectiveRole==='USER'
+                            ? order.returnRequired?'Po naprawie telefon ma wrócić tutaj, zanim wydasz go klientowi.':'Nie musisz śledzić tego ręcznie — ServiceOS pokaże kolejny krok.'
+                            : order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
                         </div>
                         {order.openTransfer ? (
-                          <div className="active-transfer-summary">
+                          <div className="active-transfer-summary service-frontdesk-transfer-live">
                             <div><Truck size={15}/><span>{order.openTransfer.fromPointName}</span><b>→</b><strong>{order.openTransfer.toPointName}</strong></div>
-                            <small>{order.openTransfer.kind==='RETURN_HOME' ? 'Obowiązkowy zwrot do punktu macierzystego' : 'Wysłanie do zewnętrznego serwisu'} · {order.openTransfer.status==='IN_TRANSIT'?'w drodze':order.openTransfer.status==='DELIVERED'?'dostarczono, czeka na przyjęcie':'oczekuje'}</small>
+                            <small>{order.openTransfer.kind==='RETURN_HOME' ? 'Powrót telefonu do punktu klienta' : 'Przekazanie telefonu do serwisu'} · {transferStatusPl(order.openTransfer.status)} · {relativeTimePl(activeTransferMoment)}</small>
+                            {effectiveRole==='USER'&&<div className="service-frontdesk-transfer-actions">
+                              {order.openTransfer.status==='IN_TRANSIT'&&canActTransferDestination&&<button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'DELIVERED')}>Potwierdź, że telefon dotarł</button>}
+                              {order.openTransfer.status==='DELIVERED'&&canActTransferDestination&&<button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'ACCEPTED')}><PackageCheck size={13}/> Przyjmij telefon w punkcie</button>}
+                              {!canActTransferDestination&&<span>{order.openTransfer.kind==='RETURN_HOME'?'Czekamy na potwierdzenie punktu, do którego telefon wraca.':'Czekamy na potwierdzenie punktu, do którego wysłano telefon.'}</span>}
+                            </div>}
                           </div>
                         ) : order.handlingMode === 'TRANSFER_ONLY' ? (
                           canTransferHere ? (
                             <div className="transfer-compose">
                               <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
                                 <option value="">Wybierz punkt docelowy…</option>
-                                {currentServicePointId !== (order.homePointId || order.pointId) && <option value={order.homePointId || order.pointId}>{order.homePointName || order.pointName} — punkt macierzysty</option>}
+                                {currentServicePointId !== (order.homePointId || order.pointId) && <option value={order.homePointId || order.pointId}>{order.homePointName || order.pointName} — {effectiveRole==='USER'?'punkt klienta':'punkt macierzysty'}</option>}
                                 {servicePoints.filter((point)=>point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                               </select>
-                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do protokołu przekazania (opcjonalnie)"/>
-                              <button className="button primary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Przekaż urządzenie dalej</button>
+                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder={effectiveRole==='USER'?'Krótka informacja dla serwisu (opcjonalnie)':'Notatka do protokołu przekazania (opcjonalnie)'}/>
+                              <button className="button primary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> {effectiveRole==='USER'?'Przekaż telefon do serwisu':'Przekaż urządzenie dalej'}</button>
                             </div>
                           ) : <div className="service-history-empty">Przekazanie może rozpocząć użytkownik obsługujący aktualny punkt urządzenia.</div>
                         ) : order.returnRequired ? (
-                          canTransferHere && canEditStatus && order.status==='REPAIR_DONE' ? (
+                          canTransferHere && order.status==='REPAIR_DONE' ? (
                             <div className="transfer-compose">
-                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów"/>
-                              <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> Odeślij do punktu macierzystego</button>
+                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder={effectiveRole==='USER'?'Krótka informacja przy powrocie telefonu (opcjonalnie)':'Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów'}/>
+                              <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> {effectiveRole==='USER'?'Odeślij telefon do punktu klienta':'Odeślij do punktu macierzystego'}</button>
                             </div>
                           ) : (
                             <div className="service-history-empty">
                               {order.status==='REPAIR_DONE'
-                                ? 'Zwrot do punktu macierzystego musi rozpocząć użytkownik obsługujący aktualny punkt urządzenia.'
-                                : 'Urządzenie jest poza punktem macierzystym. Po zakończeniu naprawy ustaw status „Naprawa zakończona”, a następnie rozpocznij obowiązkowy zwrot.'}
+                                ? (effectiveRole==='USER'?'Telefon jest gotowy do powrotu. Zwrot rozpoczyna pracownik punktu, w którym telefon znajduje się teraz.':'Zwrot do punktu macierzystego musi rozpocząć użytkownik obsługujący aktualny punkt urządzenia.')
+                                : (effectiveRole==='USER'?'Telefon jest jeszcze w serwisie. Gdy naprawa się zakończy, ServiceOS pokaże możliwość odesłania go do klienta.':'Urządzenie jest poza punktem macierzystym. Po zakończeniu naprawy ustaw status „Naprawa zakończona”, a następnie rozpocznij obowiązkowy zwrot.')}
                             </div>
                           )
                         ) : canTransferHere ? (
@@ -1475,12 +1576,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                               <option value="">Wybierz serwis docelowy…</option>
                               {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                             </select>
-                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
-                            <button className="button secondary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
+                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder={effectiveRole==='USER'?'Krótka informacja dla serwisu, np. co zgłasza klient':'Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej'}/>
+                            <button className="button secondary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> {effectiveRole==='USER'?'Przekaż telefon do serwisu':'Wyślij do serwisu'}</button>
                           </div>
                         ) : <div className="service-history-empty">Brak aktywnego transportu.</div>}
                         {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
-                          {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót: ':'Do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
+                          {(order.transfers ?? []).slice(0,6).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót telefonu: ':'Przekazanie do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small title={new Date(item.updatedAt).toLocaleString('pl-PL')}>{transferStatusPl(item.status)} · {relativeTimePl(item.shippedAt||item.requestedAt||item.updatedAt)}</small></div>)}
                         </div>}
                         </div>
                       </details>
@@ -1522,15 +1623,15 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </div>
                       </details>
 
-                      <details className="service-workspace-card service-workspace-collapse service-workspace-history" onToggle={(event)=>{if(event.currentTarget.open)void ensureOrderHistory(order.id);}}>
-                        <summary><History size={15}/><span><strong>Historia zlecenia</strong><small>Pełna oś czasu zmian statusu.</small></span></summary>
+                      <details className="service-workspace-card service-workspace-collapse service-workspace-history" open={effectiveRole==='USER'?true:undefined} onToggle={(event)=>{if(event.currentTarget.open)void ensureOrderHistory(order.id);}}>
+                        <summary><History size={15}/><span><strong>{effectiveRole==='USER'?'Historia serwisu':'Historia zlecenia'}</strong><small>{effectiveRole==='USER'?'Co działo się z telefonem od momentu przyjęcia.':'Pełna oś czasu zmian statusu.'}</small></span></summary>
                         <div className="service-collapse-body">
                         {(orderHistories[order.id] ?? []).map((item, index) => (
                           <div className="service-history-item" key={item.id}>
                             <div className="service-history-line"><i className={index === (orderHistories[order.id] ?? []).length - 1 ? 'current' : ''}></i></div>
                             <div className="service-history-content">
                               <div className="service-history-status">{item.fromLabel && <span>{item.fromLabel}</span>}{item.fromLabel && <b>→</b>}<strong>{item.toLabel}</strong></div>
-                              <small>{new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
+                              <small title={new Date(item.changedAt).toLocaleString('pl-PL')}>{effectiveRole==='USER'?relativeTimePl(item.changedAt):new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
                               {item.note && <p>{item.note}</p>}
                             </div>
                           </div>
@@ -1876,7 +1977,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             <div className="service-mail-copy">
               <div className="service-mail-icon">{gmail?.connected ? <MailCheck size={20}/> : <Mail size={20}/>}</div>
               <div>
-                <span>Nadawca Gmail · {pointOptions.find((p) => p.id === pointId)?.name ?? 'punkt'}</span>
+                <span>Nadawca Gmail · konto pracownika</span>
                 <strong>{gmailChecking
                   ? 'Sprawdzanie połączenia…'
                   : gmail?.connected
@@ -1889,12 +1990,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                 <small>{gmailChecking
                   ? 'ServiceOS automatycznie sprawdza, czy zapisany dostęp Gmail nadal działa.'
                   : gmail?.connected
-                    ? 'Połączenie działa automatycznie w tle. ServiceOS używa wyłącznie zakresu gmail.send.'
+                    ? 'Wiadomości z Twoich akcji wychodzą z tego konta. ServiceOS używa wyłącznie zakresu gmail.send.'
                     : gmailState === 'REAUTH_REQUIRED'
                       ? (gmail?.lastError || 'Zgoda Google wygasła albo została cofnięta.')
                       : gmailState === 'TEMPORARY_ERROR'
                         ? (gmail?.lastError || 'To może być chwilowa awaria Google. Ponowna zgoda nie jest teraz wymagana.')
-                        : 'Połącz konto tylko wtedy, gdy ten punkt ma wysyłać automatyczne wiadomości.'}</small>
+                        : auth.role === 'OWNER'
+                          ? 'Dla konta OWNER prywatny Gmail nie jest używany jako nadawca wiadomości serwisowych.'
+                          : 'Połącz ponownie własne konto Google, jeśli automatyczne połączenie podczas logowania nie zadziałało.'}</small>
               </div>
             </div>
             <div className="service-mail-actions">

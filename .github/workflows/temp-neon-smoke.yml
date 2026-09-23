@@ -2,7 +2,7 @@ name: Temp Neon integration smoke
 
 on:
   push:
-    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "feature/service-intake-automation-*", "fix/service-card-*", "release/**"]
+    branches: ["feature/v0.21-service-finance-invoices", "feature/service-intake-card-refresh", "feature/service-intake-automation-*", "feature/1.0.0.20-*", "fix/service-card-*", "release/**"]
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
@@ -64,6 +64,75 @@ jobs:
             --outfile=central-api-dist/index.mjs
           zip -j temp-neon-lockonapi.zip central-api-dist/index.mjs
           sha256sum temp-neon-lockonapi.zip central-api-dist/index.mjs
+
+      - name: Apply 1.0.0.20 migrations to TEMP only
+        if: steps.neon_credential.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          const {Client}=require('pg');
+          const apiKey=process.env.NEON_API_KEY;
+          const project=process.env.NEON_PROJECT_ID;
+          const branch=process.env.NEON_BRANCH_ID;
+          const headers={Authorization:'Bearer '+apiKey,Accept:'application/json'};
+          const get=async(url)=>{
+            const response=await fetch(url,{headers,redirect:'error'});
+            const body=await response.json().catch(()=>({}));
+            if(!response.ok)throw new Error('Neon API '+response.status+': '+JSON.stringify(body).slice(0,500));
+            return body;
+          };
+          const main=async()=>{
+            const dbPayload=await get(`https://console.neon.tech/api/v2/projects/${project}/branches/${branch}/databases`);
+            const databases=Array.isArray(dbPayload.databases)?dbPayload.databases:[];
+            const database=databases.find((item)=>item.name==='neondb')||databases[0];
+            if(!database?.name)throw new Error('TEMP branch has no database');
+            let role=database.owner_name||database.ownerName||'';
+            if(!role){
+              const rolePayload=await get(`https://console.neon.tech/api/v2/projects/${project}/branches/${branch}/roles`);
+              const roles=Array.isArray(rolePayload.roles)?rolePayload.roles:[];
+              role=(roles.find((item)=>item.protected!==true)||roles[0])?.name||'';
+            }
+            if(!role)throw new Error('TEMP branch has no usable database role');
+            const qs=new URLSearchParams({
+              branch_id:branch,
+              database_name:database.name,
+              role_name:role,
+              pooled:'false'
+            });
+            const connection=await get(`https://console.neon.tech/api/v2/projects/${project}/connection_uri?${qs}`);
+            const uri=connection.uri||connection.connection_uri||connection.connectionUri;
+            if(!uri)throw new Error('Neon connection URI response did not contain a URI');
+            const client=new Client({connectionString:uri,connectionTimeoutMillis:15000});
+            await client.connect();
+            try{
+              for(const path of [
+                'database/migrations/2026-09-23-v100020-user-gmail-per-user.sql',
+                'database/migrations/2026-09-23-v100020-meetings.sql',
+                'database/migrations/2026-09-23-v100020-meeting-invites.sql',
+                'database/migrations/2026-09-23-v100020-meeting-moderation.sql'
+              ]){
+                const sql=fs.readFileSync(path,'utf8');
+                await client.query(sql);
+                console.log('Applied TEMP migration:',path);
+              }
+              const expected=[
+                '2026-09-23-v100020-user-gmail-per-user',
+                '2026-09-23-v100020-meetings',
+                '2026-09-23-v100020-meeting-invites',
+                '2026-09-23-v100020-meeting-moderation'
+              ];
+              const result=await client.query('SELECT version FROM schema_migrations WHERE version = ANY($1::text[])',[expected]);
+              const actual=new Set(result.rows.map((row)=>row.version));
+              for(const version of expected)if(!actual.has(version))throw new Error('TEMP migration marker missing: '+version);
+              console.log('TEMP 1.0.0.20 schema verified.');
+            }finally{
+              await client.end();
+            }
+          };
+          main().catch((error)=>{console.error(error instanceof Error?error.message:error);process.exit(1);});
+          NODE
 
       - name: Upload exact temp Neon bundle
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -181,7 +250,15 @@ jobs:
             exit 1
           fi
 
+      - name: Block stale TEMP smoke when exact deploy is unavailable
+        if: steps.neon_credential.outputs.available != 'true'
+        shell: bash
+        run: |
+          echo "::error::Brak NEON_API_KEY: exact 1.0.0.20 bundle i migracje nie zostały wdrożone na TEMP. Stary endpoint nie może zaliczyć gate."
+          exit 1
+
       - name: Temp health, CORS and authenticated smoke
+        if: steps.neon_credential.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -245,6 +322,10 @@ jobs:
             support_expected="403"
             case "$role" in OWNER|SUPPORT) support_expected="200";; esac
             expect_code "$token" "/support/tickets" "$support_expected" "$role support queue"
+
+            customers_expected="403"
+            case "$role" in OWNER|SUPPORT|USER) customers_expected="200";; esac
+            expect_code "$token" "/customer-accounts" "$customers_expected" "$role customer workspace"
           done
 
           echo "Role matrix passed: OWNER, BOSS, COORDINATOR, TECHNICIAN, USER, SUPPORT."
@@ -320,7 +401,50 @@ jobs:
           const d=require('./user-outbound.json'), from=process.argv[2], to=process.argv[3];
           if(d.transfer?.status!=='IN_TRANSIT'||d.transfer?.fromPointId!==from||d.transfer?.toPointId!==to)throw new Error('USER could not send device to another point');
           NODE
+          user_outbound_transfer_id="$(node -e "const d=require('./user-outbound.json');if(!d.transfer?.id)throw new Error('Missing USER outbound transfer id');process.stdout.write(d.transfer.id)")"
 
+          # Destination accepts the phone. The home-point USER must still retain READ access
+          # to their customer/order/history, but must not gain technical write access away from home.
+          owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$destination")" > owner-user-destination.json
+          owner_api POST "/service/transfers/$user_outbound_transfer_id/status" '{"status":"DELIVERED","note":"Telefon dotarł do serwisu"}' > user-outbound-delivered.json
+          owner_api POST "/service/transfers/$user_outbound_transfer_id/status" '{"status":"ACCEPTED","note":"Serwis przyjął telefon"}' > user-outbound-accepted.json
+          node -e "const d=require('./user-outbound-accepted.json');if(d.transfer?.status!=='ACCEPTED')throw new Error('Destination did not accept USER outbound phone')"
+
+          user_api GET /service/orders > user-orders-away.json
+          node - <<'NODE' "$user_order_id" "$destination"
+          const rows=require('./user-orders-away.json'), orderId=process.argv[2], destination=process.argv[3];
+          const order=rows.find((item)=>item.id===orderId);
+          if(!order)throw new Error('Home-point USER lost order visibility after service accepted the phone');
+          if(order.currentPointId!==destination)throw new Error('USER order current location was not updated to service point');
+          if(!order.latestTransfer||order.latestTransfer.status!=='ACCEPTED')throw new Error('USER cannot see latest accepted transfer timing');
+          NODE
+
+          user_api GET "/service/orders/$user_order_id/history" > user-away-history.json
+          node -e "const h=require('./user-away-history.json');if(!Array.isArray(h)||!h.length)throw new Error('Home-point USER lost service history while phone is away')"
+
+          user_api GET /customer-accounts > user-customers.json
+          node - <<'NODE' "$user_customer_id"
+          const d=require('./user-customers.json'), customerId=process.argv[2];
+          const customer=d.customers?.find((item)=>item.id===customerId);
+          if(!customer)throw new Error('Home-point USER lost their customer while phone is away');
+          if(customer.activeSessions!==0||customer.googleLinked!==false||customer.googleEmail!==null||customer.blocked!==false)throw new Error('Front-desk customer API leaked portal administration metadata');
+          NODE
+
+          user_api GET "/service/customers/$user_customer_id" > user-customer-detail.json
+          node - <<'NODE' "$user_order_id"
+          const d=require('./user-customer-detail.json'), orderId=process.argv[2];
+          if(!d.orders?.some((item)=>item.id===orderId))throw new Error('Front-desk customer card does not include away service order');
+          NODE
+
+          user_api POST "/customer-accounts/$user_customer_id/profile" "$(node -e "process.stdout.write(JSON.stringify({firstName:'CI',lastName:process.argv[1],email:process.argv[2]+'@invalid.test',phone:'+48999111222'}))" "USER $suffix" "$suffix")" > user-customer-profile.json
+          node -e "const d=require('./user-customer-profile.json');if(d.customer?.phone!=='+48999111222')throw new Error('USER could not update customer contact data')"
+
+          set +e
+          away_edit_http="$(curl --silent --show-error --output user-away-edit.json --write-out '%{http_code}' --request POST "$TEMP_API_URL/service/orders/$user_order_id/details" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{"deviceNotes":"Nie wolno edytować telefonu w obcym punkcie"}')"
+          set -e
+          [ "$away_edit_http" = "403" ] || { echo "::error::Home-point USER gained technical write access to away phone: HTTP $away_edit_http"; cat user-away-edit.json; exit 1; }
+
+          # Continue the original incoming-transfer USER scenarios.
           owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$destination")" > owner-user-destination.json
           node - <<'NODE' "$suffix" > user-incoming-body.json
           const suffix=process.argv[2];
@@ -397,7 +521,7 @@ jobs:
           user_api POST "/service/orders/$pickup_order_id/status" '{"status":"COMPLETED","note":"Wydano klientowi przez USER"}' > user-pickup-completed.json
           node -e "const d=require('./user-pickup-completed.json');if(d.order?.status!=='COMPLETED')throw new Error('USER pickup completion failed')"
 
-          echo "USER front-desk E2E passed: intake, notification choice, outbound, manual accept, scan accept, pickup."
+          echo "USER front-desk E2E passed: intake, customer view/update, home-point tracking, outbound, manual accept, scan accept, pickup."
 
       - name: Temp service intake, PDF and logistics E2E
         shell: bash
@@ -1084,3 +1208,65 @@ jobs:
           NODE
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data '{}' > owner-hotline-cleanup.json
+
+      - name: Temp meeting lifecycle and LiveKit token smoke
+        if: steps.neon_credential.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          boss_token="$(node -e "const d=require('./role-BOSS.json');if(!d.token)process.exit(1);process.stdout.write(d.token)")"
+          user_token="$(node -e "const d=require('./role-USER.json');if(!d.token)process.exit(1);process.stdout.write(d.token)")"
+          user_id="$(node -e "const d=require('./role-USER.json');if(!d.user?.id)process.exit(1);process.stdout.write(d.user.id)")"
+          starts_at="$(node -e "process.stdout.write(new Date(Date.now()+5*60*1000).toISOString())")"
+
+          node -e "process.stdout.write(JSON.stringify({
+            title:'CI Spotkanie 1.0.0.20 '+process.env.GITHUB_RUN_ID,
+            description:'TEMP E2E lifecycle + LiveKit join token',
+            startsAt:process.argv[1],
+            expectedDurationMinutes:30,
+            audienceType:'USERS',
+            userIds:[process.argv[2]],
+            allowParticipantAudio:true,
+            allowParticipantScreenShare:false,
+            maxParticipants:8
+          }))" "$starts_at" "$user_id" > meeting-create-body.json
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data @meeting-create-body.json > meeting-created.json
+
+          meeting_id="$(node -e "const d=require('./meeting-created.json');if(!d.meeting?.id||d.meeting.status!=='SCHEDULED')throw new Error('Meeting create failed');process.stdout.write(d.meeting.id)")"
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/meetings"             --header "Authorization: Bearer $user_token" > meeting-user-list.json
+          node -e "const d=require('./meeting-user-list.json'),id=process.argv[1];if(!(d.meetings||[]).some(x=>x.id===id))throw new Error('Eligible USER cannot see meeting')" "$meeting_id"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings/$meeting_id/register"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json" --data '{}' > meeting-registered.json
+          node -e "const d=require('./meeting-registered.json');if(d.meeting?.registered!==true)throw new Error('USER registration failed')"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings/$meeting_id/start"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json" --data '{}' > meeting-started.json
+          node -e "const d=require('./meeting-started.json');if(d.meeting?.status!=='LIVE')throw new Error('Meeting start failed')"
+
+          join_http="$(curl --silent --show-error --output meeting-join.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/meetings/$meeting_id/join"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json" --data '{}')"
+          if [[ "$join_http" == "503" ]]; then
+            echo "::error::TEMP exact backend is deployed, but LiveKit credentials are not configured in the TEMP Neon Function environment."
+            cat meeting-join.json
+            exit 1
+          fi
+          if [[ "$join_http" != "201" ]]; then
+            echo "::error::Meeting join token expected HTTP 201, got $join_http"
+            cat meeting-join.json
+            exit 1
+          fi
+          node - <<'NODE'
+          const d=require('./meeting-join.json');
+          if(!/^wss:///i.test(d.serverUrl||''))throw new Error('Missing secure LiveKit serverUrl');
+          if(String(d.participantToken||'').split('.').length!==3)throw new Error('Missing LiveKit JWT');
+          if(!d.participantIdentity)throw new Error('Missing opaque participant identity');
+          NODE
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/meetings/$meeting_id/attendance"             --header "Authorization: Bearer $boss_token" > meeting-attendance.json
+          node -e "const d=require('./meeting-attendance.json');if(!Array.isArray(d.attendance))throw new Error('Attendance payload invalid')"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings/$meeting_id/end"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json" --data '{}' > meeting-ended.json
+          node -e "const d=require('./meeting-ended.json');if(d.meeting?.status!=='ENDED')throw new Error('Meeting end failed')"
+
+          echo "TEMP meeting lifecycle passed: audience visibility, registration, start, signed LiveKit join token, attendance endpoint, end."
+
