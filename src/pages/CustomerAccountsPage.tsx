@@ -29,6 +29,7 @@ import {
   Wrench
 } from 'lucide-react';
 import { useAppDialog } from '../components/AppDialog';
+import type { UserRole } from '../config/roles';
 import type {
   CustomerAccountOverview,
   CustomerAccountSummary,
@@ -53,6 +54,19 @@ const fmtDate = (value?: string | null) => {
   catch { return '—'; }
 };
 
+const relativeTimePl = (value?: string | null) => {
+  if (!value) return 'brak daty';
+  const timestamp=new Date(value).getTime();
+  if(!Number.isFinite(timestamp))return 'brak daty';
+  const minutes=Math.floor(Math.max(0,Date.now()-timestamp)/60_000);
+  if(minutes<1)return 'przed chwilą';
+  if(minutes<60)return minutes===1?'minutę temu':minutes<5?`${minutes} minuty temu`:`${minutes} minut temu`;
+  const hours=Math.floor(minutes/60);
+  if(hours<24)return hours===1?'godzinę temu':hours<5?`${hours} godziny temu`:`${hours} godzin temu`;
+  const days=Math.floor(hours/24);
+  return days===1?'wczoraj':`${days} dni temu`;
+};
+
 const money = (value?: number | null, currency='PLN') =>
   value == null ? '—' : new Intl.NumberFormat('pl-PL',{style:'currency',currency}).format(value);
 
@@ -75,8 +89,9 @@ const orderTone = (order:ServiceOrderSummary) => {
   return 'active';
 };
 
-export function CustomerAccountsPage() {
+export function CustomerAccountsPage({effectiveRole}:{effectiveRole:UserRole}) {
   const {confirm,prompt}=useAppDialog();
+  const frontDesk=effectiveRole==='USER';
   const [data,setData]=useState<CustomerAccountOverview | null>(null);
   const [query,setQuery]=useState('');
   const [filter,setFilter]=useState<CustomerFilter>('ALL');
@@ -157,10 +172,8 @@ export function CustomerAccountsPage() {
     setBusySafe(customer.id+':open');
     setNotice(null);
     try{
-      const [card,allQuotes]=await Promise.all([
-        window.lockOn.service.getCustomer(customer.id),
-        window.lockOn.service.listCustomerQuotes()
-      ]);
+      const card=await window.lockOn.service.getCustomer(customer.id);
+      const allQuotes=frontDesk?[]:await window.lockOn.service.listCustomerQuotes();
       if(requestId!==detailRequestRef.current)return;
       setDetail(card);
       setQuotes(allQuotes.filter((item)=>item.customerId===customer.id));
@@ -370,26 +383,26 @@ export function CustomerAccountsPage() {
             <p>{selected.email||'Brak e-mailu'}{selected.phone?' · '+selected.phone:''}</p>
           </div>
         </div>
-        <div className="customer-detail-badges">
+        {!frontDesk&&<div className="customer-detail-badges">
           <span className={'account-chip '+(selected.googleLinked?'linked':'code')}>{selected.googleLinked?<><CheckCircle2 size={13}/> Konto Google</>:<><KeyRound size={13}/> Dostęp kodem</>}</span>
           {selected.blocked&&<span className="account-chip blocked"><Ban size={13}/> Portal zablokowany</span>}
-        </div>
+        </div>}
       </section>
 
       {notice&&<div className={'customer-notice '+notice.tone}>{notice.tone==='ok'?<CheckCircle2 size={16}/>:<Ban size={16}/>}<span>{notice.text}</span></div>}
 
-      <section className="customer-detail-kpis">
-        <article><Wrench size={18}/><div><span>Wszystkie naprawy</span><strong>{orders.length}</strong><small>{openOrders.length} aktywnych</small></div></article>
-        <article><MessageSquareText size={18}/><div><span>Wyceny i rozmowy</span><strong>{quotes.length}</strong><small>{quotes.filter((q)=>['OPEN','QUOTED'].includes(q.status)).length} otwartych</small></div></article>
-        <article><UserRoundCheck size={18}/><div><span>Sesje portalu</span><strong>{selected.activeSessions}</strong><small>ostatnio {fmt(selected.lastSeenAt||selected.lastLoginAt)}</small></div></article>
-        <article><ShieldCheck size={18}/><div><span>Dostęp</span><strong>{selected.blocked?'Zablokowany':selected.googleLinked?'Google + kod':'Kod'}</strong><small>{selected.googleLinked?'pełne konto klienta':'tryb podglądu'}</small></div></article>
+      <section className={'customer-detail-kpis '+(frontDesk?'customer-frontdesk-kpis':'')}>
+        <article><Wrench size={18}/><div><span>Naprawy klienta</span><strong>{orders.length}</strong><small>{openOrders.length} aktywnych</small></div></article>
+        {frontDesk
+          ? <><article><Smartphone size={18}/><div><span>Urządzenia</span><strong>{detail?.devices.length??0}</strong><small>w historii klienta</small></div></article><article><Clock3 size={18}/><div><span>Ostatnia naprawa</span><strong>{orders[0]?relativeTimePl(orders[0].updatedAt||orders[0].receivedAt):'—'}</strong><small>{orders[0]?.statusLabel||'Brak zleceń'}</small></div></article></>
+          : <><article><MessageSquareText size={18}/><div><span>Wyceny i rozmowy</span><strong>{quotes.length}</strong><small>{quotes.filter((q)=>['OPEN','QUOTED'].includes(q.status)).length} otwartych</small></div></article><article><UserRoundCheck size={18}/><div><span>Sesje portalu</span><strong>{selected.activeSessions}</strong><small>ostatnio {fmt(selected.lastSeenAt||selected.lastLoginAt)}</small></div></article><article><ShieldCheck size={18}/><div><span>Dostęp</span><strong>{selected.blocked?'Zablokowany':selected.googleLinked?'Google + kod':'Kod'}</strong><small>{selected.googleLinked?'pełne konto klienta':'tryb podglądu'}</small></div></article></>}
       </section>
 
       <nav className="service-tabs customer-detail-tabs">
         <button className={detailTab==='OVERVIEW'?'active':''} onClick={()=>setDetailTab('OVERVIEW')}><UserRound size={15}/> Klient</button>
         <button className={detailTab==='ORDERS'?'active':''} onClick={()=>setDetailTab('ORDERS')}><Smartphone size={15}/> Zlecenia <b>{orders.length}</b></button>
-        <button className={detailTab==='QUOTES'?'active':''} onClick={()=>setDetailTab('QUOTES')}><MessageSquareText size={15}/> Wyceny <b>{quotes.length}</b></button>
-        <button className={detailTab==='ACCESS'?'active':''} onClick={()=>setDetailTab('ACCESS')}><KeyRound size={15}/> Dostęp</button>
+        {!frontDesk&&<button className={detailTab==='QUOTES'?'active':''} onClick={()=>setDetailTab('QUOTES')}><MessageSquareText size={15}/> Wyceny <b>{quotes.length}</b></button>}
+        {!frontDesk&&<button className={detailTab==='ACCESS'?'active':''} onClick={()=>setDetailTab('ACCESS')}><KeyRound size={15}/> Dostęp</button>}
       </nav>
 
       {busy.endsWith(':open')&&!detail&&<div className="panel-card customer-detail-loading"><span className="boot-spinner"/> Pobieram pełną kartę klienta…</div>}
@@ -397,7 +410,7 @@ export function CustomerAccountsPage() {
       {detail&&detailTab==='OVERVIEW'&&<div className="customer-detail-grid">
         <section className="panel-card customer-profile-card">
           <div className="panel-heading customer-panel-heading">
-            <div><span className="eyebrow">DANE KLIENTA</span><h2>Kontakt i profil</h2><p>Jedno źródło danych używane przez portal, e-maile i zlecenia.</p></div>
+            <div><span className="eyebrow">DANE KLIENTA</span><h2>Kontakt i profil</h2><p>{frontDesk?'Tutaj możesz poprawić telefon, e-mail lub dane klienta podane przy ladzie.':'Jedno źródło danych używane przez portal, e-maile i zlecenia.'}</p></div>
             {!editProfile&&<button className="button small secondary" onClick={()=>setEditProfile(true)}><Pencil size={14}/> Edytuj</button>}
           </div>
           {editProfile?<div className="customer-profile-form">
@@ -432,7 +445,7 @@ export function CustomerAccountsPage() {
           </div>
         </section>
 
-        <section className="panel-card customer-preferences-card">
+        {!frontDesk&&<section className="panel-card customer-preferences-card">
           <div className="panel-heading customer-panel-heading"><div><span className="eyebrow">POWIADOMIENIA</span><h2>Wybory klienta</h2><p>Wsparcie widzi preferencje, ale ich nie nadpisuje za klienta.</p></div></div>
           <div className="customer-pref-list">
             <div className={prefs.serviceUpdates?'on':''}><BellRing size={15}/><span>Postęp naprawy</span><b>{prefs.serviceUpdates?'Włączone':'Wyłączone'}</b></div>
@@ -440,7 +453,7 @@ export function CustomerAccountsPage() {
             <div className={prefs.quoteUpdates?'on':''}><BellRing size={15}/><span>Wyceny</span><b>{prefs.quoteUpdates?'Włączone':'Wyłączone'}</b></div>
             <div className={prefs.messages?'on':''}><BellRing size={15}/><span>Wiadomości</span><b>{prefs.messages?'Włączone':'Wyłączone'}</b></div>
           </div>
-        </section>
+        </section>}
       </div>}
 
       {detail&&detailTab==='ORDERS'&&<section className="panel-card customer-orders-workspace">
@@ -458,6 +471,7 @@ export function CustomerAccountsPage() {
                 <div className="service-order-quick-meta">
                   <span><MapPin size={12}/>{order.currentLocationLabel||order.currentPointName||order.homePointName||order.pointName}</span>
                   <span><Clock3 size={12}/>{order.estimatedCompletionAt?'Termin '+fmtDate(order.estimatedCompletionAt):'Bez terminu'}</span>
+                  {order.openTransfer&&<span><Truck size={12}/>{order.openTransfer.kind==='RETURN_HOME'?'Wraca do punktu':'Wysłano do serwisu'} · {relativeTimePl(order.openTransfer.shippedAt||order.openTransfer.requestedAt||order.openTransfer.updatedAt)}</span>}
                 </div>
               </div>
               <div className="customer-control-order-stage">
@@ -476,7 +490,7 @@ export function CustomerAccountsPage() {
                 <div><span>Cena końcowa</span><strong>{money(order.finalCost,order.currency)}</strong></div>
               </div>
               <div className="customer-history-strip">
-                {(histories[order.id]||[]).map((item,index)=><div key={item.id} className="customer-history-event"><i className={index===(histories[order.id]?.length||0)-1?'current':''}/><div><strong>{item.toLabel}</strong><span>{fmt(item.changedAt)} · {item.changedByName}</span>{item.note&&<p>{item.note}</p>}</div></div>)}
+                {(histories[order.id]||[]).map((item,index)=><div key={item.id} className="customer-history-event"><i className={index===(histories[order.id]?.length||0)-1?'current':''}/><div><strong>{item.toLabel}</strong><span title={fmt(item.changedAt)}>{frontDesk?relativeTimePl(item.changedAt):fmt(item.changedAt)} · {item.changedByName}</span>{item.note&&<p>{item.note}</p>}</div></div>)}
                 {busy===order.id+':history'&&<div className="service-history-empty">Pobieram historię…</div>}
                 {busy!==order.id+':history'&&histories[order.id]?.length===0&&<div className="service-history-empty">Brak historii statusów.</div>}
               </div>
@@ -486,7 +500,7 @@ export function CustomerAccountsPage() {
         </div>
       </section>}
 
-      {detail&&detailTab==='QUOTES'&&<section className="panel-card customer-quotes-workspace">
+      {!frontDesk&&detail&&detailTab==='QUOTES'&&<section className="panel-card customer-quotes-workspace">
         <div className="panel-heading customer-panel-heading"><div><span className="eyebrow">WYCENY I KONTAKT</span><h2>Rozmowy z klientem</h2><p>Wsparcie może obsłużyć rozmowę i przygotować wycenę w swoim zakresie.</p></div></div>
         <div className="customer-control-quotes">
           {quotes.map((item)=><article key={item.id} className={'customer-control-quote status-'+item.status.toLowerCase()}>
@@ -504,7 +518,7 @@ export function CustomerAccountsPage() {
         </div>
       </section>}
 
-      {detail&&detailTab==='ACCESS'&&<div className="customer-access-grid">
+      {!frontDesk&&detail&&detailTab==='ACCESS'&&<div className="customer-access-grid">
         <section className="panel-card customer-access-main">
           <div className="panel-heading customer-panel-heading"><div><span className="eyebrow">PORTAL KLIENTA</span><h2>Dostęp i bezpieczeństwo</h2><p>Kod służy do podglądu. Google daje pełne konto i możliwość pisania do serwisu.</p></div></div>
           <div className="customer-access-summary">
@@ -538,20 +552,20 @@ export function CustomerAccountsPage() {
   return <div className="customer-accounts-page customer-control-center page-enter">
     <section className="customer-accounts-heading customer-control-heading">
       <div>
-        <div className="eyebrow">CENTRUM KLIENTA</div>
-        <h1>Klienci i ich serwisy</h1>
-        <p>Jedno miejsce do obsługi klienta: naprawy, wyceny, portal, kody, konto Google i bezpieczeństwo. Dostęp mają Właściciel oraz osoby z uprawnieniem Wsparcie LockOn; zakres jest pilnowany także przez backend.</p>
+        <div className="eyebrow">{frontDesk?'KLIENCI TWOJEGO PUNKTU':'CENTRUM KLIENTA'}</div>
+        <h1>{frontDesk?'Klienci i ich naprawy':'Klienci i ich serwisy'}</h1>
+        <p>{frontDesk?'Szybko znajdź klienta, sprawdź jego telefony i naprawy albo popraw dane kontaktowe. Widzisz tylko klientów powiązanych z Twoimi punktami.':'Jedno miejsce do obsługi klienta: naprawy, wyceny, portal, kody, konto Google i bezpieczeństwo. Dostęp mają Właściciel oraz osoby z uprawnieniem Wsparcie LockOn; zakres jest pilnowany także przez backend.'}</p>
       </div>
       <button className="button secondary" onClick={()=>void load()} disabled={busy==='load'}><RefreshCw size={16} className={busy==='load'?'spin':''}/> Odśwież</button>
     </section>
 
     {notice&&<div className={'customer-notice '+notice.tone}>{notice.tone==='ok'?<CheckCircle2 size={16}/>:<Ban size={16}/>}<span>{notice.text}</span></div>}
 
-    <section className="customer-account-stats customer-control-stats">
-      <article><UsersRound size={19}/><div><span>Klienci w zakresie</span><strong>{stats?.customers??0}</strong><small>powiązani z Twoimi punktami</small></div></article>
-      <article><Link2 size={19}/><div><span>Konta Google</span><strong>{stats?.googleAccounts??0}</strong><small>pełny portal klienta</small></div></article>
-      <article><UserRoundCheck size={19}/><div><span>Aktywne sesje</span><strong>{stats?.activeSessions??0}</strong><small>kod + Google</small></div></article>
-      <article className={stats?.blocked?'attention':''}><Ban size={19}/><div><span>Zablokowane</span><strong>{stats?.blocked??0}</strong><small>dostęp wstrzymany</small></div></article>
+    <section className={'customer-account-stats customer-control-stats '+(frontDesk?'customer-frontdesk-stats':'')}>
+      <article><UsersRound size={19}/><div><span>{frontDesk?'Klienci Twoich punktów':'Klienci w zakresie'}</span><strong>{stats?.customers??0}</strong><small>powiązani z Twoimi punktami</small></div></article>
+      {frontDesk
+        ? <article><Wrench size={19}/><div><span>Zlecenia klientów</span><strong>{(data?.customers??[]).reduce((sum,item)=>sum+item.orders,0)}</strong><small>w widocznym zakresie</small></div></article>
+        : <><article><Link2 size={19}/><div><span>Konta Google</span><strong>{stats?.googleAccounts??0}</strong><small>pełny portal klienta</small></div></article><article><UserRoundCheck size={19}/><div><span>Aktywne sesje</span><strong>{stats?.activeSessions??0}</strong><small>kod + Google</small></div></article><article className={stats?.blocked?'attention':''}><Ban size={19}/><div><span>Zablokowane</span><strong>{stats?.blocked??0}</strong><small>dostęp wstrzymany</small></div></article></>}
     </section>
 
     <section className="panel-card customer-account-toolbar customer-control-toolbar">
@@ -559,9 +573,9 @@ export function CustomerAccountsPage() {
       <small>{customers.length} klientów</small>
     </section>
 
-    <div className="customer-filter-row">
+    {!frontDesk&&<div className="customer-filter-row">
       {filters.map((item)=><button key={item.id} className={filter===item.id?'active':''} onClick={()=>setFilter(item.id)}><span>{item.label}</span><b>{item.count}</b></button>)}
-    </div>
+    </div>}
 
     <section className="customer-account-list customer-control-list">
       {customers.map((customer)=><article className={'panel-card customer-control-row '+(customer.blocked?'blocked':'')} key={customer.id}>
@@ -570,24 +584,26 @@ export function CustomerAccountsPage() {
             {customer.googlePicture?<img src={customer.googlePicture} alt="" referrerPolicy="no-referrer"/>:<div>{initials(customer.name)}</div>}
             <span><strong>{customer.name}</strong><small>{customer.email||'Brak e-mailu'}{customer.phone?' · '+customer.phone:''}</small></span>
           </div>
-          <div className="customer-control-status">
-            <span className={'account-chip '+(customer.googleLinked?'linked':'code')}>{customer.googleLinked?<><CheckCircle2 size={13}/> Google</>:<><KeyRound size={13}/> Tylko kod</>}</span>
-            {customer.blocked&&<span className="account-chip blocked"><Ban size={13}/> Zablokowany</span>}
-            <small>Ostatnie wejście: {fmt(customer.lastSeenAt||customer.lastLoginAt)}</small>
-          </div>
-          <div className="customer-control-metrics">
-            <div><span>Zlecenia</span><strong>{customer.orders}</strong></div>
-            <div><span>Wyceny</span><strong>{customer.openQuotes}</strong></div>
-            <div><span>Sesje</span><strong>{customer.activeSessions}</strong></div>
-          </div>
+          {frontDesk
+            ? <div className="customer-control-status customer-frontdesk-status"><span className="account-chip linked"><Wrench size={13}/> {customer.orders} zleceń</span><small>{customer.phone||customer.email||'Brak danych kontaktowych'}</small></div>
+            : <><div className="customer-control-status">
+              <span className={'account-chip '+(customer.googleLinked?'linked':'code')}>{customer.googleLinked?<><CheckCircle2 size={13}/> Google</>:<><KeyRound size={13}/> Tylko kod</>}</span>
+              {customer.blocked&&<span className="account-chip blocked"><Ban size={13}/> Zablokowany</span>}
+              <small>Ostatnie wejście: {fmt(customer.lastSeenAt||customer.lastLoginAt)}</small>
+            </div>
+            <div className="customer-control-metrics">
+              <div><span>Zlecenia</span><strong>{customer.orders}</strong></div>
+              <div><span>Wyceny</span><strong>{customer.openQuotes}</strong></div>
+              <div><span>Sesje</span><strong>{customer.activeSessions}</strong></div>
+            </div></>}
           <div className="customer-control-next"><span>Otwórz klienta</span><ChevronDown size={18}/></div>
         </button>
-        <div className="customer-control-quick-actions">
+        {!frontDesk&&<div className="customer-control-quick-actions">
           <button disabled={Boolean(busy)||!customer.email} onClick={()=>void sendCode(customer)}><Mail size={14}/> Wyślij dostęp</button>
           <button disabled={Boolean(busy)} onClick={()=>void getCode(customer)}><KeyRound size={14}/> Kod</button>
           {customer.activeSessions>0&&<button disabled={Boolean(busy)} onClick={()=>void logoutAll(customer)}><LogOut size={14}/> Wyloguj</button>}
           <button className={customer.blocked?'':'danger'} disabled={Boolean(busy)} onClick={()=>void toggleBlock(customer)}>{customer.blocked?<><Unlock size={14}/> Odblokuj</>:<><ShieldCheck size={14}/> Zablokuj</>}</button>
-        </div>
+        </div>}
       </article>)}
       {!customers.length&&<div className="panel-card customer-account-empty">Nie znaleziono klientów pasujących do filtra.</div>}
     </section>
