@@ -45,6 +45,7 @@ export interface AuthState {
   status: AccountStatus | null;
   requestedPoint?: BackendRequestedPoint | null;
   gmailConnected?: boolean;
+  gmailEmail?: string | null;
   gmailStatus?: string | null;
   message?: string;
 }
@@ -153,6 +154,7 @@ const toAuthState = (
     status: payload.user.status,
     requestedPoint: payload.user.requestedPoint ?? null,
     gmailConnected: payload.gmail?.connected === true,
+    gmailEmail: payload.gmail?.email ?? null,
     gmailStatus: payload.gmail?.reason ?? payload.gmail?.status ?? null,
     message
   };
@@ -171,6 +173,9 @@ const emptyState = (development: boolean, message?: string): AuthState => ({
   supportEnabled: false,
   status: null,
   requestedPoint: null,
+  gmailConnected: false,
+  gmailEmail: null,
+  gmailStatus: null,
   message
 });
 
@@ -352,7 +357,7 @@ const performGoogleLogin = async (development: boolean): Promise<AuthState> => {
           const pointId = String(payload.activePointId ?? '').trim();
           const canAutoConnectGmail =
             role !== 'OWNER' &&
-            ['BOSS', 'COORDINATOR'].includes(role) &&
+            ['BOSS', 'COORDINATOR', 'SUPPORT', 'TECHNICIAN', 'USER'].includes(role) &&
             payload.user.status === 'ACTIVE' &&
             Boolean(pointId) &&
             Boolean(tokens.refresh_token) &&
@@ -370,7 +375,7 @@ const performGoogleLogin = async (development: boolean): Promise<AuthState> => {
                   clientSecret
                 })
               }, payload.token);
-              payload.gmail = { connected:true, pointId, status:'ACTIVE' };
+              payload.gmail = { connected:true, pointId, email:payload.user.email, status:'ACTIVE' };
             } catch {
               payload.gmail = { connected:false, pointId, reason:'GMAIL_AUTO_CONNECT_FAILED' };
             }
