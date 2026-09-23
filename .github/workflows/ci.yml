@@ -276,11 +276,21 @@ jobs:
             "OWNER_PRIVACY",
             "GMAIL_SCOPE_NOT_GRANTED",
             "REFRESH_TOKEN_MISSING",
-            "GMAIL_REUSED_AT_LOGIN",
-            "EXISTING_SERVER_REFRESH_TOKEN",
-            "EXISTING_SENDER_REUSED"
+            "user_gmail_credentials",
+            "SERVER_USER",
+            "EXISTING_USER_SENDER_REUSED",
+            "GMAIL_IDENTITY_MISMATCH",
+            "LEFT JOIN user_gmail_credentials ug ON ug.user_id=n.user_id",
+            "Brak aktywnego Gmaila zalogowanego pracownika."
           ) | ForEach-Object {
             if (-not $central.Contains($_)) { throw "Missing central unified Gmail contract: $_" }
+          }
+          if ($central.Contains("ORDER BY CASE WHEN point_id=$1 THEN 0 ELSE 1 END")) {
+            throw "Service e-mail sender must never fall back to another point/user Gmail."
+          }
+          $migration = Get-Content database/migrations/2026-09-23-v100020-user-gmail-per-user.sql -Raw
+          @("CREATE TABLE IF NOT EXISTS user_gmail_credentials","ON CONFLICT(user_id) DO NOTHING","lower(pe.sender_email)=lower(u.email)") | ForEach-Object {
+            if (-not $migration.Contains($_)) { throw "Missing safe per-user Gmail migration contract: $_" }
           }
 
           $gmail = Get-Content electron/gmailAuth.ts -Raw
