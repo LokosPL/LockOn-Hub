@@ -245,6 +245,10 @@ jobs:
             support_expected="403"
             case "$role" in OWNER|SUPPORT) support_expected="200";; esac
             expect_code "$token" "/support/tickets" "$support_expected" "$role support queue"
+
+            customers_expected="403"
+            case "$role" in OWNER|SUPPORT|USER) customers_expected="200";; esac
+            expect_code "$token" "/customer-accounts" "$customers_expected" "$role customer workspace"
           done
 
           echo "Role matrix passed: OWNER, BOSS, COORDINATOR, TECHNICIAN, USER, SUPPORT."
@@ -320,7 +324,50 @@ jobs:
           const d=require('./user-outbound.json'), from=process.argv[2], to=process.argv[3];
           if(d.transfer?.status!=='IN_TRANSIT'||d.transfer?.fromPointId!==from||d.transfer?.toPointId!==to)throw new Error('USER could not send device to another point');
           NODE
+          user_outbound_transfer_id="$(node -e "const d=require('./user-outbound.json');if(!d.transfer?.id)throw new Error('Missing USER outbound transfer id');process.stdout.write(d.transfer.id)")"
 
+          # Destination accepts the phone. The home-point USER must still retain READ access
+          # to their customer/order/history, but must not gain technical write access away from home.
+          owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$destination")" > owner-user-destination.json
+          owner_api POST "/service/transfers/$user_outbound_transfer_id/status" '{"status":"DELIVERED","note":"Telefon dotarł do serwisu"}' > user-outbound-delivered.json
+          owner_api POST "/service/transfers/$user_outbound_transfer_id/status" '{"status":"ACCEPTED","note":"Serwis przyjął telefon"}' > user-outbound-accepted.json
+          node -e "const d=require('./user-outbound-accepted.json');if(d.transfer?.status!=='ACCEPTED')throw new Error('Destination did not accept USER outbound phone')"
+
+          user_api GET /service/orders > user-orders-away.json
+          node - <<'NODE' "$user_order_id" "$destination"
+          const rows=require('./user-orders-away.json'), orderId=process.argv[2], destination=process.argv[3];
+          const order=rows.find((item)=>item.id===orderId);
+          if(!order)throw new Error('Home-point USER lost order visibility after service accepted the phone');
+          if(order.currentPointId!==destination)throw new Error('USER order current location was not updated to service point');
+          if(!order.latestTransfer||order.latestTransfer.status!=='ACCEPTED')throw new Error('USER cannot see latest accepted transfer timing');
+          NODE
+
+          user_api GET "/service/orders/$user_order_id/history" > user-away-history.json
+          node -e "const h=require('./user-away-history.json');if(!Array.isArray(h)||!h.length)throw new Error('Home-point USER lost service history while phone is away')"
+
+          user_api GET /customer-accounts > user-customers.json
+          node - <<'NODE' "$user_customer_id"
+          const d=require('./user-customers.json'), customerId=process.argv[2];
+          const customer=d.customers?.find((item)=>item.id===customerId);
+          if(!customer)throw new Error('Home-point USER lost their customer while phone is away');
+          if(customer.activeSessions!==0||customer.googleEmail!==null||customer.blocked!==false)throw new Error('Front-desk customer API leaked portal administration metadata');
+          NODE
+
+          user_api GET "/service/customers/$user_customer_id" > user-customer-detail.json
+          node - <<'NODE' "$user_order_id"
+          const d=require('./user-customer-detail.json'), orderId=process.argv[2];
+          if(!d.orders?.some((item)=>item.id===orderId))throw new Error('Front-desk customer card does not include away service order');
+          NODE
+
+          user_api POST "/customer-accounts/$user_customer_id/profile" "$(node -e "process.stdout.write(JSON.stringify({firstName:'CI',lastName:process.argv[1],email:process.argv[2]+'@invalid.test',phone:'+48999111222'}))" "USER $suffix" "$suffix")" > user-customer-profile.json
+          node -e "const d=require('./user-customer-profile.json');if(d.customer?.phone!=='+48999111222')throw new Error('USER could not update customer contact data')"
+
+          set +e
+          away_edit_http="$(curl --silent --show-error --output user-away-edit.json --write-out '%{http_code}' --request POST "$TEMP_API_URL/service/orders/$user_order_id/details" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{"deviceNotes":"Nie wolno edytować telefonu w obcym punkcie"}')"
+          set -e
+          [ "$away_edit_http" = "403" ] || { echo "::error::Home-point USER gained technical write access to away phone: HTTP $away_edit_http"; cat user-away-edit.json; exit 1; }
+
+          # Continue the original incoming-transfer USER scenarios.
           owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$destination")" > owner-user-destination.json
           node - <<'NODE' "$suffix" > user-incoming-body.json
           const suffix=process.argv[2];
@@ -397,7 +444,7 @@ jobs:
           user_api POST "/service/orders/$pickup_order_id/status" '{"status":"COMPLETED","note":"Wydano klientowi przez USER"}' > user-pickup-completed.json
           node -e "const d=require('./user-pickup-completed.json');if(d.order?.status!=='COMPLETED')throw new Error('USER pickup completion failed')"
 
-          echo "USER front-desk E2E passed: intake, notification choice, outbound, manual accept, scan accept, pickup."
+          echo "USER front-desk E2E passed: intake, customer view/update, home-point tracking, outbound, manual accept, scan accept, pickup."
 
       - name: Temp service intake, PDF and logistics E2E
         shell: bash
