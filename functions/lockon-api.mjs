@@ -1532,8 +1532,8 @@ const autoConnectGmailFromPrimaryLogin = async (loginPayload, profile, tokens) =
           status:'ACTIVE',
           reason:'EXISTING_USER_SENDER_REUSED'
         };
-      } catch (error) {
-        console.error('[gmail user credential reuse at login]', error);
+      } catch {
+        console.warn('[gmail user credential reuse at login] stored credential could not be refreshed');
       }
     }
     return { connected:false, skipped:false, reason:'REFRESH_TOKEN_MISSING', pointId:pointId || null };
@@ -1579,8 +1579,8 @@ const autoConnectGmailFromPrimaryLogin = async (loginPayload, profile, tokens) =
       recoveredNotifications:recovery.recovered,
       recoveredSent:recovery.sent
     };
-  } catch (error) {
-    console.error('[gmail auto-connect at login]', error);
+  } catch {
+    console.warn('[gmail auto-connect at login] connection failed');
     return {
       connected:false,
       skipped:false,
@@ -1604,8 +1604,8 @@ const autoConnectMeetingGmailFromOwner = async (loginPayload, profile, tokens) =
       try{
         await refreshGmailAccess(decryptSecret(existing.refresh_token_ciphertext),'');
         return {connected:true,skipped:false,email:existing.sender_email,status:'ACTIVE',reason:'EXISTING_MEETING_SENDER_REUSED'};
-      }catch(error){
-        console.error('[meeting gmail credential reuse]',error);
+      }catch{
+        console.warn('[meeting gmail credential reuse] stored credential could not be refreshed');
       }
     }
     return {connected:false,skipped:false,reason:'REFRESH_TOKEN_MISSING'};
@@ -1617,8 +1617,8 @@ const autoConnectMeetingGmailFromOwner = async (loginPayload, profile, tokens) =
       [userId,profile.email,encryptSecret(refreshToken)]
     );
     return {connected:true,skipped:false,email:profile.email,status:'ACTIVE'};
-  }catch(error){
-    console.error('[meeting gmail auto-connect]',error);
+  }catch{
+    console.warn('[meeting gmail auto-connect] connection failed');
     return {connected:false,skipped:false,reason:'MEETING_GMAIL_AUTO_CONNECT_FAILED'};
   }
 };
