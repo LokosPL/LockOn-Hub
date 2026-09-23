@@ -3394,6 +3394,24 @@ const route = async (request) => {
     return json(request,{meetings:await listMeetingsForUser(session.user)});
   }
 
+  if(method==='GET'&&url.pathname==='/meetings/audience-options'){
+    const session=await requireActive(request),u=session.user;
+    if(!MEETING_HOST_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do wyboru uczestników spotkania.'),{status:403,code:'MEETING_AUDIENCE_FORBIDDEN'});
+    const [pointsResult,usersResult]=await Promise.all([
+      q("SELECT id,name,city FROM points WHERE active=true ORDER BY name"),
+      q("SELECT id,name,email,role_code FROM users WHERE status='ACTIVE' AND blocked_at IS NULL ORDER BY name,email")
+    ]);
+    return json(request,{
+      points:pointsResult.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
+      users:usersResult.rows.map((row)=>({
+        id:row.id,
+        name:supportIdentityName(row.name,row.email,row.role_code)||'Użytkownik',
+        email:supportIdentityEmail(row.email,row.role_code),
+        role:row.role_code||null
+      }))
+    });
+  }
+
   if(method==='POST'&&url.pathname==='/meetings'){
     const session=await requireActive(request),u=session.user;
     if(!MEETING_HOST_ROLES.has(u.role_code))throw Object.assign(new Error('Tylko OWNER lub BOSS może utworzyć spotkanie.'),{status:403,code:'MEETING_CREATE_FORBIDDEN'});
