@@ -1251,9 +1251,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       </section>
 
                       {effectiveRole === 'USER' && <section className="service-frontdesk-card">
-                        <div><PackageCheck size={18}/><span><strong>Obsługa klienta przy ladzie</strong><small>{order.status === 'READY' ? 'Telefon jest gotowy. Sprawdź dane klienta i wydaj urządzenie.' : 'Tu zobaczysz tylko informacje potrzebne do rozmowy z klientem.'}</small></span></div>
+                        <div><PackageCheck size={18}/><span><strong>Obsługa klienta przy ladzie</strong><small>{order.status === 'READY' ? 'Telefon jest gotowy. Sprawdź dane klienta i wykonaj krok wydania poniżej.' : 'Tu zobaczysz tylko informacje potrzebne do rozmowy z klientem.'}</small></span></div>
                         <div className="service-frontdesk-meta"><span>{order.statusLabel}</span><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span>{order.warrantyExpiresAt&&<span>Gwarancja do {new Date(order.warrantyExpiresAt).toLocaleDateString('pl-PL')}</span>}</div>
-                        {canCompletePickupHere && <button className="button primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeStatus(order,'COMPLETED')}>Wydaj telefon klientowi</button>}
                       </section>}
 
                       <section className="service-workspace-card service-stage-card service-stage-guided">
