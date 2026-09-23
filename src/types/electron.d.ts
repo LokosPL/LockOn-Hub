@@ -68,6 +68,10 @@ export interface MeetingOptions {
   users:Array<{id:string;name:string;email?:string|null;role:UserRole}>;
 }
 export interface MeetingMutationResult { ok:true; meeting:MeetingSummary|null; }
+export interface MeetingJoinToken { serverUrl:string; token:string; roomName:string; identity:string; canManage:boolean; permissions:{microphone:boolean;screenShare:boolean}; }
+export interface MeetingLiveParticipantTrack { sid:string; source:number; muted:boolean; }
+export interface MeetingLiveParticipant { identity:string; name:string; metadata:string; joinedAt?:string|null; tracks:MeetingLiveParticipantTrack[]; }
+export interface MeetingParticipantsPayload { configured:boolean; participants:MeetingLiveParticipant[]; }
 export interface WeatherData { city:string; region?:string|null; country?:string|null; temperature:number; apparentTemperature:number; minTemperature:number; maxTemperature:number; windSpeed:number; weatherCode:number; condition:string; fetchedAt:string; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; originalOrderId?:string|null; handlingMode:'STANDARD'|'COMPLAINT_FLOW'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
@@ -231,6 +235,9 @@ declare global {
         options: () => Promise<MeetingOptions>;
         create: (payload:{title:string;description?:string;startsAt:string;plannedMinutes:number;maxParticipants:number;allowParticipantAudio:boolean;allowParticipantScreenShare:boolean;hostUserId?:string;audience:Array<{type:'ALL'|'POINT'|'USER';pointId?:string;userId?:string}>}) => Promise<MeetingMutationResult>;
         action: (meetingId:string,action:'register'|'unregister'|'start'|'end'|'cancel') => Promise<MeetingMutationResult>;
+        joinToken: (meetingId:string) => Promise<MeetingJoinToken>;
+        participants: (meetingId:string) => Promise<MeetingParticipantsPayload>;
+        moderate: (meetingId:string,payload:{identity:string;action:'MUTE'|'REMOVE'|'ALLOW_MIC'|'BLOCK_MIC'}) => Promise<{ok:true}>;
       };
       service: {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
