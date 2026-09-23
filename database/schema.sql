@@ -1021,6 +1021,16 @@ CREATE TABLE IF NOT EXISTS meeting_registrations (
 );
 CREATE INDEX IF NOT EXISTS meeting_registrations_status_idx ON meeting_registrations(meeting_id,status,registered_at);
 
+CREATE TABLE IF NOT EXISTS meeting_participant_controls (
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  microphone_allowed boolean,
+  removed_at timestamptz,
+  updated_by_user_id text REFERENCES users(id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(meeting_id,user_id)
+);
+
 CREATE TABLE IF NOT EXISTS meeting_attendance (
   meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
   user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
