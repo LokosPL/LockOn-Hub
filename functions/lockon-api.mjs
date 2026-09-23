@@ -2159,8 +2159,8 @@ const requireCustomerAccountAccess = async (user, customerId, accessMode = 'SUPP
 const customerAccountManagementOverview = async (user, search = '', accessMode = 'SUPPORT') => {
   const serviceView=accessMode==='SERVICE';
   if(serviceView){
-    if(!SERVICE_CREATE_ROLES.has(user?.role_code)&&!hasSupportAccess(user)){
-      throw Object.assign(new Error('Brak uprawnień do klientów tego punktu.'),{status:403,code:'SERVICE_CUSTOMER_FORBIDDEN'});
+    if(user?.role_code!=='USER'){
+      throw Object.assign(new Error('Ten uproszczony widok klientów jest dostępny dla pracownika punktu.'),{status:403,code:'SERVICE_CUSTOMER_FORBIDDEN'});
     }
   }else{
     requireSupportAccess(user);
@@ -3424,7 +3424,7 @@ const route = async (request) => {
 
   if (method === 'GET' && url.pathname === '/customer-accounts') {
     const session=await requireActive(request);
-    const serviceView=!hasSupportAccess(session.user)&&SERVICE_CREATE_ROLES.has(session.user.role_code);
+    const serviceView=session.user.role_code==='USER';
     if(!serviceView&&!hasSupportAccess(session.user)){
       throw Object.assign(new Error('Brak uprawnień do klientów tego punktu.'),{status:403,code:'SERVICE_CUSTOMER_FORBIDDEN'});
     }
@@ -3507,7 +3507,7 @@ const route = async (request) => {
   const customerAccountProfileMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/profile$/);
   if(method==='POST'&&customerAccountProfileMatch){
     const session=await requireActive(request),u=session.user;
-    const customer=await requireCustomerAccountAccess(u,customerAccountProfileMatch[1],'SERVICE');
+    const customer=await requireCustomerAccountAccess(u,customerAccountProfileMatch[1],u.role_code==='USER'?'SERVICE':'SUPPORT');
     const body=await readJson(request);
     const firstName=cleanText(body.firstName,100);
     const lastName=cleanText(body.lastName,100);
