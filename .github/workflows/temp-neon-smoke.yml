@@ -253,6 +253,106 @@ jobs:
 
           echo "Role matrix passed: OWNER, BOSS, COORDINATOR, TECHNICIAN, USER, SUPPORT."
 
+      - name: Temp meetings permissions, signup and room gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          owner_token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
+          user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
+          boss_token="$(node -e "const d=require('./role-BOSS.json');process.stdout.write(d.token)")"
+          user_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.user.id)")"
+
+          api_code() {
+            local token="$1" method="$2" path="$3" body="${4:-{}}"
+            curl --silent --show-error --output meeting-response.json --write-out '%{http_code}'               --request "$method" "$TEMP_API_URL$path"               --header "Authorization: Bearer $token"               --header "Content-Type: application/json"               --data "$body"
+          }
+
+          # Only OWNER/BOSS can access planning options.
+          [ "$(api_code "$owner_token" GET /meetings/options '{}')" = "200" ] || { cat meeting-response.json; exit 1; }
+          [ "$(api_code "$boss_token" GET /meetings/options '{}')" = "200" ] || { cat meeting-response.json; exit 1; }
+          [ "$(api_code "$user_token" GET /meetings/options '{}')" = "403" ] || { echo "::error::USER gained meeting planning options"; cat meeting-response.json; exit 1; }
+
+          starts_at="$(node -e "process.stdout.write(new Date(Date.now()+3600000).toISOString())")"
+          meeting_body="$(node - <<'NODE' "$starts_at" "$user_id"
+          const [startsAt,userId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            title:'CI szkolenie 1.0.0.20',
+            description:'TEMP E2E spotkań ServiceOS',
+            startsAt,
+            plannedMinutes:30,
+            maxParticipants:4,
+            allowParticipantAudio:false,
+            allowParticipantScreenShare:false,
+            audience:[{type:'USER',userId}]
+          }));
+          NODE
+          )"
+
+          # Ordinary USER must never create a meeting.
+          user_create_http="$(api_code "$user_token" POST /meetings "$meeting_body")"
+          [ "$user_create_http" = "403" ] || { echo "::error::USER created a meeting: HTTP $user_create_http"; cat meeting-response.json; exit 1; }
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data "$meeting_body" > meeting-created.json
+          meeting_id="$(node -e "const d=require('./meeting-created.json');if(!d.meeting?.id)throw new Error('Meeting create failed');process.stdout.write(d.meeting.id)")"
+
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings" --header "Authorization: Bearer $user_token" > user-meetings.json
+          node - <<'NODE' "$meeting_id"
+          const d=require('./user-meetings.json'), id=process.argv[2];
+          const m=d.meetings?.find((item)=>item.id===id);
+          if(!m)throw new Error('Eligible USER cannot see scheduled meeting');
+          if(m.registeredByMe)throw new Error('USER unexpectedly registered before signup');
+          NODE
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/register" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{}' > meeting-register.json
+          node -e "const d=require('./meeting-register.json');if(!d.meeting?.registeredByMe)throw new Error('Meeting registration failed')"
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/unregister" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{}' > meeting-unregister.json
+          node -e "const d=require('./meeting-unregister.json');if(d.meeting?.registeredByMe)throw new Error('Meeting unregister failed')"
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/register" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{}' > /dev/null
+
+          user_start_http="$(api_code "$user_token" POST "/meetings/$meeting_id/start" '{}')"
+          [ "$user_start_http" = "403" ] || { echo "::error::USER could start meeting: HTTP $user_start_http"; cat meeting-response.json; exit 1; }
+
+          # This is an intentional production-readiness gate. It cannot pass until TEMP
+          # has LIVEKIT_URL/API_KEY/API_SECRET configured on the exact deployed backend.
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/start" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > meeting-start.json
+          node -e "const d=require('./meeting-start.json');if(d.meeting?.status!=='LIVE')throw new Error('Meeting did not enter LIVE')"
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/join-token" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{}' > user-join-token.json
+          node - <<'NODE'
+          const d=require('./user-join-token.json');
+          if(!d.token||!d.serverUrl)throw new Error('Participant join token missing');
+          if(d.canManage!==false)throw new Error('USER got host privileges');
+          if(d.permissions?.microphone!==false||d.permissions?.screenShare!==false)throw new Error('Meeting publish restrictions were not enforced');
+          NODE
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/join-token" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > host-join-token.json
+          node - <<'NODE'
+          const d=require('./host-join-token.json');
+          if(!d.token||d.canManage!==true)throw new Error('Host join token/privileges missing');
+          if(d.permissions?.microphone!==true||d.permissions?.screenShare!==true)throw new Error('Host publish permissions missing');
+          NODE
+
+          user_moderate_http="$(api_code "$user_token" POST "/meetings/$meeting_id/moderate" '{"identity":"forbidden","action":"MUTE"}')"
+          [ "$user_moderate_http" = "403" ] || { echo "::error::USER gained moderation: HTTP $user_moderate_http"; cat meeting-response.json; exit 1; }
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/attendance" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{"action":"JOIN"}' > /dev/null
+          sleep 1
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/attendance" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{"action":"LEAVE"}' > /dev/null
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings/$meeting_id/attendance" --header "Authorization: Bearer $owner_token" > meeting-attendance.json
+          node - <<'NODE' "$user_id"
+          const d=require('./meeting-attendance.json'), userId=process.argv[2];
+          const item=d.attendance?.find((x)=>x.userId===userId);
+          if(!item||!item.joined||!item.firstJoinedAt||!item.lastLeftAt||item.joinCount<1)throw new Error('Meeting attendance did not record join/leave');
+          NODE
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/end" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > meeting-end.json
+          node -e "const d=require('./meeting-end.json');if(d.meeting?.status!=='ENDED')throw new Error('Meeting did not enter ENDED')"
+
+          echo "Meetings TEMP E2E passed: roles, visibility, register/unregister, host/participant grants, attendance, end."
+
       - name: Temp USER front-desk service E2E
         shell: bash
         run: |
