@@ -85,13 +85,18 @@ export function MeetingsCard({ role }: { role: UserRole }) {
       setError(form.audienceType === 'POINT' ? 'Wybierz punkt.' : 'Wybierz osobę.');
       return;
     }
+    const startsAt = new Date(form.startsAt);
+    if (!form.startsAt || Number.isNaN(startsAt.getTime())) {
+      setError('Wybierz prawidłowy termin spotkania.');
+      return;
+    }
     setBusyId('create');
     setError('');
     try {
       await window.lockOn.meetings.create({
         title,
         description:form.description.trim(),
-        startsAt:new Date(form.startsAt).toISOString(),
+        startsAt:startsAt.toISOString(),
         plannedMinutes:Number(form.plannedMinutes),
         maxParticipants:Number(form.maxParticipants),
         allowParticipantAudio:form.allowParticipantAudio,
