@@ -1675,14 +1675,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="transfer-only-status"><span className="status-badge">{order.handlingMode === 'TRANSFER_ONLY' ? 'Tylko przekazanie' : order.statusLabel}</span><button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button></div>
                         ) : canEditOrderHere && order.handlingMode === 'TRANSFER_ONLY' ? (
                           <div className="transfer-only-status"><span className="status-badge">Tylko przekazanie</span>{order.status !== 'CANCELLED' && <button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button>}</div>
-                        ) : canEditOrderHere ? (
-                          <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e) => void changeStatus(order, e.target.value)}>
-                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && (order.canMarkReady===false || order.status!=='REPAIR_DONE' || !order.warrantyReady)) || (value==='COMPLETED' && order.status!=='READY')}>{label}</option>)}
-                          </select>
                         ) : (
                           <div className="service-status-readonly">
                             <span className="status-badge">{order.handlingMode==='TRANSFER_ONLY' && order.status!=='CANCELLED' ? 'Tylko przekazanie' : order.statusLabel}</span>
-                            {canEditStatus && <small>{order.openTransfer ? 'Status zablokowany na czas transportu.' : 'Status zmienia punkt, w którym fizycznie znajduje się urządzenie.'}</small>}
+                            <small>{order.openTransfer ? 'Transport w toku — wejdź w szczegóły.' : canEditOrderHere ? 'Kolejny krok wykonasz w szczegółach.' : canEditStatus ? 'Etap zmienia punkt, w którym jest telefon.' : order.workflow?.attentionLabel}</small>
                           </div>
                         )}
                       </div>
