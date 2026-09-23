@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "functions/lockon-api.mjs"
+      - "package.json"
+      - "package-lock.json"
       - "database/migrations/**"
       - "database/schema.sql"
       - ".github/workflows/neon-api-verify.yml"
@@ -12,6 +14,8 @@ on:
   pull_request:
     paths:
       - "functions/lockon-api.mjs"
+      - "package.json"
+      - "package-lock.json"
       - "database/migrations/**"
       - "database/schema.sql"
       - ".github/workflows/neon-api-verify.yml"
@@ -34,7 +38,7 @@ jobs:
         with:
           node-version: 24
       - name: Install function build dependencies
-        run: npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 pdfmake@0.2.20 esbuild@0.25.12
+        run: npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 pdfmake@0.2.20 livekit-server-sdk@2.19.1 esbuild@0.25.12
       - name: Check source syntax
         run: node --check functions/lockon-api.mjs
       - name: Verify v0.20 support and customer contracts
