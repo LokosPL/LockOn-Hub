@@ -1580,6 +1580,39 @@ const autoConnectGmailFromPrimaryLogin = async (loginPayload, profile, tokens) =
   }
 };
 
+const autoConnectMeetingGmailFromOwner = async (loginPayload, profile, tokens) => {
+  const role=cleanText(loginPayload?.user?.role,40).toUpperCase();
+  const userId=cleanText(loginPayload?.user?.id,120);
+  const status=cleanText(loginPayload?.user?.status,40).toUpperCase();
+  if(role!=='OWNER'||status!=='ACTIVE'||!userId)return {connected:false,skipped:true,reason:'NOT_OWNER'};
+  const scopes=String(tokens?.scope||'').split(/\s+/).filter(Boolean);
+  if(!scopes.includes('https://www.googleapis.com/auth/gmail.send'))return {connected:false,skipped:false,reason:'GMAIL_SCOPE_NOT_GRANTED'};
+  const refreshToken=cleanText(tokens?.refresh_token,4096);
+  if(!refreshToken){
+    const existing=(await q("SELECT sender_email,refresh_token_ciphertext,status FROM meeting_email_sender WHERE id='default' LIMIT 1")).rows[0];
+    if(existing?.status==='ACTIVE'&&existing.refresh_token_ciphertext){
+      try{
+        await refreshGmailAccess(decryptSecret(existing.refresh_token_ciphertext),'');
+        return {connected:true,skipped:false,email:existing.sender_email,status:'ACTIVE',reason:'EXISTING_MEETING_SENDER_REUSED'};
+      }catch(error){
+        console.error('[meeting gmail credential reuse]',error);
+      }
+    }
+    return {connected:false,skipped:false,reason:'REFRESH_TOKEN_MISSING'};
+  }
+  try{
+    await refreshGmailAccess(refreshToken,'');
+    await q(
+      "INSERT INTO meeting_email_sender(id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES('default',$1,$2,$3,NULL,'ACTIVE',NULL,now(),now()) ON CONFLICT(id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
+      [userId,profile.email,encryptSecret(refreshToken)]
+    );
+    return {connected:true,skipped:false,email:profile.email,status:'ACTIVE'};
+  }catch(error){
+    console.error('[meeting gmail auto-connect]',error);
+    return {connected:false,skipped:false,reason:'MEETING_GMAIL_AUTO_CONNECT_FAILED'};
+  }
+};
+
 const mailSettingsForPoint = async (pointId) => {
   const row = (await q(
     "SELECT automatic_email_enabled,notify_statuses,sender_display_name,footer_text FROM point_notification_settings WHERE point_id=$1 LIMIT 1",
@@ -2572,6 +2605,98 @@ const sendGmail = async (sender, recipient, subject, textBody, htmlBody, display
   return { id: String(payload.id), threadId: payload.threadId ? String(payload.threadId) : null };
 };
 
+const loadMeetingMailSender = async () => {
+  const sender=(await q("SELECT sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error FROM meeting_email_sender WHERE id='default' AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1")).rows[0]||null;
+  if(!sender)return null;
+  if(!GOOGLE_DESKTOP_CLIENT_SECRET&&!sender.oauth_client_secret_ciphertext)return null;
+  return sender;
+};
+
+const meetingEmailRecipients = async (meetingId) => {
+  const {rows}=await q(
+    "SELECT DISTINCT u.id,u.email FROM users u WHERE u.status='ACTIVE' AND u.blocked_at IS NULL AND u.role_code IS NOT NULL AND ("+
+    "EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=$1 AND a.audience_type='ALL') OR "+
+    "EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=$1 AND a.audience_type='USER' AND a.user_id=u.id) OR "+
+    "EXISTS(SELECT 1 FROM meeting_audience a JOIN user_point_access upa ON upa.point_id=a.point_id AND upa.user_id=u.id WHERE a.meeting_id=$1 AND a.audience_type='POINT'))",
+    [meetingId]
+  );
+  return rows.filter((row)=>normalizeEmail(row.email));
+};
+
+const queueMeetingEmailEvent = async (meetingId,eventKey) => {
+  const recipients=await meetingEmailRecipients(meetingId);
+  let queued=0;
+  for(const recipient of recipients){
+    const result=await q(
+      "INSERT INTO meeting_email_outbox(id,meeting_id,recipient_user_id,recipient_email,event_key,status) VALUES($1,$2,$3,$4,$5,'PENDING') ON CONFLICT(meeting_id,recipient_user_id,event_key) DO NOTHING RETURNING id",
+      [makeId('mml'),meetingId,recipient.id,recipient.email,eventKey]
+    );
+    queued+=Number(result.rowCount||0);
+  }
+  return {eligible:recipients.length,queued};
+};
+
+const meetingEmailContent = (meeting,eventKey) => {
+  const starts=new Intl.DateTimeFormat('pl-PL',{dateStyle:'long',timeStyle:'short',timeZone:'Europe/Warsaw'}).format(new Date(meeting.starts_at));
+  const cancelled=String(eventKey).startsWith('CANCELLED');
+  const changed=String(eventKey).startsWith('RESCHEDULED');
+  const subject=cancelled
+    ? 'LockOn ServiceOS — spotkanie zostało anulowane'
+    : changed
+      ? 'LockOn ServiceOS — termin spotkania został zmieniony'
+      : 'LockOn ServiceOS — zaproszenie na spotkanie';
+  const title=cleanText(meeting.title,120);
+  const description=cleanText(meeting.description||'',1800);
+  const intro=cancelled
+    ? 'Zaplanowane spotkanie zostało anulowane.'
+    : changed
+      ? 'Termin spotkania został zmieniony.'
+      : 'Zapraszamy na wewnętrzne spotkanie zespołu w LockOn ServiceOS.';
+  const action=cancelled?'Nie musisz nic robić.':'Otwórz ServiceOS i zapisz się na spotkanie na ekranie Start.';
+  const text=[intro,'','Spotkanie: '+title,'Termin: '+starts,description?('Opis: '+description):'', '',action].filter((line)=>line!==null).join('\n');
+  const html='<!doctype html><html lang="pl"><body style="margin:0;background:#0b0e12;color:#edf1f4;font-family:Arial,sans-serif">'+
+    '<div style="max-width:600px;margin:auto;padding:30px 16px"><div style="font-size:13px;font-weight:850">LockOn <span style="color:#7e8994">ServiceOS</span></div>'+
+    '<div style="margin-top:18px;padding:24px;border:1px solid #293039;border-radius:18px;background:#12171d">'+
+    '<div style="font-size:11px;color:#ff8f69;text-transform:uppercase;letter-spacing:.08em;font-weight:850">'+escapeHtml(cancelled?'Spotkanie anulowane':changed?'Zmiana terminu':'Zaproszenie na spotkanie')+'</div>'+
+    '<h1 style="font-size:22px;margin:9px 0 12px">'+escapeHtml(title)+'</h1>'+
+    '<p style="font-size:14px;color:#d9dfe5"><strong>'+escapeHtml(starts)+'</strong></p>'+
+    (description?'<p style="font-size:13px;color:#aeb8c1;line-height:1.55">'+escapeHtml(description)+'</p>':'')+
+    '<p style="margin-top:20px;font-size:13px;color:#d9dfe5">'+escapeHtml(action)+'</p>'+
+    '</div><p style="font-size:10px;color:#66717b;text-align:center">Wiadomość organizacyjna LockOn ServiceOS.</p></div></body></html>';
+  return {subject,text,html};
+};
+
+const processMeetingEmail = async (outboxId) => {
+  const item=(await q(
+    "SELECT o.*,m.title,m.description,m.starts_at,m.status AS meeting_status FROM meeting_email_outbox o JOIN meetings m ON m.id=o.meeting_id WHERE o.id=$1 LIMIT 1",
+    [outboxId]
+  )).rows[0];
+  if(!item)return {sent:false,reason:'NOT_FOUND'};
+  const attempt=Number(item.attempts||0)+1;
+  const retryMinutes=Math.min(240,5*Math.pow(2,Math.max(0,attempt-1)));
+  const nextAttemptAt=new Date(Date.now()+retryMinutes*60_000);
+  const sender=await loadMeetingMailSender();
+  if(!sender){
+    const error='Brak aktywnego adminowskiego Gmail dla zaproszeń na spotkania.';
+    await q("UPDATE meeting_email_outbox SET status='FAILED',attempts=$2,last_error=$3,available_at=$4,updated_at=now() WHERE id=$1",[outboxId,attempt,error,nextAttemptAt]);
+    return {sent:false,reason:'MEETING_SENDER_NOT_CONFIGURED',attempts:attempt};
+  }
+  const content=meetingEmailContent(item,item.event_key);
+  try{
+    await q("UPDATE meeting_email_outbox SET status='PROCESSING',attempts=$2,last_error=NULL,updated_at=now() WHERE id=$1",[outboxId,attempt]);
+    const sent=await sendGmail(sender,item.recipient_email,content.subject,content.text,content.html,'LockOn ServiceOS');
+    await q("UPDATE meeting_email_outbox SET status='SENT',sent_at=now(),provider_message_id=$2,last_error=NULL,updated_at=now() WHERE id=$1",[outboxId,sent.id]);
+    await q("UPDATE meeting_email_sender SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE id='default'");
+    return {sent:true,messageId:sent.id,attempts:attempt};
+  }catch(error){
+    const message=cleanText(error instanceof Error?error.message:error,500);
+    await q("UPDATE meeting_email_outbox SET status='FAILED',last_error=$2,available_at=$3,updated_at=now() WHERE id=$1",[outboxId,message,nextAttemptAt]);
+    if(isGmailReauthError(error))await q("UPDATE meeting_email_sender SET status='REVOKED',last_error=$1,updated_at=now() WHERE id='default'",[message]);
+    else await q("UPDATE meeting_email_sender SET last_error=$1,updated_at=now() WHERE id='default'",[message]);
+    return {sent:false,reason:isGmailReauthError(error)?'MEETING_GMAIL_REAUTH_REQUIRED':'SEND_FAILED',attempts:attempt};
+  }
+};
+
 const sendCustomerPortalEventEmail = async ({
   customerId,
   pointId,
@@ -3142,10 +3267,12 @@ const route = async (request) => {
     if(!triggerId)return json(request,{error:'TRIGGER_REQUIRED'},403);
     const triggerBody=await readJson(request).catch(()=>({}));
     const {rows}=await q("SELECT id FROM notification_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY available_at ASC,created_at ASC LIMIT 25");
-    const results=[];
+    const meetingRows=(await q("SELECT id FROM meeting_email_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY available_at ASC,created_at ASC LIMIT 25")).rows;
+    const results=[],meetingResults=[];
     for(const row of rows)results.push({id:row.id,...(await processNotification(row.id))});
-    console.log('[notification worker]',{triggerId,scheduledAt:triggerBody?.data?.scheduled_at||null,processed:results.length});
-    return json(request,{ok:true,processed:results.length,results});
+    for(const row of meetingRows)meetingResults.push({id:row.id,...(await processMeetingEmail(row.id))});
+    console.log('[notification worker]',{triggerId,scheduledAt:triggerBody?.data?.scheduled_at||null,processed:results.length,meetingProcessed:meetingResults.length});
+    return json(request,{ok:true,processed:results.length,meetingProcessed:meetingResults.length,results,meetingResults});
   }
 
   if (method === 'OPTIONS') return new Response(null, { status: 204, headers: secureHeaders(request) });
@@ -3405,8 +3532,9 @@ const route = async (request) => {
       if (!tokens?.id_token) return json(request, { error:'GOOGLE_ID_TOKEN', message:'Google nie zwrócił tokena tożsamości.' }, 400);
       const profile = await verifyGoogle(String(tokens.id_token), GOOGLE_DESKTOP_CLIENT_ID);
       const login = await loginProfile(profile, 'DESKTOP', true);
+      const meetingGmail = await autoConnectMeetingGmailFromOwner(login, profile, tokens);
       const gmail = await autoConnectGmailFromPrimaryLogin(login, profile, tokens);
-      return json(request, { ...login, gmail });
+      return json(request, { ...login, gmail, meetingGmail });
     } catch (error) {
       if (error?.status) throw error;
       throw Object.assign(new Error('Google nie zakończył logowania.'), { status:401, code:'GOOGLE_AUTH_FAILED' });
@@ -4052,6 +4180,7 @@ const route = async (request) => {
         deleted[table]=Number(result.rowCount||0);
       };
       await remove('meeting_email_outbox');
+      await remove('meeting_email_sender');
       await remove('meeting_events');
       await remove('meeting_attendance');
       await remove('meeting_registrations');
@@ -4089,6 +4218,7 @@ const route = async (request) => {
         "'meeting_attendance',(SELECT count(*) FROM meeting_attendance)," +
         "'meeting_events',(SELECT count(*) FROM meeting_events)," +
         "'meeting_email_outbox',(SELECT count(*) FROM meeting_email_outbox)," +
+        "'meeting_email_sender',(SELECT count(*) FROM meeting_email_sender)," +
         "'service_orders',(SELECT count(*) FROM service_orders)," +
         "'service_order_transfers',(SELECT count(*) FROM service_order_transfers)," +
         "'service_order_notes',(SELECT count(*) FROM service_order_notes)," +
@@ -4322,6 +4452,8 @@ const route = async (request) => {
       throw error;
     }finally{client.release();}
     await audit(session,'MEETING_CREATED','meeting',meetingId,null,{startsAt:startsAt.toISOString(),plannedMinutes,maxParticipants,audience});
+    const invitationQueue=await queueMeetingEmailEvent(meetingId,'CREATED');
+    await meetingEvent(meetingId,u.id,'EMAIL_INVITATIONS_QUEUED',invitationQueue);
     const meetings=await listMeetingsForUser(u);
     return json(request,{ok:true,meeting:meetings.find((item)=>item.id===meetingId)||null},201);
   }
@@ -4453,6 +4585,10 @@ const route = async (request) => {
     );
     if(!result.rows[0])return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
     await meetingEvent(meetingId,u.id,target,{});
+    if(target==='CANCELLED'){
+      const cancellationQueue=await queueMeetingEmailEvent(meetingId,'CANCELLED');
+      await meetingEvent(meetingId,u.id,'EMAIL_CANCELLATION_QUEUED',cancellationQueue);
+    }
     await audit(session,'MEETING_'+target,'meeting',meetingId,null,{});
     const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
     return json(request,{ok:true,meeting:view});
