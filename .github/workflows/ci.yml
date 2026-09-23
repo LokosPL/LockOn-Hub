@@ -22,6 +22,7 @@ on:
       - ".github/workflows/temp-neon-smoke.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/prod-smoke.yml"
+      - ".github/workflows/prod-neon-deploy.yml"
   pull_request:
     branches: ["main"]
     paths:
@@ -43,6 +44,7 @@ on:
       - ".github/workflows/temp-neon-smoke.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/prod-smoke.yml"
+      - ".github/workflows/prod-neon-deploy.yml"
   workflow_dispatch:
 
 permissions:
