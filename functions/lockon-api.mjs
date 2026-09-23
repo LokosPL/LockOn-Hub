@@ -26,6 +26,7 @@ const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
 const LIVEKIT_URL = String(process.env.LOCKON_LIVEKIT_URL || process.env.LIVEKIT_URL || '').trim().replace(/\/$/,'');
 const LIVEKIT_API_KEY = String(process.env.LOCKON_LIVEKIT_API_KEY || process.env.LIVEKIT_API_KEY || '').trim();
 const LIVEKIT_API_SECRET = String(process.env.LOCKON_LIVEKIT_API_SECRET || process.env.LIVEKIT_API_SECRET || '').trim();
+const MEETING_INVITE_SENDER_USER_ID = String(process.env.LOCKON_MEETING_INVITE_SENDER_USER_ID || '').trim();
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 90;
@@ -3189,6 +3190,108 @@ const meetingEvent = async (meetingId,eventType,actorUserId=null,targetUserId=nu
     "INSERT INTO meeting_events(id,meeting_id,actor_user_id,target_user_id,event_type,metadata) VALUES($1,$2,$3,$4,$5,$6::jsonb)",
     [makeId('mte'),meetingId,actorUserId,targetUserId,eventType,JSON.stringify(metadata&&typeof metadata==='object'?metadata:{})]
   );
+};
+
+const meetingInviteRecipients = async (meetingId, audienceType, hostUserId) => {
+  let result;
+  if(audienceType==='USERS'){
+    result=await q(
+      "SELECT DISTINCT u.id,u.email,u.name,u.role_code FROM meeting_audience_users a JOIN users u ON u.id=a.user_id WHERE a.meeting_id=$1 AND u.status='ACTIVE' AND u.blocked_at IS NULL AND u.id<>$2 AND btrim(u.email)<>''",
+      [meetingId,hostUserId]
+    );
+  }else if(audienceType==='POINTS'){
+    result=await q(
+      "SELECT DISTINCT u.id,u.email,u.name,u.role_code FROM meeting_audience_points ap JOIN user_point_access upa ON upa.point_id=ap.point_id JOIN users u ON u.id=upa.user_id WHERE ap.meeting_id=$1 AND u.status='ACTIVE' AND u.blocked_at IS NULL AND u.id<>$2 AND btrim(u.email)<>''",
+      [meetingId,hostUserId]
+    );
+  }else{
+    result=await q(
+      "SELECT id,email,name,role_code FROM users WHERE status='ACTIVE' AND blocked_at IS NULL AND id<>$1 AND btrim(email)<>''",
+      [hostUserId]
+    );
+  }
+  return result.rows;
+};
+
+const meetingInviteSenderId = (hostUser) =>
+  MEETING_INVITE_SENDER_USER_ID || (hostUser?.role_code==='OWNER' ? null : hostUser?.id || null);
+
+const queueMeetingInvitationEmails = async (meeting,hostUser,eventType='INVITE') => {
+  const recipients=await meetingInviteRecipients(meeting.id,meeting.audience_type,meeting.host_user_id);
+  const senderUserId=meetingInviteSenderId(hostUser);
+  let queued=0;
+  for(const recipient of recipients){
+    const dedupeKey=[meeting.id,recipient.id,eventType,meeting.starts_at instanceof Date?meeting.starts_at.toISOString():String(meeting.starts_at)].join(':');
+    const inserted=(await q(
+      "INSERT INTO meeting_email_outbox(id,meeting_id,sender_user_id,recipient_user_id,event_type,dedupe_key,recipient,status) VALUES($1,$2,$3,$4,$5,$6,$7,'PENDING') ON CONFLICT(dedupe_key) DO NOTHING RETURNING id",
+      [makeId('mli'),meeting.id,senderUserId,recipient.id,eventType,dedupeKey,recipient.email]
+    )).rows[0];
+    if(inserted)queued+=1;
+  }
+  return {queued,recipients:recipients.length,senderUserId};
+};
+
+const processMeetingInvitation = async (inviteId) => {
+  const row=(await q(
+    "SELECT o.*,m.title,m.description,m.starts_at,m.expected_duration_minutes,m.status AS meeting_status,h.name AS host_name,h.email AS host_email,h.role_code AS host_role,ug.sender_email,ug.refresh_token_ciphertext,ug.oauth_client_secret_ciphertext,ug.status AS sender_status FROM meeting_email_outbox o JOIN meetings m ON m.id=o.meeting_id JOIN users h ON h.id=m.host_user_id LEFT JOIN user_gmail_credentials ug ON ug.user_id=o.sender_user_id WHERE o.id=$1 LIMIT 1",
+    [inviteId]
+  )).rows[0];
+  if(!row)return {sent:false,reason:'NOT_FOUND'};
+  if(row.status==='SENT'||row.status==='CANCELLED')return {sent:row.status==='SENT',reason:'ALREADY_FINAL'};
+  const attempt=Number(row.attempts||0)+1;
+  const retryMinutes=Math.min(240,5*Math.pow(2,Math.max(0,attempt-1)));
+  const nextAttemptAt=new Date(Date.now()+retryMinutes*60_000);
+  if(!row.sender_user_id||!row.sender_email||row.sender_status!=='ACTIVE'||!row.refresh_token_ciphertext||(!GOOGLE_DESKTOP_CLIENT_SECRET&&!row.oauth_client_secret_ciphertext)){
+    const error=row.host_role==='OWNER'&&!MEETING_INVITE_SENDER_USER_ID
+      ? 'Brak organizacyjnego nadawcy zaproszeń spotkań dla OWNER.'
+      : 'Brak aktywnego Gmaila nadawcy zaproszenia.';
+    await q("UPDATE meeting_email_outbox SET status='FAILED',attempts=$2,last_error=$3,available_at=$4,updated_at=now() WHERE id=$1",[inviteId,attempt,error,nextAttemptAt]);
+    return {sent:false,reason:'NO_MEETING_SENDER',attempts:attempt};
+  }
+  const startsAt=new Date(row.starts_at).toLocaleString('pl-PL',{dateStyle:'full',timeStyle:'short',timeZone:'Europe/Warsaw'});
+  const hostName=supportIdentityName(row.host_name,row.host_email,row.host_role)||'Prowadzący';
+  const cancelled=row.event_type==='CANCELLED';
+  const subject=cancelled
+    ? 'LockOn ServiceOS · spotkanie anulowane · '+row.title
+    : 'LockOn ServiceOS · zaproszenie na spotkanie · '+row.title;
+  const action=cancelled
+    ? 'Spotkanie zostało anulowane.'
+    : 'Otwórz ServiceOS → Start → Spotkania pracowników i zapisz się na spotkanie.';
+  const textBody=[
+    cancelled?'Spotkanie zostało anulowane.':'Zaproszenie na wewnętrzne spotkanie LockOn ServiceOS.',
+    '',
+    'Temat: '+row.title,
+    'Termin: '+startsAt,
+    'Planowany czas: '+Number(row.expected_duration_minutes||60)+' min',
+    'Prowadzący: '+hostName,
+    row.description?'Opis: '+row.description:'',
+    '',
+    action
+  ].filter(Boolean).join('\n');
+  const htmlBody='<!doctype html><html lang="pl"><body style="background:#111318;color:#eceff3;font-family:Arial,sans-serif;padding:28px"><div style="max-width:620px;margin:auto;border:1px solid #2a2f37;border-radius:16px;background:#171a20;padding:22px"><div style="color:#ff7b45;font-size:12px;font-weight:700">LOCKON SERVICEOS · SPOTKANIE</div><h2 style="margin:8px 0 12px">'+escapeHtml(row.title)+'</h2><p style="color:#c6cdd4">'+escapeHtml(cancelled?'Spotkanie zostało anulowane.':'Masz nowe zaproszenie na spotkanie pracowników.')+'</p><p><strong>Termin:</strong> '+escapeHtml(startsAt)+'<br><strong>Czas:</strong> '+Number(row.expected_duration_minutes||60)+' min<br><strong>Prowadzący:</strong> '+escapeHtml(hostName)+'</p>'+(row.description?'<p style="color:#9ca7b1">'+escapeHtml(row.description)+'</p>':'')+'<div style="margin-top:18px;padding:14px;border-radius:12px;background:#20252c;color:#cbd2d8">'+escapeHtml(action)+'</div></div></body></html>';
+  const sender={
+    sender_email:row.sender_email,
+    refresh_token_ciphertext:row.refresh_token_ciphertext,
+    oauth_client_secret_ciphertext:row.oauth_client_secret_ciphertext
+  };
+  try{
+    await q("UPDATE meeting_email_outbox SET status='PROCESSING',attempts=$2,subject=$3,body_text=$4,body_html=$5,last_error=NULL,updated_at=now() WHERE id=$1",[inviteId,attempt,subject,textBody,htmlBody]);
+    const sent=await sendGmail(sender,row.recipient,subject,textBody,htmlBody,'LockOn ServiceOS · Spotkania');
+    await q("UPDATE meeting_email_outbox SET status='SENT',sent_at=now(),provider_message_id=$2,last_error=NULL,updated_at=now() WHERE id=$1",[inviteId,sent.id]);
+    return {sent:true,messageId:sent.id,attempts:attempt};
+  }catch(error){
+    const message=cleanText(error instanceof Error?error.message:error,500);
+    await q("UPDATE meeting_email_outbox SET status='FAILED',last_error=$2,available_at=$3,updated_at=now() WHERE id=$1",[inviteId,message,nextAttemptAt]);
+    if(isGmailReauthError(error)&&row.sender_user_id)await q("UPDATE user_gmail_credentials SET status='REVOKED',last_error=$2,updated_at=now() WHERE user_id=$1",[row.sender_user_id,message]);
+    return {sent:false,reason:isGmailReauthError(error)?'GMAIL_REAUTH_REQUIRED':'SEND_FAILED',attempts:attempt};
+  }
+};
+
+const processMeetingInvitationQueue = async (limit=20) => {
+  const rows=(await q("SELECT id FROM meeting_email_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY available_at ASC,created_at ASC LIMIT $1",[Math.max(1,Math.min(50,Number(limit)||20))])).rows;
+  const results=[];
+  for(const row of rows)results.push({id:row.id,...(await processMeetingInvitation(row.id))});
+  return results;
 };
 
 const route = async (request) => {
