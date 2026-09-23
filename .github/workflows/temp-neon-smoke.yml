@@ -296,6 +296,17 @@ jobs:
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data "$meeting_body" > meeting-created.json
           meeting_id="$(node -e "const d=require('./meeting-created.json');if(!d.meeting?.id)throw new Error('Meeting create failed');process.stdout.write(d.meeting.id)")"
 
+          rescheduled_at="$(node -e "process.stdout.write(new Date(Date.now()+7200000).toISOString())")"
+          reschedule_body="$(node -e "process.stdout.write(JSON.stringify({startsAt:process.argv[1]}))" "$rescheduled_at")"
+          user_reschedule_http="$(api_code "$user_token" PATCH "/meetings/$meeting_id" "$reschedule_body")"
+          [ "$user_reschedule_http" = "403" ] || { echo "::error::USER could reschedule meeting: HTTP $user_reschedule_http"; cat meeting-response.json; exit 1; }
+          curl --silent --show-error --fail-with-body --request PATCH "$TEMP_API_URL/meetings/$meeting_id" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data "$reschedule_body" > meeting-rescheduled.json
+          node - <<'NODE' "$rescheduled_at"
+          const d=require('./meeting-rescheduled.json'), expected=process.argv[2];
+          if(d.meeting?.startsAt!==expected)throw new Error('Meeting reschedule did not persist exact startsAt');
+          if(!d.email||Number(d.email.eligible)<1||Number(d.email.queued)<1)throw new Error('Meeting reschedule did not queue a fresh invitation event');
+          NODE
+
           curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings" --header "Authorization: Bearer $user_token" > user-meetings.json
           node - <<'NODE' "$meeting_id"
           const d=require('./user-meetings.json'), id=process.argv[2];
@@ -351,7 +362,7 @@ jobs:
           curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/end" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > meeting-end.json
           node -e "const d=require('./meeting-end.json');if(d.meeting?.status!=='ENDED')throw new Error('Meeting did not enter ENDED')"
 
-          echo "Meetings TEMP E2E passed: roles, visibility, register/unregister, host/participant grants, attendance, end."
+          echo "Meetings TEMP E2E passed: roles, visibility, reschedule mail event, register/unregister, host/participant grants, attendance, end."
 
       - name: Temp USER front-desk service E2E
         shell: bash
@@ -359,6 +370,7 @@ jobs:
           set -euo pipefail
 
           user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
+          user_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.user.id)")"
           user_point="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.activePointId||d.points?.[0]?.id||'')")"
           owner_token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
           [ -n "$user_point" ]
@@ -410,6 +422,13 @@ jobs:
           user_api POST /service/orders "$(cat user-intake-body.json)" > user-intake.json
           user_order_id="$(node -e "const d=require('./user-intake.json');if(!d.order?.id)throw new Error('USER intake failed');process.stdout.write(d.order.id)")"
           user_customer_id="$(node -e "const d=require('./user-intake.json');if(!d.customer?.id)throw new Error('USER intake customer missing');process.stdout.write(d.customer.id)")"
+          node - <<'NODE' "$user_id"
+          const d=require('./user-intake.json'), userId=process.argv[2];
+          if(!d.notification?.queued)throw new Error('USER intake did not create the mandatory service notification');
+          if(d.notification?.senderUserId!==userId){
+            throw new Error('Service notification sender identity is not the employee who performed intake');
+          }
+          NODE
 
           user_api POST "/customer-accounts/$user_customer_id/notification-preferences" '{"serviceUpdates":false,"readyForPickup":true,"quoteUpdates":false,"messages":true}' > user-notification-prefs.json
           node - <<'NODE'
