@@ -44,7 +44,11 @@ One-time website login codes use `website_auth_codes`:
 
 ## Email notifications
 
-Do not store Gmail passwords or OAuth client secrets in Electron. Status mail is queued in `notification_outbox` and will be sent by a server-side worker/provider. Provider credentials remain server-side only.
+Do not store Gmail passwords or OAuth refresh tokens in Electron. Customer service mail is queued in `notification_outbox`. The authoring employee is stored in `notification_outbox.user_id`, and delivery resolves the Gmail credential from `user_gmail_credentials.user_id`. There is no runtime fallback to another employee or to a point-level Gmail sender.
+
+Google desktop login requests `gmail.send`; an active non-OWNER employee's encrypted refresh token is stored server-side for that employee. The renderer receives only connection state and the sender e-mail address, never the OAuth credential.
+
+Internal meeting invitations are deliberately isolated from customer mail. They use `meeting_email_sender` and `meeting_email_outbox`; an OWNER/admin Gmail may be used there without becoming a sender for customer service messages.
 
 
 ## Notification worker
@@ -60,3 +64,19 @@ Delivery behavior:
 - the scheduled route accepts only Neon trigger calls carrying `X-Neon-Trigger-Invocation-Id`.
 
 Per-point configuration lives in `point_notification_settings` and controls automatic delivery, enabled statuses, sender display name and footer text.
+
+## Meetings and LiveKit
+
+Meeting business state remains in Postgres: `meetings`, `meeting_audience`, `meeting_registrations`, `meeting_participant_controls`, `meeting_attendance`, `meeting_events`, and the isolated meeting invitation outbox.
+
+Audio and screen media do not pass through the REST API or Postgres. ServiceOS uses LiveKit as the WebRTC SFU/TURN layer. The backend creates short-lived room tokens and enforces meeting eligibility and publish permissions before returning a token to Electron.
+
+Required backend-only environment variables:
+
+```dotenv
+LIVEKIT_URL=wss://<livekit-host>
+LIVEKIT_API_KEY=<server-api-key>
+LIVEKIT_API_SECRET=<server-api-secret>
+```
+
+Never expose `LIVEKIT_API_SECRET` to Electron or the renderer. Participants join muted. Camera publishing is not granted. Screen-share and microphone publish sources are granted according to meeting policy and persistent moderator overrides.
