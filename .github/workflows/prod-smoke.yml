@@ -1,13 +1,9 @@
 name: Production API smoke
 
 on:
-  push:
-    branches: ["feature/v0.21-service-finance-invoices", "main"]
-    paths:
-      - ".github/workflows/prod-smoke.yml"
-      - ".github/workflows/ci.yml"
-      - "functions/lockon-api.mjs"
-      - "database/migrations/**"
+  workflow_run:
+    workflows: ["Production Neon exact deploy"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -15,6 +11,7 @@ permissions:
 
 jobs:
   smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
