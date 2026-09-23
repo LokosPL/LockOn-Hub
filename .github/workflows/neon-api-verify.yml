@@ -65,6 +65,15 @@ jobs:
           grep -q 'meeting_registrations' database/migrations/2026-09-24-v100020-meetings.sql
           grep -q 'meeting_attendance' database/migrations/2026-09-24-v100020-meetings.sql
           grep -q 'meeting_email_outbox' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'meeting_participant_controls' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'meeting_email_sender' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'LIVEKIT_URL' functions/lockon-api.mjs
+          grep -q 'LIVEKIT_API_KEY' functions/lockon-api.mjs
+          grep -q 'LIVEKIT_API_SECRET' functions/lockon-api.mjs
+          grep -q '/join-token' functions/lockon-api.mjs
+          grep -q 'canPublishSources' functions/lockon-api.mjs
+          grep -q '/moderate' functions/lockon-api.mjs
+          grep -q 'queueMeetingEmailEvent' functions/lockon-api.mjs
           grep -q "value === null || value === undefined || value === ''" functions/lockon-api.mjs
           grep -q 'consultant_requested_at' functions/lockon-api.mjs
           grep -q 'customer_portal_code' functions/lockon-api.mjs
