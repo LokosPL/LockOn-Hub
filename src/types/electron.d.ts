@@ -74,7 +74,7 @@ export interface MeetingLiveParticipant { identity:string; name:string; metadata
 export interface MeetingParticipantsPayload { configured:boolean; participants:MeetingLiveParticipant[]; }
 export interface MeetingScreenSource { id:string; name:string; thumbnail?:string|null; appIcon?:string|null; }
 export interface MeetingAttendanceItem {
-  userId:string; name:string; registrationStatus:'REGISTERED'|'CANCELLED'|'NOT_REGISTERED'; registeredAt:string; joined:boolean;
+  userId:string; name:string; registrationStatus:'REGISTERED'|'CANCELLED'|'NOT_REGISTERED'; registeredAt?:string|null; joined:boolean;
   firstJoinedAt?:string|null; lastJoinedAt?:string|null; lastLeftAt?:string|null; totalSeconds:number; joinCount:number;
 }
 export interface MeetingAttendancePayload { meetingId:string; attendance:MeetingAttendanceItem[]; }
