@@ -43,7 +43,7 @@ export const ROLE_DEFINITIONS: Record<UserRole, RoleDefinition> = {
     label: 'Koordynator',
     shortLabel: 'Koordynator',
     description: 'Dostęp do pulpitu i przeglądarki w zakresie przypisanych punktów.',
-    navigation: ['dashboard', 'service', 'browser', 'settings'],
+    navigation: ['dashboard', 'service', 'customers', 'browser', 'settings'],
     canManageUpdates: false,
     canManageSettings: false,
     canUseSupportDesk: false,
