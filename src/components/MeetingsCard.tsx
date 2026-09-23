@@ -13,6 +13,17 @@ const statusLabel: Record<MeetingSummary['status'], string> = {
 const formatWhen = (value: string) =>
   new Date(value).toLocaleString('pl-PL', { dateStyle:'medium', timeStyle:'short' });
 
+const meetingCountdown = (startsAt: string) => {
+  const diff = new Date(startsAt).getTime() - Date.now();
+  if (diff <= 0) return 'Spotkanie powinno się zaraz rozpocząć';
+  const minutes = Math.ceil(diff / 60_000);
+  if (minutes < 60) return 'Spotkanie rozpocznie się za ' + minutes + ' min';
+  const hours = Math.ceil(minutes / 60);
+  if (hours < 24) return 'Spotkanie rozpocznie się za ' + hours + ' godz.';
+  const days = Math.ceil(hours / 24);
+  return 'Spotkanie rozpocznie się za ' + days + (days === 1 ? ' dzień' : ' dni');
+};
+
 const toLocalDateTimeInput = (date = new Date(Date.now() + 60 * 60_000)) => {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0,16);
@@ -129,7 +140,7 @@ export function MeetingsCard({ role }: { role: UserRole }) {
         </div>
         {canCreate && (
           <button className="button secondary small" onClick={() => setCreateOpen((value) => !value)}>
-            {createOpen ? <X size={14}/> : <Plus size={14}/>} {createOpen ? 'Zamknij' : 'Nowe spotkanie'}
+            {createOpen ? <X size={14}/> : <Plus size={14}/>} {createOpen ? 'Zamknij' : 'Zaplanuj spotkanie'}
           </button>
         )}
       </div>
@@ -174,12 +185,12 @@ export function MeetingsCard({ role }: { role: UserRole }) {
                     {meeting.allowParticipantAudio && <span><Mic2 size={13}/> audio</span>}
                     {meeting.allowParticipantScreenShare && <span><MonitorUp size={13}/> ekran</span>}
                   </div>
-                  <small>{formatWhen(meeting.startsAt)}</small>
+                  <small>{meeting.status==='SCHEDULED' ? meetingCountdown(meeting.startsAt)+' · ' : ''}{formatWhen(meeting.startsAt)}</small>
                 </div>
                 <div className="meeting-actions">
                   {meeting.status === 'SCHEDULED' && !meeting.canManage && (
                     meeting.registeredByMe
-                      ? <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'unregister')}>Wypisz mnie</button>
+                      ? <><span className="meeting-registered-note">Jesteś zapisany ✓</span><button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'unregister')}>Wypisz mnie</button></>
                       : <button className="button primary small" disabled={Boolean(busyId)||full} onClick={()=>void perform(meeting.id,'register')}>{full?'Brak miejsc':'Zapisz mnie'}</button>
                   )}
                   {meeting.canManage && meeting.status === 'SCHEDULED' && <><button className="button primary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'start')}>Rozpocznij</button><button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'cancel')}>Anuluj</button></>}
