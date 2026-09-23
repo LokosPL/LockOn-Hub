@@ -1,0 +1,25 @@
+name: Verify production action-first backend
+
+on:
+  push:
+    branches: ["verify/prod-action-first-backend"]
+    paths:
+      - ".github/workflows/prod-action-first-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check action-first route exists on PROD
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech/service/orders/search?q=12"
+          code="$(curl --silent --show-error --output body.json --write-out '%{http_code}' "$url")"
+          echo "HTTP=$code"
+          cat body.json
+          test "$code" = "401"
