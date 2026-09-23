@@ -5192,3 +5192,19 @@ input,textarea,select{line-height:1.45}
   overflow: visible;
   min-height: 0;
 }
+
+
+/* 1.0.19 — USER front-desk service permissions */
+.service-order-workspace-frontdesk .service-workspace-collapse.service-transfer-card {
+  display: block;
+}
+.service-notification-choice-error {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,86,70,.3);
+  border-radius: 10px;
+  background: rgba(255,86,70,.07);
+  color: #ffaaa0;
+  font-size: 11px;
+  line-height: 1.45;
+}

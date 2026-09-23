@@ -2117,8 +2117,14 @@ const loadCustomerPortalPayload = async (customerId, portalSession = null) => {
   };
 };
 
-const requireCustomerAccountAccess = async (user, customerId) => {
-  requireSupportAccess(user);
+const requireCustomerAccountAccess = async (user, customerId, accessMode = 'SUPPORT') => {
+  if (accessMode === 'SERVICE') {
+    if (!SERVICE_CREATE_ROLES.has(user?.role_code) && !hasSupportAccess(user)) {
+      throw Object.assign(new Error('Brak uprawnień do obsługi klienta serwisowego.'),{status:403,code:'SERVICE_CUSTOMER_FORBIDDEN'});
+    }
+  } else {
+    requireSupportAccess(user);
+  }
   const customer=(await q(
     "SELECT id,first_name,last_name,email,phone,portal_code_created_at FROM customers WHERE id=$1 LIMIT 1",
     [customerId]
@@ -3454,7 +3460,7 @@ const route = async (request) => {
   const customerNotificationPrefsMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/notification-preferences$/);
   if((method==='GET'||method==='POST')&&customerNotificationPrefsMatch){
     const session=await requireActive(request),u=session.user;
-    const customer=await requireCustomerAccountAccess(u,customerNotificationPrefsMatch[1]);
+    const customer=await requireCustomerAccountAccess(u,customerNotificationPrefsMatch[1],'SERVICE');
     const current=await customerNotificationPreferences(customer.id);
     if(method==='GET')return json(request,current);
     const body=await readJson(request);
@@ -4260,9 +4266,6 @@ const route = async (request) => {
       if(transfer){
         if(transfer.to_point_id!==actingPointId){
           throw Object.assign(new Error('Ta przesyłka jest skierowana do innego punktu.'),{status:409,code:'WRONG_SCAN_POINT'});
-        }
-        if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code)){
-          throw Object.assign(new Error('Przyjęcie urządzenia skanem wymaga roli serwisowej.'),{status:403,code:'SERVICE_SCAN_ACCEPT_FORBIDDEN'});
         }
         acceptedTransfer=(await client.query(
           "UPDATE service_order_transfers SET status='ACCEPTED',accepted_by_user_id=$2,shipped_at=COALESCE(shipped_at,now()),delivered_at=COALESCE(delivered_at,now()),accepted_at=now(),updated_at=now() WHERE id=$1 AND status IN ('REQUESTED','IN_TRANSIT','DELIVERED') RETURNING *",
@@ -5360,7 +5363,7 @@ const route = async (request) => {
 
     let acceptedBy=null;
     if(next==='ACCEPTED'){
-      if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))throw Object.assign(new Error('Brak uprawnień do przyjęcia urządzenia.'),{status:403});
+      if(!SERVICE_TRANSFER_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do przyjęcia urządzenia.'),{status:403});
       acceptedBy=u.id;
     }
 
