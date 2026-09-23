@@ -59,6 +59,12 @@ jobs:
           grep -q 'GMAIL_IDENTITY_MISMATCH' functions/lockon-api.mjs
           ! grep -Fq 'const loadActiveMailSender = async' functions/lockon-api.mjs
           ! grep -Fq 'LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id' functions/lockon-api.mjs
+          grep -q 'MEETING_MANAGE_ROLES' functions/lockon-api.mjs
+          grep -q "url.pathname==='/meetings'" functions/lockon-api.mjs
+          grep -q 'meeting_audience' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'meeting_registrations' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'meeting_attendance' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'meeting_email_outbox' database/migrations/2026-09-24-v100020-meetings.sql
           grep -q "value === null || value === undefined || value === ''" functions/lockon-api.mjs
           grep -q 'consultant_requested_at' functions/lockon-api.mjs
           grep -q 'customer_portal_code' functions/lockon-api.mjs
