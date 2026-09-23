@@ -3960,7 +3960,8 @@ const route = async (request) => {
       "'devices',(SELECT count(*) FROM devices)," +
       "'revenues',(SELECT count(*) FROM revenue_entries)," +
       "'sessions',(SELECT count(*) FROM auth_sessions)," +
-      "'notifications',(SELECT count(*) FROM notification_outbox)" +
+      "'notifications',(SELECT count(*) FROM notification_outbox)," +
+      "'meetings',(SELECT count(*) FROM meetings)" +
       ") AS counts"
     )).rows[0]?.counts||{};
     return json(request,{ok:true,counts});
@@ -3994,6 +3995,12 @@ const route = async (request) => {
         const result=await client.query('DELETE FROM '+table);
         deleted[table]=Number(result.rowCount||0);
       };
+      await remove('meeting_email_outbox');
+      await remove('meeting_events');
+      await remove('meeting_attendance');
+      await remove('meeting_registrations');
+      await remove('meeting_audience');
+      await remove('meetings');
       await remove('notification_outbox');
       await remove('revenue_entries');
       await remove('service_order_notes');
@@ -4020,6 +4027,12 @@ const route = async (request) => {
         "SELECT jsonb_build_object(" +
         "'points',(SELECT count(*) FROM points)," +
         "'users',(SELECT count(*) FROM users)," +
+        "'meetings',(SELECT count(*) FROM meetings)," +
+        "'meeting_audience',(SELECT count(*) FROM meeting_audience)," +
+        "'meeting_registrations',(SELECT count(*) FROM meeting_registrations)," +
+        "'meeting_attendance',(SELECT count(*) FROM meeting_attendance)," +
+        "'meeting_events',(SELECT count(*) FROM meeting_events)," +
+        "'meeting_email_outbox',(SELECT count(*) FROM meeting_email_outbox)," +
         "'service_orders',(SELECT count(*) FROM service_orders)," +
         "'service_order_transfers',(SELECT count(*) FROM service_order_transfers)," +
         "'service_order_notes',(SELECT count(*) FROM service_order_notes)," +
