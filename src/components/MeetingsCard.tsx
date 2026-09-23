@@ -40,6 +40,8 @@ export function MeetingsCard({ role }: { role: UserRole }) {
   const [attendanceItems, setAttendanceItems] = useState<MeetingAttendanceItem[]>([]);
   const [error, setError] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
+  const [rescheduleId, setRescheduleId] = useState('');
+  const [rescheduleValue, setRescheduleValue] = useState('');
   const [form, setForm] = useState({
     title:'',
     description:'',
@@ -99,6 +101,32 @@ export function MeetingsCard({ role }: { role: UserRole }) {
       setAttendanceMeeting(meeting);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nie udało się pobrać frekwencji.');
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const beginReschedule = (meeting: MeetingSummary) => {
+    setRescheduleId(meeting.id);
+    setRescheduleValue(toLocalDateTimeInput(new Date(meeting.startsAt)));
+    setError('');
+  };
+
+  const saveReschedule = async (meetingId: string) => {
+    const next = new Date(rescheduleValue);
+    if (!rescheduleValue || Number.isNaN(next.getTime())) {
+      setError('Wybierz prawidłowy nowy termin spotkania.');
+      return;
+    }
+    setBusyId(meetingId+':reschedule');
+    setError('');
+    try {
+      await window.lockOn.meetings.update(meetingId,{startsAt:next.toISOString()});
+      setRescheduleId('');
+      setRescheduleValue('');
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nie udało się zmienić terminu spotkania.');
     } finally {
       setBusyId('');
     }
@@ -209,12 +237,23 @@ export function MeetingsCard({ role }: { role: UserRole }) {
                       ? <><span className="meeting-registered-note">Jesteś zapisany ✓</span><button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'unregister')}>Wypisz mnie</button></>
                       : <button className="button primary small" disabled={Boolean(busyId)||full} onClick={()=>void perform(meeting.id,'register')}>{full?'Brak miejsc':'Zapisz mnie'}</button>
                   )}
-                  {meeting.canManage && meeting.status === 'SCHEDULED' && <><button className="button primary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'start')}>Rozpocznij</button><button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'cancel')}>Anuluj</button></>}
+                  {meeting.canManage && meeting.status === 'SCHEDULED' && <>
+                    <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>beginReschedule(meeting)}>Zmień termin</button>
+                    <button className="button primary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'start')}>Rozpocznij</button>
+                    <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'cancel')}>Anuluj</button>
+                  </>}
                   {meeting.status === 'LIVE' && (meeting.canManage || meeting.registeredByMe) && <button className="button primary small" disabled={Boolean(busyId)} onClick={()=>setActiveRoom(meeting)}>Dołącz</button>}
                   {meeting.canManage && meeting.status === 'LIVE' && <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'end')}>Zakończ</button>}
                   {!meeting.canManage && meeting.status === 'LIVE' && !meeting.registeredByMe && <span className="meeting-live-note">Zapisz się przed dołączeniem</span>}
                   {meeting.canManage && meeting.status === 'ENDED' && <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void openAttendance(meeting)}>Frekwencja</button>}
                 </div>
+                {rescheduleId===meeting.id && meeting.status==='SCHEDULED' && meeting.canManage && (
+                  <div className="meeting-reschedule-editor">
+                    <input type="datetime-local" value={rescheduleValue} onChange={(e)=>setRescheduleValue(e.target.value)} />
+                    <button className="button primary small" disabled={Boolean(busyId)} onClick={()=>void saveReschedule(meeting.id)}>Zapisz termin</button>
+                    <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>{setRescheduleId('');setRescheduleValue('');}}>Anuluj zmianę</button>
+                  </div>
+                )}
               </article>
             );
           })}
