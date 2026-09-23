@@ -5274,3 +5274,36 @@ input,textarea,select{line-height:1.45}
     width: 100%;
   }
 }
+
+
+/* 1.0.0.20 — prosty widok klientów dla pracownika punktu */
+.customer-frontdesk-stats,
+.customer-frontdesk-kpis {
+  grid-template-columns:repeat(2,minmax(0,1fr));
+}
+.customer-frontdesk-kpis {
+  grid-template-columns:repeat(3,minmax(0,1fr));
+}
+.customer-frontdesk-status {
+  justify-self:start;
+}
+.customer-control-center .customer-frontdesk-status .account-chip {
+  border-color:rgba(255,126,70,.2);
+  background:rgba(255,126,70,.06);
+  color:#ff956a;
+}
+.customer-control-center:has(.customer-frontdesk-status) .customer-control-open {
+  grid-template-columns:minmax(280px,1.4fr) minmax(190px,.65fr) 130px;
+}
+.customer-control-center:has(.customer-frontdesk-status) .customer-detail-grid {
+  grid-template-columns:minmax(0,1fr) minmax(0,.9fr);
+}
+@media(max-width:900px){
+  .customer-frontdesk-kpis{grid-template-columns:1fr 1fr}
+  .customer-control-center:has(.customer-frontdesk-status) .customer-control-open{grid-template-columns:1fr 1fr}
+}
+@media(max-width:650px){
+  .customer-frontdesk-stats,
+  .customer-frontdesk-kpis{grid-template-columns:1fr}
+  .customer-control-center:has(.customer-frontdesk-status) .customer-control-open{grid-template-columns:1fr}
+}
