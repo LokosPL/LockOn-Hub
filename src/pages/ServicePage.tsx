@@ -161,6 +161,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryItem[]>([]);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const [openPanels, setOpenPanels] = useState<Record<string, boolean>>({});
   const [orderHistories, setOrderHistories] = useState<Record<string, ServiceStatusHistoryItem[]>>({});
   const [orderNotes, setOrderNotes] = useState<Record<string, ServiceOrderNote[]>>({});
   const [customerCards, setCustomerCards] = useState<Record<string, ServiceCustomerDetail>>({});
@@ -335,40 +336,70 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       ...current,
       [order.id]: current[order.id] ?? (order.repairSummary || '')
     }));
-
-    setHistoryBusyId(order.id);
     setError('');
+  };
+
+  const setPanelOpen = (orderId:string, panel:string, open:boolean) => {
+    const key = orderId + ':' + panel;
+    setOpenPanels((current)=> current[key] === open ? current : {...current,[key]:open});
+  };
+
+  const ensureOrderHistory = async (orderId:string) => {
+    if (orderHistories[orderId]) return;
+    setHistoryBusyId(orderId);
     try {
-      const requests: Promise<unknown>[] = [];
-      if (canTransferService && servicePoints.length === 0) {
-        requests.push(window.lockOn.service.listServicePoints().then(setServicePoints));
-      }
-      if (!orderHistories[order.id]) {
-        requests.push(window.lockOn.service.getHistory(order.id).then((history) =>
-          setOrderHistories((current) => ({ ...current, [order.id]: history }))
-        ));
-      }
-      if (canEditStatus && !orderNotes[order.id]) {
-        requests.push(window.lockOn.service.getNotes(order.id).then((notes) =>
-          setOrderNotes((current) => ({ ...current, [order.id]: notes }))
-        ));
-      }
-      if (!customerCards[order.customerId]) {
-        requests.push(window.lockOn.service.getCustomer(order.customerId).then((card) =>
-          setCustomerCards((current) => ({ ...current, [order.customerId]: card }))
-        ));
-      }
-      const workPointId = order.currentPointId || order.homePointId || order.pointId;
-      if (canManageOrderMeta && !techniciansByPoint[workPointId]) {
-        requests.push(window.lockOn.service.listTechnicians(workPointId).then((items) =>
-          setTechniciansByPoint((current) => ({ ...current, [workPointId]: items }))
-        ));
-      }
-      await Promise.all(requests);
+      const history = await window.lockOn.service.getHistory(orderId);
+      setOrderHistories((current)=>({...current,[orderId]:history}));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Nie udało się pobrać szczegółów zlecenia.');
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać historii zlecenia.');
     } finally {
-      setHistoryBusyId(null);
+      setHistoryBusyId((current)=>current===orderId?null:current);
+    }
+  };
+
+  const ensureOrderNotes = async (orderId:string) => {
+    if (orderNotes[orderId]) return;
+    setHistoryBusyId(orderId);
+    try {
+      const notes = await window.lockOn.service.getNotes(orderId);
+      setOrderNotes((current)=>({...current,[orderId]:notes}));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać notatek zlecenia.');
+    } finally {
+      setHistoryBusyId((current)=>current===orderId?null:current);
+    }
+  };
+
+  const ensureCustomerCard = async (order:ServiceOrderSummary) => {
+    if (customerCards[order.customerId]) return;
+    setHistoryBusyId(order.id);
+    try {
+      const card = await window.lockOn.service.getCustomer(order.customerId);
+      setCustomerCards((current)=>({...current,[order.customerId]:card}));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać historii klienta.');
+    } finally {
+      setHistoryBusyId((current)=>current===order.id?null:current);
+    }
+  };
+
+  const ensureTechnicians = async (order:ServiceOrderSummary) => {
+    const workPointId = order.currentPointId || order.homePointId || order.pointId;
+    if (!canManageOrderMeta || !workPointId || techniciansByPoint[workPointId]) return;
+    try {
+      const items = await window.lockOn.service.listTechnicians(workPointId);
+      setTechniciansByPoint((current)=>({...current,[workPointId]:items}));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać listy serwisantów.');
+    }
+  };
+
+  const ensureServicePoints = async () => {
+    if (!canTransferService || servicePoints.length > 0) return;
+    try {
+      setServicePoints(await window.lockOn.service.listServicePoints());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać punktów serwisowych.');
     }
   };
 
@@ -423,8 +454,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   }, [tab]);
 
   useEffect(() => {
-    if(!focusOrderId||ordersLoadedRef.current)return;
-    void loadOrders();
+    if(!focusOrderId)return;
+    if(!ordersLoadedRef.current) void loadOrders();
+    setTab('ORDERS');
   }, [focusOrderId]);
 
   useEffect(() => {
@@ -443,11 +475,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   }, [pointId, canManageGmail]);
 
   useEffect(() => {
-    if (!focusOrderId || expandedOrderId === focusOrderId) return;
+    if (tab !== 'ORDERS' || !focusOrderId || expandedOrderId === focusOrderId) return;
     const order = orders.find((item)=>item.id===focusOrderId);
     if (!order) return;
     void toggleOrderHistory(order);
-  }, [focusOrderId,orders]);
+  }, [focusOrderId,orders,tab]);
 
   useEffect(() => {
     if (!expandedOrderId) return;
@@ -1032,7 +1064,16 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     });
   };
 
+  const switchServiceTab = (next:ServiceTab) => {
+    setExpandedOrderId(null);
+    setHistoryBusyId(null);
+    setBrandOpen(false);
+    setError('');
+    setTab(next);
+  };
+
   const openOrderFromWorkspace = (order: ServiceOrderSummary) => {
+    if (tab !== 'ORDERS') setTab('ORDERS');
     if (expandedOrderId !== order.id) void toggleOrderHistory(order);
   };
 
