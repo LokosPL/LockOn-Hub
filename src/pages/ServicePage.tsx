@@ -136,7 +136,7 @@ const transferStatusPl = (status: ServiceTransfer['status']) => ({
   CANCELLED: 'Przekazanie zostało anulowane'
 }[status]);
 
-const FRONTDESK_STEPS = ['Przyjęcie','Przekazanie','W serwisie','Naprawa','Powrót','Gotowy','Wydany'];
+const FRONTDESK_STEPS = ['Przyjęto','Wyślij do serwisu','W serwisie','Naprawa','Wraca do punktu','Do odbioru','Wydany'];
 
 const frontDeskStepIndex = (order: ServiceOrderSummary) => {
   if (order.status === 'COMPLETED') return 6;
@@ -151,6 +151,7 @@ const frontDeskStepIndex = (order: ServiceOrderSummary) => {
   if (outsideHome) return ['RECEIVED','DIAGNOSIS'].includes(order.status) ? 2 : 3;
   if (['DIAGNOSIS','WAITING_PARTS','IN_REPAIR'].includes(order.status)) return 3;
   if (order.status === 'REPAIR_DONE') return 4;
+  if (order.status === 'RECEIVED') return 1;
   return 0;
 };
 
@@ -1388,7 +1389,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
 
                       <section className="service-workspace-card service-stage-card service-stage-guided">
                         <div className="service-process-heading">
-                          <div className="service-process-step"><span>KROK {Math.min(displayedStageIndex+1,displayedSteps.length)} Z {displayedSteps.length}</span><strong>{effectiveRole==='USER'?frontDeskNextAction:(order.workflow?.nextAction || 'Sprawdź zlecenie.')}</strong></div>
+                          <div className="service-process-step"><span>{effectiveRole==='USER'?'CO TERAZ':'KROK '+Math.min(displayedStageIndex+1,displayedSteps.length)+' Z '+displayedSteps.length}</span><strong>{effectiveRole==='USER'?frontDeskNextAction:(order.workflow?.nextAction || 'Sprawdź zlecenie.')}</strong></div>
                           <div className="service-process-location"><MapPin size={14}/><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span></div>
                         </div>
                         <div className="service-stage-overview">
