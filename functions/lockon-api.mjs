@@ -2196,7 +2196,7 @@ const customerAccountManagementOverview = async (user, search = '', accessMode =
     email:row.email||null,
     phone:row.phone||null,
     codeCreatedAt:supportView?(row.portal_code_created_at||null):null,
-    googleLinked:Boolean(row.google_sub),
+    googleLinked:supportView?Boolean(row.google_sub):false,
     googleEmail:supportView?(row.google_email||null):null,
     googleName:supportView?(row.google_name||null):null,
     googlePicture:supportView?(row.google_picture_url||null):null,
