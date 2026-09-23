@@ -5307,3 +5307,22 @@ input,textarea,select{line-height:1.45}
   .customer-frontdesk-kpis{grid-template-columns:1fr}
   .customer-control-center:has(.customer-frontdesk-status) .customer-control-open{grid-template-columns:1fr}
 }
+
+/* 1.0.0.20 — Gmail nadawcy jest przypisany do zalogowanego pracownika */
+.service-mail-identity-strip{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  margin-top:10px;
+  padding:7px 10px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:10px;
+  background:rgba(255,255,255,.025);
+  color:var(--muted);
+  font-size:11px;
+  line-height:1.4;
+}
+.service-mail-identity-strip strong{color:var(--text);font-weight:800}
+.service-mail-identity-strip.connected{border-color:rgba(255,255,255,.12)}
+.service-mail-identity-strip.disconnected{border-color:rgba(255,151,98,.22)}
+
