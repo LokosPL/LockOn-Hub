@@ -4169,6 +4169,150 @@ const route = async (request) => {
     return json(request,{id:r.id,userId:r.user_id,pointId:r.point_id,serviceOrderId:r.service_order_id||null,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at});
   }
 
+  if(method==='GET'&&url.pathname==='/meetings'){
+    const session=await requireActive(request);
+    return json(request,{meetings:await listMeetingsForUser(session.user),serverTime:nowIso()});
+  }
+
+  if(method==='GET'&&url.pathname==='/meetings/options'){
+    const session=await requireActive(request),u=session.user;
+    if(!MEETING_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do planowania spotkań.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    const [pointsResult,usersResult]=await Promise.all([
+      q("SELECT id,name,city FROM points WHERE active=true ORDER BY name"),
+      q("SELECT id,name,email,role_code FROM users WHERE status='ACTIVE' AND blocked_at IS NULL AND role_code IS NOT NULL ORDER BY lower(name),lower(email)")
+    ]);
+    return json(request,{
+      points:pointsResult.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
+      users:usersResult.rows.map((row)=>({id:row.id,name:operationalIdentityName(row.name,row.email,row.role_code),email:operationalIdentityEmail(row.email,row.role_code),role:row.role_code}))
+    });
+  }
+
+  if(method==='POST'&&url.pathname==='/meetings'){
+    const session=await requireActive(request),u=session.user;
+    if(!MEETING_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Spotkania może planować OWNER lub BOSS.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    const body=await readJson(request);
+    const title=cleanText(body.title,120),description=cleanText(body.description,2000);
+    const startsAtRaw=cleanText(body.startsAt,80),startsAt=new Date(startsAtRaw);
+    const plannedMinutes=Math.max(10,Math.min(480,Math.trunc(Number(body.plannedMinutes)||60)));
+    const maxParticipants=Math.max(2,Math.min(500,Math.trunc(Number(body.maxParticipants)||50)));
+    if(title.length<3)return json(request,{error:'MEETING_TITLE',message:'Tytuł spotkania musi mieć co najmniej 3 znaki.'},400);
+    if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy termin spotkania.'},400);
+    if(startsAt.getTime()<Date.now()-10*60_000)return json(request,{error:'MEETING_DATE',message:'Nie można zaplanować spotkania w przeszłości.'},400);
+
+    let hostUserId=cleanText(body.hostUserId,120)||u.id;
+    const host=(await q("SELECT id,status,blocked_at FROM users WHERE id=$1 LIMIT 1",[hostUserId])).rows[0];
+    if(!host||host.status!=='ACTIVE'||host.blocked_at)return json(request,{error:'MEETING_HOST',message:'Wybrany prowadzący nie ma aktywnego konta.'},409);
+
+    const sourceAudience=Array.isArray(body.audience)&&body.audience.length?body.audience:[{type:'ALL'}];
+    const audience=[];
+    const seen=new Set();
+    for(const raw of sourceAudience.slice(0,100)){
+      const type=String(raw?.type||'').toUpperCase();
+      if(type==='ALL'){
+        if(!seen.has('ALL')){seen.add('ALL');audience.push({type:'ALL',pointId:null,userId:null});}
+      }else if(type==='POINT'){
+        const pointId=cleanText(raw?.pointId,80);if(!pointId)continue;
+        const key='POINT:'+pointId;if(!seen.has(key)){seen.add(key);audience.push({type:'POINT',pointId,userId:null});}
+      }else if(type==='USER'){
+        const userId=cleanText(raw?.userId,120);if(!userId)continue;
+        const key='USER:'+userId;if(!seen.has(key)){seen.add(key);audience.push({type:'USER',pointId:null,userId});}
+      }
+    }
+    if(!audience.length)audience.push({type:'ALL',pointId:null,userId:null});
+    if(audience.some((item)=>item.type==='ALL'))audience.splice(0,audience.length,{type:'ALL',pointId:null,userId:null});
+
+    const meetingId=makeId('mtg');
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      await client.query(
+        "INSERT INTO meetings(id,created_by_user_id,host_user_id,title,description,starts_at,planned_minutes,max_participants,allow_participant_audio,allow_participant_screen_share) VALUES($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8,$9,$10)",
+        [meetingId,u.id,hostUserId,title,description,startsAt.toISOString(),plannedMinutes,maxParticipants,body.allowParticipantAudio!==false,body.allowParticipantScreenShare===true]
+      );
+      for(const item of audience){
+        if(item.type==='POINT'){
+          const exists=(await client.query("SELECT id FROM points WHERE id=$1 AND active=true LIMIT 1",[item.pointId])).rows[0];
+          if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego punktu dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_POINT'});
+        }
+        if(item.type==='USER'){
+          const exists=(await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0];
+          if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_USER'});
+        }
+        await client.query(
+          "INSERT INTO meeting_audience(id,meeting_id,audience_type,point_id,user_id) VALUES($1,$2,$3,$4,$5)",
+          [makeId('mau'),meetingId,item.type,item.pointId,item.userId]
+        );
+      }
+      await client.query(
+        "INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,'CREATED',$4::jsonb)",
+        [makeId('mte'),meetingId,u.id,JSON.stringify({audienceCount:audience.length})]
+      );
+      await client.query('COMMIT');
+    }catch(error){
+      try{await client.query('ROLLBACK');}catch{}
+      throw error;
+    }finally{client.release();}
+    await audit(session,'MEETING_CREATED','meeting',meetingId,null,{startsAt:startsAt.toISOString(),plannedMinutes,maxParticipants,audience});
+    const meetings=await listMeetingsForUser(u);
+    return json(request,{ok:true,meeting:meetings.find((item)=>item.id===meetingId)||null},201);
+  }
+
+  const meetingAction=url.pathname.match(/^\/meetings\/([^/]+)\/(register|unregister|start|end|cancel)$/);
+  if(meetingAction&&method==='POST'){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingAction[1],120),action=meetingAction[2];
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+
+    if(action==='register'||action==='unregister'){
+      if(!await meetingEligible(u,meetingId))return json(request,{error:'MEETING_NOT_ELIGIBLE',message:'To spotkanie nie jest przeznaczone dla Twojego konta.'},403);
+      if(action==='register'&&!['SCHEDULED','LIVE'].includes(meeting.status))return json(request,{error:'MEETING_CLOSED',message:'Zapisy na to spotkanie są zamknięte.'},409);
+      const client=await pool.connect();
+      try{
+        await client.query('BEGIN');
+        const locked=(await client.query("SELECT id,status,max_participants FROM meetings WHERE id=$1 FOR UPDATE",[meetingId])).rows[0];
+        if(!locked)throw Object.assign(new Error('Spotkanie już nie istnieje.'),{status:404});
+        if(action==='register'){
+          const existing=(await client.query("SELECT status FROM meeting_registrations WHERE meeting_id=$1 AND user_id=$2",[meetingId,u.id])).rows[0];
+          if(existing?.status!=='REGISTERED'){
+            const count=Number((await client.query("SELECT count(*)::int AS count FROM meeting_registrations WHERE meeting_id=$1 AND status='REGISTERED'",[meetingId])).rows[0]?.count||0);
+            if(count>=Number(locked.max_participants))throw Object.assign(new Error('Limit miejsc na to spotkanie został osiągnięty.'),{status:409,code:'MEETING_FULL'});
+            await client.query(
+              "INSERT INTO meeting_registrations(meeting_id,user_id,status,registered_at,updated_at) VALUES($1,$2,'REGISTERED',now(),now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET status='REGISTERED',registered_at=now(),updated_at=now()",
+              [meetingId,u.id]
+            );
+          }
+        }else{
+          await client.query("UPDATE meeting_registrations SET status='CANCELLED',updated_at=now() WHERE meeting_id=$1 AND user_id=$2",[meetingId,u.id]);
+        }
+        await client.query(
+          "INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,$4,'{}'::jsonb)",
+          [makeId('mte'),meetingId,u.id,action==='register'?'REGISTERED':'UNREGISTERED']
+        );
+        await client.query('COMMIT');
+      }catch(error){
+        try{await client.query('ROLLBACK');}catch{}
+        throw error;
+      }finally{client.release();}
+      await audit(session,action==='register'?'MEETING_REGISTERED':'MEETING_UNREGISTERED','meeting',meetingId,null,{});
+      const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
+      return json(request,{ok:true,meeting:view});
+    }
+
+    if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zarządzać tym spotkaniem.'},403);
+    const target=action==='start'?'LIVE':action==='end'?'ENDED':'CANCELLED';
+    const allowed=action==='start'?['SCHEDULED']:action==='end'?['LIVE']:['SCHEDULED','LIVE'];
+    if(!allowed.includes(meeting.status))return json(request,{error:'MEETING_STATE',message:'Ta zmiana etapu spotkania nie jest teraz dostępna.'},409);
+    const result=await q(
+      "UPDATE meetings SET status=$2,started_at=CASE WHEN $2='LIVE' THEN COALESCE(started_at,now()) ELSE started_at END,ended_at=CASE WHEN $2='ENDED' THEN now() ELSE ended_at END,cancelled_at=CASE WHEN $2='CANCELLED' THEN now() ELSE cancelled_at END,updated_at=now() WHERE id=$1 AND status=$3 RETURNING *",
+      [meetingId,target,meeting.status]
+    );
+    if(!result.rows[0])return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
+    await meetingEvent(meetingId,u.id,target,{});
+    await audit(session,'MEETING_'+target,'meeting',meetingId,null,{});
+    const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
+    return json(request,{ok:true,meeting:view});
+  }
+
   if(method==='GET'&&url.pathname==='/dashboard'){
     const session=await requireActive(request),u=session.user;
     if(u.role_code==='USER')return json(request,{pointCount:0,activeUsers:0,pendingUsers:0,approvedRevenue:0,pendingRevenue:0,bossShare:0,technicianShare:0});
