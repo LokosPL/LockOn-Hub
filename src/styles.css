@@ -5208,3 +5208,69 @@ input,textarea,select{line-height:1.45}
   font-size: 11px;
   line-height: 1.45;
 }
+
+
+/* 1.0.0.20 — prosty tryb obsługi klienta dla roli USER */
+.service-order-workspace > .service-stage-card {
+  order: -100;
+}
+.service-order-workspace-frontdesk .service-transfer-card {
+  display: block;
+  order: -90;
+}
+.service-order-workspace-frontdesk .service-workspace-history {
+  display: block;
+  order: -80;
+}
+.service-order-workspace-frontdesk .service-frontdesk-card {
+  order: -70;
+}
+.service-order-workspace-frontdesk .service-order-keyfacts {
+  order: -60;
+}
+.service-order-workspace-frontdesk .service-transfer-card > summary,
+.service-order-workspace-frontdesk .service-workspace-history > summary {
+  cursor: default;
+  pointer-events: none;
+}
+.service-order-workspace-frontdesk .service-transfer-card > summary::after,
+.service-order-workspace-frontdesk .service-workspace-history > summary::after {
+  content: 'Zawsze otwarte';
+}
+.service-frontdesk-transfer-live {
+  display: grid;
+  gap: 10px;
+}
+.service-frontdesk-transfer-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+.service-frontdesk-transfer-actions > span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.service-order-workspace-frontdesk .service-process-step > strong {
+  font-size: 19px;
+  max-width: 760px;
+}
+.service-order-workspace-frontdesk .service-repair-stage-rail-compact span {
+  min-width: 92px;
+}
+.service-order-workspace-frontdesk .service-history-content > small,
+.service-order-workspace-frontdesk .transfer-mini-history small {
+  color: #85919d;
+}
+@media(max-width:760px){
+  .service-frontdesk-transfer-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .service-frontdesk-transfer-actions .button {
+    width: 100%;
+  }
+}
