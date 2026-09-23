@@ -124,6 +124,107 @@ const readableSerialNumber = (value?: string | null) => value && !isInternalNoSe
 const complaintFallbackSerial = (order: ServiceOrderSummary) =>
   `${INTERNAL_NO_SERIAL_PREFIX}${order.orderNumber ?? order.deviceId.slice(-10)}`;
 
+const FRONTDESK_STEPS = [
+  'Telefon przyjęty',
+  'Przekaż do serwisu',
+  'Serwis sprawdza',
+  'Naprawa',
+  'Telefon wraca',
+  'Odbiór klienta',
+  'Zakończone'
+] as const;
+
+const relativeServiceTime = (value?:string|null, now=Date.now()) => {
+  if(!value)return '';
+  const time=new Date(value).getTime();
+  if(!Number.isFinite(time))return '';
+  const diff=Math.max(0,now-time);
+  const minutes=Math.floor(diff/60000);
+  if(minutes<1)return 'przed chwilą';
+  if(minutes<60)return `${minutes} min temu`;
+  const hours=Math.floor(minutes/60);
+  if(hours<24)return `${hours} godz. temu`;
+  const days=Math.floor(hours/24);
+  if(days<14)return `${days} dni temu`;
+  return new Date(value).toLocaleDateString('pl-PL');
+};
+
+const transferEventTime = (transfer?:ServiceTransfer|null) => {
+  if(!transfer)return null;
+  if(transfer.status==='ACCEPTED')return transfer.acceptedAt||transfer.updatedAt;
+  if(transfer.status==='DELIVERED')return transfer.deliveredAt||transfer.updatedAt;
+  if(transfer.status==='IN_TRANSIT')return transfer.shippedAt||transfer.requestedAt;
+  return transfer.updatedAt||transfer.requestedAt;
+};
+
+const frontdeskHistoryLabel = (status:string) => ({
+  RECEIVED:'Telefon został przyjęty',
+  DIAGNOSIS:'Serwis rozpoczął sprawdzanie telefonu',
+  WAITING_PARTS:'Serwis czeka na części',
+  IN_REPAIR:'Rozpoczęto naprawę telefonu',
+  REPAIR_DONE:'Naprawa telefonu została zakończona',
+  READY:'Telefon jest gotowy do odbioru',
+  COMPLETED:'Telefon został wydany klientowi',
+  CANCELLED:'Zlecenie zostało anulowane',
+  REJECTED:'Zlecenie zostało zamknięte'
+} as Record<string,string>)[status] || 'Zlecenie zostało zaktualizowane';
+
+const frontdeskTransferLabel = (transfer:ServiceTransfer,now:number) => {
+  const when=relativeServiceTime(transferEventTime(transfer),now);
+  if(transfer.kind==='RETURN_HOME'){
+    if(transfer.status==='IN_TRANSIT')return `Telefon wraca do punktu · wysłano ${when}`;
+    if(transfer.status==='DELIVERED')return `Telefon wrócił do punktu · dotarł ${when}`;
+    if(transfer.status==='ACCEPTED')return `Telefon przyjęto po powrocie · ${when}`;
+    if(transfer.status==='CANCELLED')return `Powrót telefonu został anulowany · ${when}`;
+    if(transfer.status==='REJECTED')return `Punkt nie przyjął telefonu · ${when}`;
+  }
+  if(transfer.status==='IN_TRANSIT')return `Telefon wysłano do serwisu ${when}`;
+  if(transfer.status==='DELIVERED')return `Telefon dotarł do serwisu ${when}`;
+  if(transfer.status==='ACCEPTED')return `Serwis przyjął telefon ${when}`;
+  if(transfer.status==='CANCELLED')return `Wysyłka została anulowana ${when}`;
+  if(transfer.status==='REJECTED')return `Serwis nie przyjął telefonu ${when}`;
+  return `Ostatnia zmiana ${when}`;
+};
+
+const frontdeskProcess = (order:ServiceOrderSummary,now:number) => {
+  const homePointId=order.homePointId||order.pointId;
+  const outsideHome=Boolean(order.currentPointId&&order.currentPointId!==homePointId);
+  if(['COMPLETED','CANCELLED','REJECTED'].includes(order.status)){
+    return {index:6,title:order.status==='COMPLETED'?'Telefon został wydany klientowi':'To zlecenie jest już zamknięte',description:'Nie ma już żadnej czynności do wykonania przy tym telefonie.'};
+  }
+  if(order.status==='READY'){
+    return {index:5,title:'Telefon czeka na odbiór przez klienta',description:'Sprawdź dane klienta, wydaj telefon i potwierdź wydanie przyciskiem poniżej.'};
+  }
+  if(order.openTransfer?.kind==='RETURN_HOME'){
+    if(order.openTransfer.status==='DELIVERED'){
+      return {index:4,title:'Telefon wrócił do punktu — potwierdź przyjęcie',description:`Telefon dotarł ${relativeServiceTime(order.openTransfer.deliveredAt||order.openTransfer.updatedAt,now)}. Po przyjęciu będzie można przygotować go dla klienta.`};
+    }
+    return {index:4,title:'Telefon wraca do punktu',description:`Wysłano go z serwisu ${relativeServiceTime(order.openTransfer.shippedAt||order.openTransfer.requestedAt,now)}. Poczekaj, aż dotrze.`};
+  }
+  if(order.status==='REPAIR_DONE'&&order.returnRequired){
+    return {index:4,title:'Naprawa skończona — telefon musi wrócić do punktu',description:'Jeżeli telefon jest u Ciebie, rozpocznij wysyłkę powrotną. Jeżeli jest w innym punkcie, poczekaj na odesłanie.'};
+  }
+  if(order.status==='REPAIR_DONE'){
+    return {index:5,title:'Naprawa skończona — telefon jest przygotowywany do odbioru',description:'Serwis przygotuje gwarancję i oznaczy telefon jako gotowy. Na razie nie musisz nic robić.'};
+  }
+  if(order.status==='IN_REPAIR'){
+    return {index:3,title:'Telefon jest naprawiany',description:'Serwis pracuje nad telefonem. Gdy naprawa się skończy, zobaczysz informację o powrocie lub odbiorze.'};
+  }
+  if(order.status==='WAITING_PARTS'){
+    return {index:3,title:'Serwis czeka na części',description:'Telefon pozostaje w serwisie. Nie musisz nic robić, dopóki części nie dotrą.'};
+  }
+  if(order.status==='DIAGNOSIS'||outsideHome){
+    return {index:2,title:'Serwis sprawdza telefon',description:'Telefon jest już po stronie serwisu. Poczekaj na informację o naprawie.'};
+  }
+  if(order.openTransfer){
+    if(order.openTransfer.status==='DELIVERED'){
+      return {index:1,title:'Telefon dotarł do serwisu — czeka na przyjęcie',description:`Dotarł ${relativeServiceTime(order.openTransfer.deliveredAt||order.openTransfer.updatedAt,now)}. Punkt docelowy powinien teraz potwierdzić przyjęcie.`};
+    }
+    return {index:1,title:'Telefon jest w drodze do serwisu',description:`Wysłano go ${relativeServiceTime(order.openTransfer.shippedAt||order.openTransfer.requestedAt,now)}. Poczekaj na potwierdzenie przyjęcia.`};
+  }
+  return {index:1,title:'Przekaż telefon do serwisu',description:'W sekcji „Gdzie jest telefon” poniżej wybierz serwis docelowy i wyślij telefon.'};
+};
+
 const sortOrdersForList = (items: ServiceOrderSummary[]) => [...items].sort((a,b) => {
   const closedA = CLOSED_SERVICE_STATUSES.has(a.status);
   const closedB = CLOSED_SERVICE_STATUSES.has(b.status);
