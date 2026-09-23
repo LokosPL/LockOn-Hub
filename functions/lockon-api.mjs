@@ -4451,7 +4451,11 @@ const route = async (request) => {
       "'devices',(SELECT count(*) FROM devices)," +
       "'revenues',(SELECT count(*) FROM revenue_entries)," +
       "'sessions',(SELECT count(*) FROM auth_sessions)," +
-      "'notifications',(SELECT count(*) FROM notification_outbox)" +
+      "'notifications',(SELECT count(*) FROM notification_outbox)," +
+      "'meetings',(SELECT count(*) FROM meetings)," +
+      "'meetingRegistrations',(SELECT count(*) FROM meeting_registrations)," +
+      "'meetingInvites',(SELECT count(*) FROM meeting_email_outbox)," +
+      "'userGmailCredentials',(SELECT count(*) FROM user_gmail_credentials)" +
       ") AS counts"
     )).rows[0]?.counts||{};
     return json(request,{ok:true,counts});
@@ -4485,6 +4489,13 @@ const route = async (request) => {
         const result=await client.query('DELETE FROM '+table);
         deleted[table]=Number(result.rowCount||0);
       };
+      await remove('meeting_email_outbox');
+      await remove('meeting_events');
+      await remove('meeting_attendance');
+      await remove('meeting_registrations');
+      await remove('meeting_audience_users');
+      await remove('meeting_audience_points');
+      await remove('meetings');
       await remove('notification_outbox');
       await remove('revenue_entries');
       await remove('service_order_notes');
@@ -4494,6 +4505,7 @@ const route = async (request) => {
       await remove('devices');
       await remove('customers');
       await remove('settlements');
+      await remove('user_gmail_credentials');
       await remove('point_email_senders');
       await remove('point_notification_settings');
       await remove('support_messages');
@@ -4518,6 +4530,7 @@ const route = async (request) => {
         "'devices',(SELECT count(*) FROM devices)," +
         "'revenue_entries',(SELECT count(*) FROM revenue_entries)," +
         "'settlements',(SELECT count(*) FROM settlements)," +
+        "'user_gmail_credentials',(SELECT count(*) FROM user_gmail_credentials)," +
         "'point_email_senders',(SELECT count(*) FROM point_email_senders)," +
         "'point_notification_settings',(SELECT count(*) FROM point_notification_settings)," +
         "'support_conversations',(SELECT count(*) FROM support_conversations)," +
@@ -4526,6 +4539,13 @@ const route = async (request) => {
         "'access_requests',(SELECT count(*) FROM access_requests)," +
         "'user_point_access',(SELECT count(*) FROM user_point_access)," +
         "'notification_outbox',(SELECT count(*) FROM notification_outbox)," +
+        "'meeting_email_outbox',(SELECT count(*) FROM meeting_email_outbox)," +
+        "'meeting_events',(SELECT count(*) FROM meeting_events)," +
+        "'meeting_attendance',(SELECT count(*) FROM meeting_attendance)," +
+        "'meeting_registrations',(SELECT count(*) FROM meeting_registrations)," +
+        "'meeting_audience_users',(SELECT count(*) FROM meeting_audience_users)," +
+        "'meeting_audience_points',(SELECT count(*) FROM meeting_audience_points)," +
+        "'meetings',(SELECT count(*) FROM meetings)," +
         "'audit_log',(SELECT count(*) FROM audit_log)," +
         "'auth_sessions',(SELECT count(*) FROM auth_sessions)" +
         ") AS counts"
