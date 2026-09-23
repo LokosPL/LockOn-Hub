@@ -273,6 +273,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   );
   const showGmailOnboarding = Boolean(
     canManageGmail &&
+    effectiveRole !== 'OWNER' &&
     !gmailChecking &&
     gmail &&
     !gmail.connected &&
@@ -709,7 +710,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       } else if (created.notification?.reason === 'NO_CUSTOMER_EMAIL') {
         setNotice('Zlecenie utworzone. Klient nie ma adresu e-mail, więc potwierdzenie nie zostało wysłane.');
       } else if (created.notification?.reason === 'NO_SENDER') {
-        setNotice('Zlecenie utworzone, ale nie znaleziono aktywnego firmowego nadawcy Gmail.');
+        setNotice('Zlecenie utworzone, ale Twoje konto Google nie ma aktywnej zgody Gmail. Wiadomość do klienta nie została wysłana.');
       }
       setForm(makeEmptyForm());
       setMatches([]);
@@ -899,7 +900,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       } else if (n.reason === 'NO_CUSTOMER_EMAIL') {
         setNotice('Status zapisany. Klient nie ma adresu e-mail.' + settlementText);
       } else if (n.reason === 'NO_SENDER') {
-        setNotice('Status zapisany, ale nie znaleziono aktywnego firmowego nadawcy Gmail.' + settlementText);
+        setNotice('Status zapisany, ale Twoje konto Google nie ma aktywnej zgody Gmail. Wiadomość do klienta nie została wysłana.' + settlementText);
       } else {
         setNotice('Status zapisany.' + settlementText);
       }
@@ -1130,7 +1131,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       setGmail(status);
       setNotice(status.recoveredNotifications
         ? 'Gmail został połączony. ServiceOS odblokował ' + status.recoveredNotifications + ' wcześniejsze wiadomości i rozpoczął ich ponowną wysyłkę.'
-        : 'Gmail został bezpiecznie połączony z tym punktem.');
+        : 'Gmail został bezpiecznie połączony z Twoim kontem ServiceOS.');
       await loadMailData(pointId);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się połączyć Gmail.');
@@ -1140,16 +1141,16 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const disconnectGmail = async () => {
     if (!pointId || gmailBusy) return;
     if (!await confirm({
-      title:'Odłączyć Gmail od punktu?',
-      message:'Automatyczne wiadomości przestaną być wysyłane.',
-      detail:'Wysyłkę można przywrócić przez ponowne połączenie konta Google.',
+      title:'Odłączyć Gmail od Twojego konta?',
+      message:'Wiadomości wywołane przez Twoje działania przestaną być wysyłane.',
+      detail:'Ustawienia automatyki punktu pozostaną bez zmian. Wysyłkę przywrócisz przez ponowne logowanie lub autoryzację Google.',
       confirmLabel:'Odłącz Gmail',tone:'warning'
     })) return;
     setGmailBusy(true); setError(''); setNotice('');
     try {
       await window.lockOn.gmail.disconnect(pointId);
       setGmail({ connected: false, pointId });
-      setNotice('Gmail został odłączony od punktu.');
+      setNotice('Gmail został odłączony od Twojego konta ServiceOS.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się odłączyć Gmail.');
     } finally { setGmailBusy(false); }
@@ -1965,8 +1966,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             <div className="service-mail-copy">
               <div className="service-mail-icon">{gmail?.connected ? <MailCheck size={20}/> : <Mail size={20}/>}</div>
               <div>
-                <span>Nadawca Gmail · {pointOptions.find((p) => p.id === pointId)?.name ?? 'punkt'}</span>
-                <strong>{gmailChecking
+                <span>Nadawca Gmail tego konta</span>
+                <strong>{effectiveRole === 'OWNER'
+                  ? 'Konto OWNER nie jest nadawcą serwisowym'
+                  : gmailChecking
                   ? 'Sprawdzanie połączenia…'
                   : gmail?.connected
                     ? (gmail.email || 'Gmail połączony')
@@ -1975,23 +1978,25 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       : gmailState === 'TEMPORARY_ERROR'
                         ? (gmail?.email || 'Nie udało się potwierdzić połączenia')
                         : 'Brak połączonego Gmail'}</strong>
-                <small>{gmailChecking
+                <small>{effectiveRole === 'OWNER'
+                  ? 'Prywatny Gmail OWNER jest odseparowany od wiadomości do klientów. Zaproszenia na spotkania używają osobnego, izolowanego sendera administracyjnego.'
+                  : gmailChecking
                   ? 'ServiceOS automatycznie sprawdza, czy zapisany dostęp Gmail nadal działa.'
                   : gmail?.connected
-                    ? 'Połączenie działa automatycznie w tle. ServiceOS używa wyłącznie zakresu gmail.send.'
+                    ? 'Wiadomości wywołane przez Twoje działania będą wysyłane z tego konta. ServiceOS używa wyłącznie zakresu gmail.send.'
                     : gmailState === 'REAUTH_REQUIRED'
                       ? (gmail?.lastError || 'Zgoda Google wygasła albo została cofnięta.')
                       : gmailState === 'TEMPORARY_ERROR'
                         ? (gmail?.lastError || 'To może być chwilowa awaria Google. Ponowna zgoda nie jest teraz wymagana.')
-                        : 'Połącz konto tylko wtedy, gdy ten punkt ma wysyłać automatyczne wiadomości.'}</small>
+                        : 'Zaloguj się ponownie przez Google, aby ServiceOS mógł wysyłać wiadomości z Twojego konta.'}</small>
               </div>
             </div>
             <div className="service-mail-actions">
-              {gmail?.connected && <button className="button secondary" disabled={gmailBusy} onClick={() => void testGmail()}><Send size={14}/> Wyślij test</button>}
-              {gmail?.connected && <button className="button secondary" disabled={gmailBusy} onClick={() => void disconnectGmail()}>Odłącz Gmail</button>}
-              {!gmail?.connected && gmailState === 'REAUTH_REQUIRED' && <button className="button primary" disabled={gmailBusy} onClick={() => void connectGmail()}>{gmailBusy ? 'Łączenie…' : 'Autoryzuj ponownie'}</button>}
-              {!gmail?.connected && gmailState === 'NOT_CONNECTED' && <button className="button primary" disabled={gmailBusy} onClick={() => void connectGmail()}>{gmailBusy ? 'Łączenie…' : 'Połącz Gmail'}</button>}
-              {gmailState === 'TEMPORARY_ERROR' && <button className="button secondary" disabled={gmailChecking} onClick={() => void loadGmailStatus(pointId)}><RefreshCw className={gmailChecking ? 'spin' : ''} size={14}/> Sprawdź ponownie</button>}
+              {effectiveRole !== 'OWNER' && gmail?.connected && <button className="button secondary" disabled={gmailBusy} onClick={() => void testGmail()}><Send size={14}/> Wyślij test</button>}
+              {effectiveRole !== 'OWNER' && gmail?.connected && <button className="button secondary" disabled={gmailBusy} onClick={() => void disconnectGmail()}>Odłącz Gmail</button>}
+              {effectiveRole !== 'OWNER' && !gmail?.connected && gmailState === 'REAUTH_REQUIRED' && <button className="button primary" disabled={gmailBusy} onClick={() => void connectGmail()}>{gmailBusy ? 'Łączenie…' : 'Autoryzuj ponownie'}</button>}
+              {effectiveRole !== 'OWNER' && !gmail?.connected && gmailState === 'NOT_CONNECTED' && <button className="button primary" disabled={gmailBusy} onClick={() => void connectGmail()}>{gmailBusy ? 'Łączenie…' : 'Połącz Gmail'}</button>}
+              {effectiveRole !== 'OWNER' && gmailState === 'TEMPORARY_ERROR' && <button className="button secondary" disabled={gmailChecking} onClick={() => void loadGmailStatus(pointId)}><RefreshCw className={gmailChecking ? 'spin' : ''} size={14}/> Sprawdź ponownie</button>}
             </div>
           </section>
 
