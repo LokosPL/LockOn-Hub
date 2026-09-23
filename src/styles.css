@@ -5359,3 +5359,19 @@ input,textarea,select{line-height:1.45}
 .meeting-source-picker-head{padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;justify-content:space-between;gap:16px}.meeting-source-picker-head>div{display:grid;gap:3px}.meeting-source-picker-head span{font-size:10px;color:var(--muted)}
 .meeting-source-grid{overflow:auto;padding:15px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.meeting-source-grid>button{border:1px solid rgba(255,255,255,.08);border-radius:13px;background:rgba(255,255,255,.025);padding:8px;color:#dbe2e8;text-align:left;cursor:pointer;display:grid;gap:8px}.meeting-source-grid>button:hover{border-color:rgba(255,112,72,.3);background:rgba(255,112,72,.06)}.meeting-source-grid img,.meeting-source-placeholder{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px;background:#080b0e}.meeting-source-placeholder{display:grid;place-items:center}.meeting-source-grid span{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:850px){.meeting-room-layout{grid-template-columns:1fr}.meeting-participants-panel{border-left:0;border-top:1px solid rgba(255,255,255,.07);max-height:210px}.meeting-source-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+
+/* 1.0.0.20 — Gmail identity and attendance */
+.gmail-identity-card{display:grid;gap:12px}
+.gmail-identity-card .panel-heading p strong{color:#e9edf1}
+.gmail-identity-status{justify-self:start;display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.07);font-size:10px;font-weight:800}
+.gmail-identity-status.connected{color:#89dfac;background:rgba(70,210,130,.07);border-color:rgba(70,210,130,.18)}
+.gmail-identity-status.reconnect{color:#ff9b78;background:rgba(255,112,72,.07);border-color:rgba(255,112,72,.18)}
+.gmail-identity-status small{font-weight:600;color:var(--muted)}
+.meeting-registered-note{font-size:10px;font-weight:850;color:#8ee7b4;white-space:nowrap}
+.meeting-attendance-backdrop{position:fixed;inset:0;z-index:1250;background:rgba(2,4,7,.78);backdrop-filter:blur(10px);display:grid;place-items:center;padding:28px}
+.meeting-attendance-modal{width:min(1000px,94vw);max-height:82vh;overflow:hidden;border:1px solid rgba(255,255,255,.1);border-radius:18px;background:#12171d;display:grid;grid-template-rows:auto minmax(0,1fr)}
+.meeting-attendance-list{overflow:auto;padding:14px;display:grid;gap:6px}
+.meeting-attendance-row{display:grid;grid-template-columns:minmax(180px,1.5fr) .7fr 1fr 1fr .55fr;gap:10px;align-items:center;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.025);font-size:10px;color:#aeb8c1}
+.meeting-attendance-row>div{display:grid;gap:2px}.meeting-attendance-row strong{color:#e4e9ed;font-size:11px}.meeting-attendance-row small{color:#77838e}
+@media(max-width:800px){.meeting-attendance-row{grid-template-columns:1fr 1fr}.meeting-attendance-row>div{grid-column:1/-1}}
