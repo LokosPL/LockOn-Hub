@@ -276,11 +276,15 @@ jobs:
             "OWNER_PRIVACY",
             "GMAIL_SCOPE_NOT_GRANTED",
             "REFRESH_TOKEN_MISSING",
-            "GMAIL_REUSED_AT_LOGIN",
-            "EXISTING_SERVER_REFRESH_TOKEN",
-            "EXISTING_SENDER_REUSED"
+            "EXISTING_USER_SENDER_REUSED",
+            "user_gmail_credentials",
+            "credentialLocation:'SERVER_USER'",
+            "GMAIL_IDENTITY_MISMATCH"
           ) | ForEach-Object {
-            if (-not $central.Contains($_)) { throw "Missing central unified Gmail contract: $_" }
+            if (-not $central.Contains($_)) { throw "Missing per-user unified Gmail contract: $_" }
+          }
+          if ($central.Contains("const loadActiveMailSender = async")) {
+            throw "Customer mail must not fall back to a point/global Gmail sender."
           }
 
           $gmail = Get-Content electron/gmailAuth.ts -Raw
@@ -293,6 +297,56 @@ jobs:
             "gmailConnectInFlight"
           ) | ForEach-Object {
             if (-not $gmail.Contains($_)) { throw "Missing manual Gmail recovery contract: $_" }
+          }
+
+      - name: Verify 1.0.0.20 meetings and LiveKit contracts
+        shell: pwsh
+        run: |
+          $central = Get-Content functions/lockon-api.mjs -Raw
+          @(
+            "MEETING_MANAGE_ROLES",
+            "url.pathname==='/meetings'",
+            "/join-token",
+            "canPublishSources",
+            "meeting_participant_controls",
+            "/moderate",
+            "meeting_attendance",
+            "meeting_email_sender",
+            "meeting_email_outbox",
+            "queueMeetingEmailEvent",
+            "LIVEKIT_URL",
+            "LIVEKIT_API_KEY",
+            "LIVEKIT_API_SECRET"
+          ) | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing meeting backend contract: $_" }
+          }
+
+          $room = Get-Content src/components/MeetingRoom.tsx -Raw
+          @(
+            "setMicrophoneEnabled",
+            "screenSources",
+            "Track.Source.ScreenShare",
+            "meetings.moderate",
+            "attendanceAction",
+            "Mikrofon zablokowany",
+            "Udostępnij ekran"
+          ) | ForEach-Object {
+            if (-not $room.Contains($_)) { throw "Missing live meeting UI contract: $_" }
+          }
+
+          $meetings = Get-Content src/components/MeetingsCard.tsx -Raw
+          @(
+            "Zaplanuj spotkanie",
+            "Jesteś zapisany ✓",
+            "meetingCountdown",
+            "Frekwencja"
+          ) | ForEach-Object {
+            if (-not $meetings.Contains($_)) { throw "Missing meeting scheduling UX contract: $_" }
+          }
+
+          $settings = Get-Content src/pages/SettingsPage.tsx -Raw
+          if (-not $settings.Contains("Wiadomości będą wysyłane jako:")) {
+            throw "Exact per-user Gmail sender status is missing from Settings."
           }
 
       - name: Verify service finance UI contracts
