@@ -1513,17 +1513,24 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         {openPanels[order.id+':finance']&&<div className="service-collapse-body service-finance-collapse"><OrderCostingCard order={order}/></div>}
                       </details>}
 
-                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" onToggle={(event)=>{if(event.currentTarget.open)void ensureServicePoints();}}>
-                        <summary><Truck size={15}/><span><strong>Logistyka urządzenia</strong><small>{order.openTransfer||order.returnRequired?'Wymaga uwagi — sprawdź transport lub powrót.':'Przekazanie do innego punktu, gdy jest potrzebne.'}</small></span></summary>
+                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" open={effectiveRole==='USER'?true:undefined} onToggle={(event)=>{if(event.currentTarget.open)void ensureServicePoints();}}>
+                        <summary><Truck size={15}/><span><strong>{effectiveRole==='USER'?'Gdzie jest telefon i co dalej?':'Logistyka urządzenia'}</strong><small>{effectiveRole==='USER'?'Tutaj obsługujesz wysyłkę, przyjęcie i powrót telefonu.':order.openTransfer||order.returnRequired?'Wymaga uwagi — sprawdź transport lub powrót.':'Przekazanie do innego punktu, gdy jest potrzebne.'}</small></span></summary>
                         <div className="service-collapse-body">
                         <div className="active-transfer-summary">
-                          <div><MapPin size={15}/><span>Macierzysty: {order.homePointName || order.pointName}</span><b>·</b><strong>Teraz: {order.currentLocationLabel || order.currentPointName || 'W transporcie'}</strong></div>
-                          <small>{order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
+                          <div><MapPin size={15}/><span>{effectiveRole==='USER'?'Punkt klienta':'Macierzysty'}: {order.homePointName || order.pointName}</span><b>·</b><strong>Telefon jest teraz: {order.currentLocationLabel || order.currentPointName || 'w drodze'}</strong></div>
+                          <small>{effectiveRole==='USER'
+                            ? order.returnRequired?'Po naprawie telefon ma wrócić tutaj, zanim wydasz go klientowi.':'Nie musisz śledzić tego ręcznie — ServiceOS pokaże kolejny krok.'
+                            : order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
                         </div>
                         {order.openTransfer ? (
-                          <div className="active-transfer-summary">
+                          <div className="active-transfer-summary service-frontdesk-transfer-live">
                             <div><Truck size={15}/><span>{order.openTransfer.fromPointName}</span><b>→</b><strong>{order.openTransfer.toPointName}</strong></div>
-                            <small>{order.openTransfer.kind==='RETURN_HOME' ? 'Obowiązkowy zwrot do punktu macierzystego' : 'Wysłanie do zewnętrznego serwisu'} · {order.openTransfer.status==='IN_TRANSIT'?'w drodze':order.openTransfer.status==='DELIVERED'?'dostarczono, czeka na przyjęcie':'oczekuje'}</small>
+                            <small>{order.openTransfer.kind==='RETURN_HOME' ? 'Powrót telefonu do punktu klienta' : 'Przekazanie telefonu do serwisu'} · {transferStatusPl(order.openTransfer.status)} · {relativeTimePl(activeTransferMoment)}</small>
+                            {effectiveRole==='USER'&&<div className="service-frontdesk-transfer-actions">
+                              {order.openTransfer.status==='IN_TRANSIT'&&canActTransferDestination&&<button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'DELIVERED')}>Potwierdź, że telefon dotarł</button>}
+                              {order.openTransfer.status==='DELIVERED'&&canActTransferDestination&&<button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'ACCEPTED')}><PackageCheck size={13}/> Przyjmij telefon w punkcie</button>}
+                              {!canActTransferDestination&&<span>{order.openTransfer.kind==='RETURN_HOME'?'Czekamy na potwierdzenie punktu, do którego telefon wraca.':'Czekamy na potwierdzenie punktu, do którego wysłano telefon.'}</span>}
+                            </div>}
                           </div>
                         ) : order.handlingMode === 'TRANSFER_ONLY' ? (
                           canTransferHere ? (
@@ -1533,21 +1540,21 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                                 {currentServicePointId !== (order.homePointId || order.pointId) && <option value={order.homePointId || order.pointId}>{order.homePointName || order.pointName} — punkt macierzysty</option>}
                                 {servicePoints.filter((point)=>point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                               </select>
-                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do protokołu przekazania (opcjonalnie)"/>
-                              <button className="button primary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Przekaż urządzenie dalej</button>
+                              <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder={effectiveRole==='USER'?'Krótka informacja dla serwisu (opcjonalnie)':'Notatka do protokołu przekazania (opcjonalnie)'}/>
+                              <button className="button primary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> {effectiveRole==='USER'?'Przekaż telefon do serwisu':'Przekaż urządzenie dalej'}</button>
                             </div>
                           ) : <div className="service-history-empty">Przekazanie może rozpocząć użytkownik obsługujący aktualny punkt urządzenia.</div>
                         ) : order.returnRequired ? (
-                          canTransferHere && canEditStatus && order.status==='REPAIR_DONE' ? (
+                          canTransferHere && order.status==='REPAIR_DONE' ? (
                             <div className="transfer-compose">
                               <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów"/>
-                              <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> Odeślij do punktu macierzystego</button>
+                              <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> {effectiveRole==='USER'?'Odeślij telefon do punktu klienta':'Odeślij do punktu macierzystego'}</button>
                             </div>
                           ) : (
                             <div className="service-history-empty">
                               {order.status==='REPAIR_DONE'
-                                ? 'Zwrot do punktu macierzystego musi rozpocząć użytkownik obsługujący aktualny punkt urządzenia.'
-                                : 'Urządzenie jest poza punktem macierzystym. Po zakończeniu naprawy ustaw status „Naprawa zakończona”, a następnie rozpocznij obowiązkowy zwrot.'}
+                                ? (effectiveRole==='USER'?'Telefon jest gotowy do powrotu. Zwrot rozpoczyna pracownik punktu, w którym telefon znajduje się teraz.':'Zwrot do punktu macierzystego musi rozpocząć użytkownik obsługujący aktualny punkt urządzenia.')
+                                : (effectiveRole==='USER'?'Telefon jest jeszcze w serwisie. Gdy naprawa się zakończy, ServiceOS pokaże możliwość odesłania go do klienta.':'Urządzenie jest poza punktem macierzystym. Po zakończeniu naprawy ustaw status „Naprawa zakończona”, a następnie rozpocznij obowiązkowy zwrot.')}
                             </div>
                           )
                         ) : canTransferHere ? (
@@ -1556,12 +1563,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                               <option value="">Wybierz serwis docelowy…</option>
                               {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                             </select>
-                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
-                            <button className="button secondary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
+                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder={effectiveRole==='USER'?'Krótka informacja dla serwisu, np. co zgłasza klient':'Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej'}/>
+                            <button className="button secondary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> {effectiveRole==='USER'?'Przekaż telefon do serwisu':'Wyślij do serwisu'}</button>
                           </div>
                         ) : <div className="service-history-empty">Brak aktywnego transportu.</div>}
                         {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
-                          {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót: ':'Do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
+                          {(order.transfers ?? []).slice(0,6).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót telefonu: ':'Przekazanie do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small title={new Date(item.updatedAt).toLocaleString('pl-PL')}>{transferStatusPl(item.status)} · {relativeTimePl(item.shippedAt||item.requestedAt||item.updatedAt)}</small></div>)}
                         </div>}
                         </div>
                       </details>
@@ -1603,15 +1610,15 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </div>
                       </details>
 
-                      <details className="service-workspace-card service-workspace-collapse service-workspace-history" onToggle={(event)=>{if(event.currentTarget.open)void ensureOrderHistory(order.id);}}>
-                        <summary><History size={15}/><span><strong>Historia zlecenia</strong><small>Pełna oś czasu zmian statusu.</small></span></summary>
+                      <details className="service-workspace-card service-workspace-collapse service-workspace-history" open={effectiveRole==='USER'?true:undefined} onToggle={(event)=>{if(event.currentTarget.open)void ensureOrderHistory(order.id);}}>
+                        <summary><History size={15}/><span><strong>{effectiveRole==='USER'?'Historia serwisu':'Historia zlecenia'}</strong><small>{effectiveRole==='USER'?'Co działo się z telefonem od momentu przyjęcia.':'Pełna oś czasu zmian statusu.'}</small></span></summary>
                         <div className="service-collapse-body">
                         {(orderHistories[order.id] ?? []).map((item, index) => (
                           <div className="service-history-item" key={item.id}>
                             <div className="service-history-line"><i className={index === (orderHistories[order.id] ?? []).length - 1 ? 'current' : ''}></i></div>
                             <div className="service-history-content">
                               <div className="service-history-status">{item.fromLabel && <span>{item.fromLabel}</span>}{item.fromLabel && <b>→</b>}<strong>{item.toLabel}</strong></div>
-                              <small>{new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
+                              <small title={new Date(item.changedAt).toLocaleString('pl-PL')}>{effectiveRole==='USER'?relativeTimePl(item.changedAt):new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
                               {item.note && <p>{item.note}</p>}
                             </div>
                           </div>
