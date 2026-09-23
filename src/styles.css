@@ -5244,16 +5244,16 @@ input,textarea,select{line-height:1.45}
 .service-order-workspace-frontdesk .service-stage-card {
   order: -10;
 }
-.service-order-workspace-frontdesk .service-order-keyfacts {
+.service-order-workspace-frontdesk .service-frontdesk-always-open.service-transfer-card {
   order: -9;
 }
-.service-order-workspace-frontdesk .service-frontdesk-card {
+.service-order-workspace-frontdesk .service-frontdesk-always-open.service-workspace-history {
   order: -8;
 }
-.service-order-workspace-frontdesk .service-frontdesk-always-open.service-transfer-card {
+.service-order-workspace-frontdesk .service-order-keyfacts {
   order: -7;
 }
-.service-order-workspace-frontdesk .service-frontdesk-always-open.service-workspace-history {
+.service-order-workspace-frontdesk .service-frontdesk-card {
   order: -6;
 }
 .service-order-workspace-frontdesk .service-transfer-card .transfer-compose {
