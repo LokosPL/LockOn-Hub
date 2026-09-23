@@ -1227,7 +1227,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           WAITING_PARTS:{status:'IN_REPAIR',label:'Części są — rozpocznij naprawę'},
           IN_REPAIR:{status:'REPAIR_DONE',label:'Zakończ naprawę'},
           REPAIR_DONE:{status:'READY',label:'Gotowe do odbioru'},
-          READY:{status:'COMPLETED',label:'Wydaj klientowi'}
+          READY:{status:'COMPLETED',label:'Wydaj telefon klientowi'}
         } as Record<string,{status:string;label:string}>)[order.status];
         const primaryStageBlocked = primaryStageAction?.status==='READY' && (order.canMarkReady===false || !order.warrantyReady);
         const stageSteps=['Przyjęto','Diagnoza','Części','Naprawa','Zakończono','Gotowe','Wydano'];
