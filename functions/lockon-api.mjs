@@ -92,6 +92,13 @@ const DEFAULT_NOTIFY_STATUSES = Object.freeze(['RECEIVED','DIAGNOSIS','WAITING_P
 const nowIso = () => new Date().toISOString();
 const makeId = (prefix) => prefix + '_' + crypto.randomBytes(10).toString('hex');
 const normalizeEmail = (value = '') => String(value).trim().toLowerCase();
+const googleIdentityMatchesUser = (profile, user) => {
+  const profileSub=String(profile?.sub||'').trim();
+  const userSub=String(user?.google_sub||'').trim();
+  if(userSub)return Boolean(profileSub)&&profileSub===userSub;
+  const profileEmail=normalizeEmail(profile?.email);
+  return Boolean(profileEmail)&&profileEmail===normalizeEmail(user?.email);
+};
 const OWNER_OPERATIONAL_NAME = 'System LockOn';
 const OWNER_SUPPORT_NAME = 'Właściciel aplikacji';
 const isOwnerIdentity = (email, role = null) =>
@@ -6078,7 +6085,7 @@ const route = async (request) => {
     if(!tokens?.refresh_token)return json(request,{error:'REFRESH_TOKEN',message:'Google nie zwrócił refresh tokena. Odłącz wcześniejszy dostęp ServiceOS w koncie Google i spróbuj ponownie.'},400);
     if(!tokens?.id_token)return json(request,{error:'GOOGLE_ID_TOKEN',message:'Google nie zwrócił tokena tożsamości.'},400);
     const profile=await verifyGoogle(String(tokens.id_token),GOOGLE_DESKTOP_CLIENT_ID);
-    if(profile.sub!==u.google_sub&&normalizeEmail(profile.email)!==normalizeEmail(u.email))return json(request,{error:'GMAIL_IDENTITY_MISMATCH',message:'Połącz Gmail tego samego konta Google, którym jesteś zalogowany w ServiceOS.'},409);
+    if(!googleIdentityMatchesUser(profile,u))return json(request,{error:'GMAIL_IDENTITY_MISMATCH',message:'Połącz Gmail tego samego konta Google, którym jesteś zalogowany w ServiceOS.'},409);
     await refreshGmailAccess(String(tokens.refresh_token),'');
     const scopes=String(tokens.scope||'').split(/\s+/).filter(Boolean);
     await q(
@@ -6102,7 +6109,7 @@ const route = async (request) => {
     if(!refreshToken||!idToken||!clientSecret)return json(request,{error:'TOKEN',message:'Brak kompletnych danych autoryzacji Google.'},400);
 
     const profile=await verifyGoogle(idToken,GOOGLE_DESKTOP_CLIENT_ID);
-    if(profile.sub!==u.google_sub&&normalizeEmail(profile.email)!==normalizeEmail(u.email))return json(request,{error:'GMAIL_IDENTITY_MISMATCH',message:'Połącz Gmail tego samego konta Google, którym jesteś zalogowany w ServiceOS.'},409);
+    if(!googleIdentityMatchesUser(profile,u))return json(request,{error:'GMAIL_IDENTITY_MISMATCH',message:'Połącz Gmail tego samego konta Google, którym jesteś zalogowany w ServiceOS.'},409);
     await refreshGmailAccess(refreshToken,clientSecret);
     await q(
       "INSERT INTO user_gmail_credentials(user_id,google_sub,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,granted_scopes,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,$6::text[],'ACTIVE',NULL,now(),now()) ON CONFLICT(user_id) DO UPDATE SET google_sub=EXCLUDED.google_sub,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,granted_scopes=EXCLUDED.granted_scopes,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
