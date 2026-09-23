@@ -2762,7 +2762,7 @@ const processNotification = async (notificationId) => {
       "UPDATE notification_outbox SET status='FAILED',attempts=$2,last_error=$3,available_at=$4,updated_at=now() WHERE id=$1",
       [notificationId, attempt, error, nextAttemptAt]
     );
-    return { sent: false, reason: 'NO_SENDER', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
+    return { sent: false, reason: 'NO_SENDER', senderUserId:item.sender_user_id||null, attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
   }
 
   try{
@@ -2809,7 +2809,7 @@ const processNotification = async (notificationId) => {
       await q("UPDATE service_order_cards SET customer_email_sent_at=now(),customer_email_last_error=NULL,updated_at=now() WHERE service_order_id=$1",[item.service_order_id]);
     }
     if(item.sender_user_id) await q("UPDATE user_gmail_credentials SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE user_id=$1", [item.sender_user_id]);
-    return { sent: true, status: 'SENT', messageId: sent.id, attempts: attempt };
+    return { sent: true, status: 'SENT', messageId: sent.id, senderUserId:item.sender_user_id||null, attempts: attempt };
   } catch (error) {
     const message = cleanText(error instanceof Error ? error.message : error, 500);
     await q(
@@ -2824,7 +2824,7 @@ const processNotification = async (notificationId) => {
     }else{
       if(item.sender_user_id) await q("UPDATE user_gmail_credentials SET last_error=$2,updated_at=now() WHERE user_id=$1", [item.sender_user_id, message]);
     }
-    return { sent: false, status: 'FAILED', reason: isGmailReauthError(error) ? 'GMAIL_REAUTH_REQUIRED' : 'SEND_FAILED', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
+    return { sent: false, status: 'FAILED', reason: isGmailReauthError(error) ? 'GMAIL_REAUTH_REQUIRED' : 'SEND_FAILED', senderUserId:item.sender_user_id||null, attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
   }
 };
 
