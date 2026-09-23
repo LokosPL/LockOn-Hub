@@ -251,7 +251,7 @@ declare global {
         cancel: (meetingId:string) => Promise<{meeting:MeetingDetail}>;
         getAttendance: (meetingId:string) => Promise<{attendance:MeetingAttendanceItem[]}>;
         join: (meetingId:string) => Promise<MeetingJoinCredentials>;
-        updateParticipantPermissions: (meetingId:string,userId:string,payload:{canPublishAudio:boolean;canShareScreen:boolean}) => Promise<{ok:true;userId:string;canPublishAudio:boolean;canShareScreen:boolean}>;
+        updateParticipantPermissions: (meetingId:string,userId:string,payload:{canPublishAudio?:boolean;canShareScreen?:boolean}) => Promise<{ok:true;userId:string;canPublishAudio:boolean;canShareScreen:boolean}>;
         muteParticipant: (meetingId:string,userId:string,trackSid:string) => Promise<{ok:true}>;
         removeParticipant: (meetingId:string,userId:string) => Promise<{ok:true}>;
         listDisplaySources: () => Promise<MeetingDisplaySource[]>;
