@@ -18,7 +18,9 @@ Use this file before doing a broad repository audit on branch `fix/user-frontdes
 - TEMP Neon branch: `br-spring-pond-b1hqe48m`
 - TEMP smoke workflow: `.github/workflows/temp-neon-smoke.yml`
 - TEMP workflow already matches `fix/user-frontdesk-flow-*`.
-- Known external blocker: GitHub Actions currently has no usable `NEON_API_KEY` for exact TEMP deployment, and the connected Neon tool has previously rejected branch calls because of a `project_id` contract mismatch. Do not call TEMP green until an exact candidate is actually deployed and smoked.
+- When `NEON_API_KEY` is present, TEMP CI applies the two additive 1.0.0.20 migrations, verifies their tables, deploys the exact function bundle, waits for that deployment ID and validates required Google/Gmail/LiveKit environment names before smoke.
+- When `NEON_API_KEY` is absent, TEMP CI still builds/uploads/stages the exact bundle but fails fast before HTTP smoke so a stale deployment can never be mistaken for the candidate.
+- Known external blocker: GitHub Actions currently has no usable `NEON_API_KEY`, and the connected Neon tool has rejected branch calls because of a `project_id` contract mismatch. Do not call TEMP green until an exact candidate is actually deployed and smoked.
 
 ## Current architecture
 
@@ -91,6 +93,8 @@ Do not infer TEMP success from static CI. The TEMP smoke must exercise the exact
 4. Meeting audience restrictions must prevent unrelated users from obtaining a join token.
 5. Registered participant joins muted.
 6. Host can block microphone and remove a participant.
-7. Rescheduling queues a fresh e-mail every time the time changes; cancellation queues one cancellation event.
-8. Duplicate registration/invitation operations remain idempotent.
-9. Meeting mail outbox must never be used as the sender source for service/customer notification outbox.
+7. Rescheduling queues a fresh e-mail every time the time changes; cancellation queues one cancellation event. TEMP smoke verifies both manager authorization and a fresh reschedule mail event.
+8. Service intake smoke verifies `notification.senderUserId` equals the USER who performed intake, so runtime cannot silently pick OWNER/another employee.
+9. Host can end a live meeting for everyone directly from the room; attendance is finalized and Dashboard refreshes immediately.
+10. Duplicate registration/invitation operations remain idempotent.
+11. Meeting mail outbox must never be used as the sender source for service/customer notification outbox.
