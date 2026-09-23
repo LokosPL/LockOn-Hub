@@ -5449,3 +5449,20 @@ input,textarea,select{line-height:1.45}
   .meeting-control span{display:none}.meeting-control{padding:10px}
 }
 
+/* 1.0.0.20 — historia obecności spotkań */
+.meeting-history{display:grid;gap:7px;margin-top:14px;padding-top:13px;border-top:1px solid rgba(255,255,255,.06)}
+.meeting-history-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:2px}
+.meeting-history-head strong{font-size:11px}.meeting-history-head span{color:var(--muted);font-size:9px}
+.meeting-history article{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;background:rgba(255,255,255,.02)}
+.meeting-history article>div{display:grid;gap:2px}.meeting-history article strong{font-size:11px}.meeting-history article small{font-size:9px;color:var(--muted)}
+.meeting-history article>span{display:inline-flex;align-items:center;gap:4px;font-size:9px;color:#7f8b96}
+.meeting-attendance-dialog{width:min(760px,95vw);max-height:86vh;overflow:auto;padding:20px;border:1px solid rgba(255,255,255,.1);border-radius:18px;background:#11151b;box-shadow:0 28px 90px rgba(0,0,0,.45)}
+.meeting-attendance-list{display:grid;gap:6px;margin-top:15px}
+.meeting-attendance-list article{display:grid;grid-template-columns:minmax(0,1fr) 80px 90px 120px;align-items:center;gap:8px;padding:10px 11px;border-radius:10px;background:rgba(255,255,255,.025)}
+.meeting-attendance-list article>div{display:grid;gap:2px}.meeting-attendance-list strong{font-size:11px}.meeting-attendance-list small{font-size:9px;color:var(--muted)}
+.meeting-attendance-list article>span{display:inline-flex;align-items:center;gap:4px;font-size:9px;color:#8b96a0}
+@media(max-width:700px){
+  .meeting-history article{grid-template-columns:1fr auto}.meeting-history article .button{grid-column:1/-1}
+  .meeting-attendance-list article{grid-template-columns:1fr 1fr}.meeting-attendance-list article>div{grid-column:1/-1}
+}
+
