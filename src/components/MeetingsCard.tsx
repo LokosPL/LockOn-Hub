@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, Clock3, Mic2, MonitorUp, Plus, Radio, UserRound, UsersRound, X } from 'lucide-react';
-import type { MeetingOptions, MeetingSummary, UserRole } from '../types/electron';
+import type { MeetingAttendanceItem, MeetingOptions, MeetingSummary, UserRole } from '../types/electron';
 import { MeetingRoom } from './MeetingRoom';
 
 const statusLabel: Record<MeetingSummary['status'], string> = {
@@ -36,6 +36,8 @@ export function MeetingsCard({ role }: { role: UserRole }) {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
   const [activeRoom, setActiveRoom] = useState<MeetingSummary | null>(null);
+  const [attendanceMeeting, setAttendanceMeeting] = useState<MeetingSummary | null>(null);
+  const [attendanceItems, setAttendanceItems] = useState<MeetingAttendanceItem[]>([]);
   const [error, setError] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState({
@@ -83,6 +85,20 @@ export function MeetingsCard({ role }: { role: UserRole }) {
       await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nie udało się wykonać akcji spotkania.');
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const openAttendance = async (meeting: MeetingSummary) => {
+    setBusyId(meeting.id+':attendance');
+    setError('');
+    try {
+      const data = await window.lockOn.meetings.attendance(meeting.id);
+      setAttendanceItems(data.attendance ?? []);
+      setAttendanceMeeting(meeting);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nie udało się pobrać frekwencji.');
     } finally {
       setBusyId('');
     }
@@ -197,6 +213,7 @@ export function MeetingsCard({ role }: { role: UserRole }) {
                   {meeting.status === 'LIVE' && (meeting.canManage || meeting.registeredByMe) && <button className="button primary small" disabled={Boolean(busyId)} onClick={()=>setActiveRoom(meeting)}>Dołącz</button>}
                   {meeting.canManage && meeting.status === 'LIVE' && <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'end')}>Zakończ</button>}
                   {!meeting.canManage && meeting.status === 'LIVE' && !meeting.registeredByMe && <span className="meeting-live-note">Zapisz się przed dołączeniem</span>}
+                  {meeting.canManage && meeting.status === 'ENDED' && <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void openAttendance(meeting)}>Frekwencja</button>}
                 </div>
               </article>
             );
@@ -204,6 +221,27 @@ export function MeetingsCard({ role }: { role: UserRole }) {
         </div>
       )}
       {activeRoom && <MeetingRoom meeting={activeRoom} onClose={()=>setActiveRoom(null)} />}
+      {attendanceMeeting && (
+        <div className="meeting-attendance-backdrop" role="dialog" aria-modal="true">
+          <div className="meeting-attendance-modal">
+            <div className="meeting-source-picker-head">
+              <div><strong>Frekwencja — {attendanceMeeting.title}</strong><span>Zapisani i rzeczywista obecność na spotkaniu.</span></div>
+              <button className="icon-button" onClick={()=>setAttendanceMeeting(null)}><X size={17}/></button>
+            </div>
+            <div className="meeting-attendance-list">
+              {attendanceItems.length===0 ? <div className="meeting-empty">Nikt nie był zapisany na to spotkanie.</div> : attendanceItems.map((item)=>(
+                <div className="meeting-attendance-row" key={item.userId}>
+                  <div><strong>{item.name}</strong><small>{item.registrationStatus==='REGISTERED'?'Zapisany':'Wypisany'}</small></div>
+                  <span>{item.joined?'Dołączył':'Nie dołączył'}</span>
+                  <span>{item.firstJoinedAt?new Date(item.firstJoinedAt).toLocaleString('pl-PL'):'—'}</span>
+                  <span>{item.lastLeftAt?new Date(item.lastLeftAt).toLocaleString('pl-PL'):'—'}</span>
+                  <span>{item.totalSeconds?Math.max(1,Math.round(item.totalSeconds/60))+' min':'—'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
