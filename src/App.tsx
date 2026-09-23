@@ -163,6 +163,7 @@ export default function App() {
               pointName={pointName}
               role={effectiveRole!}
               userName={auth.user?.name ?? 'Użytkownik'}
+              currentUserId={auth.user?.id}
               weatherCity={weatherCity}
             />
           )}
