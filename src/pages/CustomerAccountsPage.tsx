@@ -472,7 +472,7 @@ export function CustomerAccountsPage({effectiveRole}:{effectiveRole:UserRole}) {
                 <div className="service-order-quick-meta">
                   <span><MapPin size={12}/>{order.currentLocationLabel||order.currentPointName||order.homePointName||order.pointName}</span>
                   <span><Clock3 size={12}/>{order.estimatedCompletionAt?'Termin '+fmtDate(order.estimatedCompletionAt):'Bez terminu'}</span>
-                  {order.openTransfer&&<span><Truck size={12}/>{order.openTransfer.kind==='RETURN_HOME'?'Wraca do punktu':'Wysłano do serwisu'} · {relativeTimePl(order.openTransfer.shippedAt||order.openTransfer.requestedAt||order.openTransfer.updatedAt)}</span>}
+                  {(order.openTransfer||order.latestTransfer)&&<span><Truck size={12}/>{(order.openTransfer||order.latestTransfer)?.kind==='RETURN_HOME'?'Powrót telefonu':'Przekazanie do serwisu'} · {relativeTimePl((order.openTransfer||order.latestTransfer)?.shippedAt||(order.openTransfer||order.latestTransfer)?.requestedAt||(order.openTransfer||order.latestTransfer)?.updatedAt)}</span>}
                 </div>
               </div>
               <div className="customer-control-order-stage">
