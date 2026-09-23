@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
   id-token: write
   attestations: write
 
@@ -24,6 +25,54 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Wait for exact-SHA verification gates
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @('Verify LockOn ServiceOS', 'CodeQL security scan')
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:GITHUB_SHA&per_page=100"
+
+          for ($attempt = 1; $attempt -le 90; $attempt++) {
+            $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get
+            $states = @{}
+            foreach ($name in $required) {
+              $run = $response.workflow_runs |
+                Where-Object { $_.name -eq $name -and $_.head_sha -eq $env:GITHUB_SHA } |
+                Sort-Object created_at -Descending |
+                Select-Object -First 1
+              if ($null -ne $run) {
+                $states[$name] = "$($run.status)/$($run.conclusion)"
+                if ($run.status -eq 'completed' -and $run.conclusion -notin @('success','neutral','skipped')) {
+                  Write-Error "Required gate '$name' failed for $env:GITHUB_SHA: $($run.conclusion)"
+                  exit 1
+                }
+              } else {
+                $states[$name] = 'missing'
+              }
+            }
+
+            $ready = $true
+            foreach ($name in $required) {
+              if ($states[$name] -ne 'completed/success') { $ready = $false }
+            }
+            Write-Host ("Verification gates: " + (($required | ForEach-Object { "$_=$($states[$_])" }) -join ', '))
+            if ($ready) {
+              Write-Host "Exact-SHA Verify and CodeQL gates are green."
+              exit 0
+            }
+            Start-Sleep -Seconds 10
+          }
+
+          Write-Error "Timed out waiting for Verify LockOn ServiceOS and CodeQL security scan on $env:GITHUB_SHA."
+          exit 1
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
