@@ -2149,7 +2149,9 @@ const requireCustomerAccountAccess = async (user, customerId, accessMode = 'SUPP
   const ids=await visiblePointIds(user);
   if (!ids.length) throw Object.assign(new Error('Brak dostępu do tego klienta.'),{status:403,code:'CUSTOMER_FORBIDDEN'});
   const visible=(await q(
-    "SELECT 1 WHERE EXISTS(SELECT 1 FROM service_orders s WHERE s.customer_id=$1 AND (COALESCE(s.home_point_id,s.point_id)=ANY($2::text[]) OR COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[]))) OR EXISTS(SELECT 1 FROM customer_quote_requests r WHERE r.customer_id=$1 AND (r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) LIMIT 1",
+    accessMode==='SERVICE'
+      ? "SELECT 1 WHERE EXISTS(SELECT 1 FROM service_orders s WHERE s.customer_id=$1 AND (COALESCE(s.home_point_id,s.point_id)=ANY($2::text[]) OR COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[]))) LIMIT 1"
+      : "SELECT 1 WHERE EXISTS(SELECT 1 FROM service_orders s WHERE s.customer_id=$1 AND (COALESCE(s.home_point_id,s.point_id)=ANY($2::text[]) OR COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[]))) OR EXISTS(SELECT 1 FROM customer_quote_requests r WHERE r.customer_id=$1 AND (r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) LIMIT 1",
     [customerId,ids]
   )).rows[0];
   if (!visible) throw Object.assign(new Error('Brak dostępu do tego klienta.'),{status:403,code:'CUSTOMER_FORBIDDEN'});
@@ -2168,7 +2170,9 @@ const customerAccountManagementOverview = async (user, search = '', accessMode =
   const supportView=hasSupportAccess(user);
   const ids=GLOBAL_ROLES.has(user.role_code) ? [] : await visiblePointIds(user);
   const params=[GLOBAL_ROLES.has(user.role_code),ids];
-  let filter=" WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND (COALESCE(s0.home_point_id,s0.point_id)=ANY($2::text[]) OR COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[]))) OR EXISTS(SELECT 1 FROM customer_quote_requests r0 WHERE r0.customer_id=c.id AND (r0.requested_point_id=ANY($2::text[]) OR r0.routed_point_id=ANY($2::text[]))))";
+  let filter=serviceView
+    ? " WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND (COALESCE(s0.home_point_id,s0.point_id)=ANY($2::text[]) OR COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[]))))"
+    : " WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND (COALESCE(s0.home_point_id,s0.point_id)=ANY($2::text[]) OR COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[]))) OR EXISTS(SELECT 1 FROM customer_quote_requests r0 WHERE r0.customer_id=c.id AND (r0.requested_point_id=ANY($2::text[]) OR r0.routed_point_id=ANY($2::text[]))))";
   const term=cleanText(search,120);
   if (term) {
     params.push('%'+term+'%');
