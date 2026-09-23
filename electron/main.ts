@@ -1038,6 +1038,15 @@ const registerIpc = () => {
       appIcon:source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null
     }));
   });
+  secureHandle('meetings:attendanceAction', async (meetingId: string, action:'JOIN'|'LEAVE') => {
+    const token=requireSessionToken();
+    if(!['JOIN','LEAVE'].includes(action))throw new Error('Nieprawidłowa akcja obecności.');
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/attendance`,{method:'POST',body:JSON.stringify({action})},token);
+  });
+  secureHandle('meetings:attendance', async (meetingId: string) => {
+    const token=requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/attendance`,{},token);
+  });
 
 
   secureHandle('service:searchCustomers', async (query: string) => {
