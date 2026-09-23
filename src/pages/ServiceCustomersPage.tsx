@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, CheckCircle2, Clock3, Mail, MapPin, Pencil, Phone, RefreshCw, Save,
-  Search, Smartphone, Truck, UserRound, UsersRound, Wrench
+  ArrowLeft, CheckCircle2, Clock3, MapPin, Pencil, RefreshCw, Save, Search,
+  Smartphone, Truck, UserRound, UsersRound, Wrench
 } from 'lucide-react';
 import type {
   ServiceCustomerDetail,
