@@ -55,6 +55,14 @@ export interface TechnicianSettlementSettings { configured:boolean; technicianPe
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
 export interface WeatherData { city:string; region?:string|null; country?:string|null; temperature:number; apparentTemperature:number; minTemperature:number; maxTemperature:number; windSpeed:number; weatherCode:number; condition:string; fetchedAt:string; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
+export interface ServiceCustomerDirectoryItem {
+  id:string; firstName:string; lastName:string; name:string; email?:string|null; phone?:string|null;
+  orders:number; activeOrders:number; lastOrderAt?:string|null;
+}
+export interface ServiceCustomerDirectoryOverview {
+  stats:{customers:number;activeOrders:number};
+  customers:ServiceCustomerDirectoryItem[];
+}
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; originalOrderId?:string|null; handlingMode:'STANDARD'|'COMPLAINT_FLOW'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
 export interface ServiceWorkflow {
   stageNumber:number; stageTotal:number; stageLabel:string;
@@ -212,6 +220,8 @@ declare global {
       };
       data: { getDashboard: () => Promise<DashboardData>; getWeather: (city:string) => Promise<WeatherData>; };
       service: {
+        listCustomers: (query?:string) => Promise<ServiceCustomerDirectoryOverview>;
+        updateCustomerProfile: (customerId:string,payload:{firstName:string;lastName:string;email?:string;phone?:string}) => Promise<{ok:true;customer:ServiceCustomer & {createdAt?:string;updatedAt?:string};googleDisconnected:boolean;revokedGoogleSessions:number}>;
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
         searchOrders: (query:string) => Promise<ServiceOrderSummary[]>;
         getCustomer: (customerId:string) => Promise<ServiceCustomerDetail>;
