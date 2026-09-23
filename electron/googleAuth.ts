@@ -360,7 +360,7 @@ const performGoogleLogin = async (development: boolean): Promise<AuthState> => {
 
           if (canAutoConnectGmail) {
             try {
-              payload.gmail = await backendRequest('/integrations/gmail/connect', {
+              payload.gmail = await backendRequest<NonNullable<BackendAuthPayload['gmail']>>('/integrations/gmail/connect', {
                 method: 'POST',
                 signal: AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS),
                 body: JSON.stringify({
