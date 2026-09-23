@@ -451,7 +451,7 @@ const secureHandle = (channel: string, listener: SecureHandler) => {
   });
 };
 
-const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf' | 'sup' | 'cqr' | 'inv' | 'tnn') => {
+const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf' | 'sup' | 'cqr' | 'inv' | 'tnn' | 'mtg') => {
   const text = String(value ?? '');
   const pattern = new RegExp('^' + prefix + '_[a-f0-9]{20}' + '$');
   if (!pattern.test(text)) throw new Error('Nieprawidłowy identyfikator.');
