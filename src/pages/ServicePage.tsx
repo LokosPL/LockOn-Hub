@@ -117,6 +117,27 @@ const isTransferredToService = (order: ServiceOrderSummary) =>
   Boolean(order.homePointId && order.currentPointId && order.currentPointId !== order.homePointId) ||
   Boolean(order.returnRequired && order.currentPointId && order.currentPointId !== (order.homePointId || order.pointId));
 
+const CLOSED_SERVICE_STATUSES = new Set(['COMPLETED','CANCELLED','REJECTED']);
+const INTERNAL_NO_SERIAL_PREFIX = 'BRAK-SN-ZL-';
+const isInternalNoSerial = (value?: string | null) => Boolean(value?.startsWith(INTERNAL_NO_SERIAL_PREFIX));
+const readableSerialNumber = (value?: string | null) => value && !isInternalNoSerial(value) ? value : null;
+const complaintFallbackSerial = (order: ServiceOrderSummary) =>
+  `${INTERNAL_NO_SERIAL_PREFIX}${order.orderNumber ?? order.deviceId.slice(-10)}`;
+
+const sortOrdersForList = (items: ServiceOrderSummary[]) => [...items].sort((a,b) => {
+  const closedA = CLOSED_SERVICE_STATUSES.has(a.status);
+  const closedB = CLOSED_SERVICE_STATUSES.has(b.status);
+  if (closedA !== closedB) return closedA ? 1 : -1;
+  if (closedA) {
+    const timeA = new Date(a.completedAt || a.updatedAt || a.createdAt || a.receivedAt || 0).getTime();
+    const timeB = new Date(b.completedAt || b.updatedAt || b.createdAt || b.receivedAt || 0).getTime();
+    return timeA - timeB;
+  }
+  const timeA = new Date(a.receivedAt || a.createdAt || a.updatedAt || 0).getTime();
+  const timeB = new Date(b.receivedAt || b.createdAt || b.updatedAt || 0).getTime();
+  return timeB - timeA;
+});
+
 type ServiceTab = 'CALENDAR' | 'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAILS' | 'INVOICES' | 'TECH_NOTES';
 
 export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
@@ -228,14 +249,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     {code:'READY_FOR_PICKUP',label:'Gotowe do odbioru',count:orders.filter((order)=>order.workflow?.flags.includes('READY_FOR_PICKUP')).length}
   ], [orders,transferredToServiceCount]);
 
-  const visibleOrders = useMemo(
-    () => orderFilter === 'ALL'
+  const visibleOrders = useMemo(() => {
+    const filtered = orderFilter === 'ALL'
       ? orders
       : orderFilter === 'TRANSFERRED_SERVICE'
         ? orders.filter(isTransferredToService)
-        : orders.filter((order)=>order.workflow?.flags.includes(orderFilter)),
-    [orders,orderFilter]
-  );
+        : orders.filter((order)=>order.workflow?.flags.includes(orderFilter));
+    return sortOrdersForList(filtered);
+  }, [orders,orderFilter]);
   const renderedOrders=useMemo(()=>visibleOrders.slice(0,ordersVisibleLimit),[visibleOrders,ordersVisibleLimit]);
   useEffect(()=>{setOrdersVisibleLimit(28);},[orderFilter]);
 
@@ -320,7 +341,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       ...current,
       [order.id]: current[order.id] ?? {
         imei: order.imei ?? '',
-        serialNumber: order.serialNumber ?? '',
+        serialNumber: readableSerialNumber(order.serialNumber) ?? '',
         deviceNotes: order.deviceNotes ?? '',
         assignedTechnicianId: order.assignedTechnicianId ?? '',
         estimatedCost: order.estimatedCost == null ? '' : String(order.estimatedCost),
@@ -535,6 +556,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     const fallbackParts = order.customerName.trim().split(/\s+/);
     const firstName = order.customerFirstName || fallbackParts[0] || '';
     const lastName = order.customerLastName || fallbackParts.slice(1).join(' ') || '';
+    const serialNumber = order.serialNumber || (!order.imei ? complaintFallbackSerial(order) : '');
     setComplaintOriginal(order);
     setComplaintMatches([]);
     setMatches([]);
@@ -550,7 +572,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       brand:order.brand || '',
       model:order.model || '',
       imei:order.imei || '',
-      serialNumber:order.serialNumber || '',
+      serialNumber,
       deviceNotes:order.deviceNotes || 'Brak uwag'
     }));
   };
@@ -588,6 +610,19 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     submitBusyRef.current = true;
     setBusy(true); setError(''); setNotice(''); setResult(null);
     try {
+      if (
+        form.orderType === 'COMPLAINT' &&
+        complaintOriginal &&
+        !complaintOriginal.imei &&
+        !complaintOriginal.serialNumber
+      ) {
+        await window.lockOn.service.updateDetails(complaintOriginal.id, {
+          imei:'',
+          serialNumber:form.serialNumber || complaintFallbackSerial(complaintOriginal),
+          deviceNotes:complaintOriginal.deviceNotes || 'Brak uwag'
+        });
+      }
+
       const created = await window.lockOn.service.createOrder({
         ...form,
         brand: form.brand.trim(),
@@ -1210,7 +1245,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
             <div className={`service-order-workspace ${effectiveRole==='USER'?'service-order-workspace-frontdesk':''}`}>
                       <section className="service-order-keyfacts">
                         <article><span>Klient</span><strong>{order.customerName}</strong><small>{order.customerPhone || order.customerEmail || 'Brak kontaktu'}</small></article>
-                        <article><span>Telefon</span><strong>{formatDeviceLabel(order.brand,order.model)}</strong><small>{order.imei ? 'IMEI ' + order.imei : order.serialNumber ? 'S/N ' + order.serialNumber : 'Brak IMEI / S/N'}</small></article>
+                        <article><span>Telefon</span><strong>{formatDeviceLabel(order.brand,order.model)}</strong><small>{order.imei ? 'IMEI ' + order.imei : readableSerialNumber(order.serialNumber) ? 'S/N ' + readableSerialNumber(order.serialNumber) : 'Brak IMEI / S/N'}</small></article>
                         <article><span>Zgłoszenie</span><strong>{order.issueDescription}</strong><small>{order.assignedTechnicianName ? 'Serwisant: ' + order.assignedTechnicianName : 'Serwisant jeszcze nieprzypisany'}</small></article>
                         <article><span>Termin</span><strong>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL') : 'Nie podano'}</strong><small>{order.repairSummary || 'Opis wykonanej naprawy pojawi się po zakończeniu.'}</small></article>
                       </section>
@@ -1559,7 +1594,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                   <div className="service-intake-section-title"><CheckCircle2 size={16}/><div><strong>Dane z poprzedniej naprawy są przypięte</strong><small>Nie musisz ponownie wpisywać klienta ani telefonu.</small></div></div>
                   <div className="service-complaint-source-grid">
                     <div><span>Klient</span><strong>{complaintOriginal.customerName}</strong><small>{complaintOriginal.customerPhone||complaintOriginal.customerEmail||'Brak kontaktu'}</small></div>
-                    <div><span>Telefon</span><strong>{formatDeviceLabel(complaintOriginal.brand,complaintOriginal.model)}</strong><small>{complaintOriginal.imei?'IMEI '+complaintOriginal.imei:complaintOriginal.serialNumber?'S/N '+complaintOriginal.serialNumber:'Brak IMEI / S/N'}</small></div>
+                    <div><span>Telefon</span><strong>{formatDeviceLabel(complaintOriginal.brand,complaintOriginal.model)}</strong><small>{complaintOriginal.imei?'IMEI '+complaintOriginal.imei:readableSerialNumber(complaintOriginal.serialNumber)?'S/N '+readableSerialNumber(complaintOriginal.serialNumber):'Brak IMEI / S/N'}</small></div>
                     <div><span>Poprzednie zgłoszenie</span><strong>{complaintOriginal.issueDescription}</strong><small>Status: {complaintOriginal.statusLabel}</small></div>
                   </div>
                 </section>}
