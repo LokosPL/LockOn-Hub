@@ -21,6 +21,7 @@ import {
 import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
 import type { AdminAuditEvent, AdminOverview, AdminPoint, AdminUser } from '../types/electron';
 import { useAppDialog } from '../components/AppDialog';
+import { MeetingsCard } from '../components/MeetingsCard';
 
 const ASSIGNABLE_ROLES: UserRole[] = ['BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER'];
 type AdminTab = 'PENDING' | 'ACTIVE' | 'SECURITY' | 'POINTS' | 'AUDIT';
@@ -543,6 +544,8 @@ export function AdministrationPage({ focusUserId = null }: AdministrationPagePro
       </section>
 
       {notice && <div className="admin-notice">{notice}</div>}
+
+      <MeetingsCard role="OWNER" />
 
       <section className="admin-stats admin-stats-security">
         <article className={data?.pendingUsers.length ? 'stat-attention' : ''}><Clock3 size={20}/><div><span>Do akceptacji</span><strong>{data?.pendingUsers.length ?? 0}</strong></div></article>
