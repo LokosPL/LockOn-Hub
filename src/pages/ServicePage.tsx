@@ -124,6 +124,107 @@ const readableSerialNumber = (value?: string | null) => value && !isInternalNoSe
 const complaintFallbackSerial = (order: ServiceOrderSummary) =>
   `${INTERNAL_NO_SERIAL_PREFIX}${order.orderNumber ?? order.deviceId.slice(-10)}`;
 
+const FRONTDESK_STEPS = [
+  'Telefon przyjęty',
+  'Przekaż do serwisu',
+  'Serwis sprawdza',
+  'Naprawa',
+  'Telefon wraca',
+  'Odbiór klienta',
+  'Zakończone'
+] as const;
+
+const relativeServiceTime = (value?:string|null, now=Date.now()) => {
+  if(!value)return '';
+  const time=new Date(value).getTime();
+  if(!Number.isFinite(time))return '';
+  const diff=Math.max(0,now-time);
+  const minutes=Math.floor(diff/60000);
+  if(minutes<1)return 'przed chwilą';
+  if(minutes<60)return `${minutes} min temu`;
+  const hours=Math.floor(minutes/60);
+  if(hours<24)return `${hours} godz. temu`;
+  const days=Math.floor(hours/24);
+  if(days<14)return `${days} dni temu`;
+  return new Date(value).toLocaleDateString('pl-PL');
+};
+
+const transferEventTime = (transfer?:ServiceTransfer|null) => {
+  if(!transfer)return null;
+  if(transfer.status==='ACCEPTED')return transfer.acceptedAt||transfer.updatedAt;
+  if(transfer.status==='DELIVERED')return transfer.deliveredAt||transfer.updatedAt;
+  if(transfer.status==='IN_TRANSIT')return transfer.shippedAt||transfer.requestedAt;
+  return transfer.updatedAt||transfer.requestedAt;
+};
+
+const frontdeskHistoryLabel = (status:string) => ({
+  RECEIVED:'Telefon został przyjęty',
+  DIAGNOSIS:'Serwis rozpoczął sprawdzanie telefonu',
+  WAITING_PARTS:'Serwis czeka na części',
+  IN_REPAIR:'Rozpoczęto naprawę telefonu',
+  REPAIR_DONE:'Naprawa telefonu została zakończona',
+  READY:'Telefon jest gotowy do odbioru',
+  COMPLETED:'Telefon został wydany klientowi',
+  CANCELLED:'Zlecenie zostało anulowane',
+  REJECTED:'Zlecenie zostało zamknięte'
+} as Record<string,string>)[status] || 'Zlecenie zostało zaktualizowane';
+
+const frontdeskTransferLabel = (transfer:ServiceTransfer,now:number) => {
+  const when=relativeServiceTime(transferEventTime(transfer),now);
+  if(transfer.kind==='RETURN_HOME'){
+    if(transfer.status==='IN_TRANSIT')return `Telefon wraca do punktu · wysłano ${when}`;
+    if(transfer.status==='DELIVERED')return `Telefon wrócił do punktu · dotarł ${when}`;
+    if(transfer.status==='ACCEPTED')return `Telefon przyjęto po powrocie · ${when}`;
+    if(transfer.status==='CANCELLED')return `Powrót telefonu został anulowany · ${when}`;
+    if(transfer.status==='REJECTED')return `Punkt nie przyjął telefonu · ${when}`;
+  }
+  if(transfer.status==='IN_TRANSIT')return `Telefon wysłano do serwisu ${when}`;
+  if(transfer.status==='DELIVERED')return `Telefon dotarł do serwisu ${when}`;
+  if(transfer.status==='ACCEPTED')return `Serwis przyjął telefon ${when}`;
+  if(transfer.status==='CANCELLED')return `Wysyłka została anulowana ${when}`;
+  if(transfer.status==='REJECTED')return `Serwis nie przyjął telefonu ${when}`;
+  return `Ostatnia zmiana ${when}`;
+};
+
+const frontdeskProcess = (order:ServiceOrderSummary,now:number) => {
+  const homePointId=order.homePointId||order.pointId;
+  const outsideHome=Boolean(order.currentPointId&&order.currentPointId!==homePointId);
+  if(['COMPLETED','CANCELLED','REJECTED'].includes(order.status)){
+    return {index:6,title:order.status==='COMPLETED'?'Telefon został wydany klientowi':'To zlecenie jest już zamknięte',description:'Nie ma już żadnej czynności do wykonania przy tym telefonie.'};
+  }
+  if(order.status==='READY'){
+    return {index:5,title:'Telefon czeka na odbiór przez klienta',description:'Sprawdź dane klienta, wydaj telefon i potwierdź wydanie przyciskiem poniżej.'};
+  }
+  if(order.openTransfer?.kind==='RETURN_HOME'){
+    if(order.openTransfer.status==='DELIVERED'){
+      return {index:4,title:'Telefon wrócił do punktu — potwierdź przyjęcie',description:`Telefon dotarł ${relativeServiceTime(order.openTransfer.deliveredAt||order.openTransfer.updatedAt,now)}. Po przyjęciu będzie można przygotować go dla klienta.`};
+    }
+    return {index:4,title:'Telefon wraca do punktu',description:`Wysłano go z serwisu ${relativeServiceTime(order.openTransfer.shippedAt||order.openTransfer.requestedAt,now)}. Poczekaj, aż dotrze.`};
+  }
+  if(order.status==='REPAIR_DONE'&&order.returnRequired){
+    return {index:4,title:'Naprawa skończona — telefon musi wrócić do punktu',description:'Jeżeli telefon jest u Ciebie, rozpocznij wysyłkę powrotną. Jeżeli jest w innym punkcie, poczekaj na odesłanie.'};
+  }
+  if(order.status==='REPAIR_DONE'){
+    return {index:5,title:'Naprawa skończona — telefon jest przygotowywany do odbioru',description:'Serwis przygotuje gwarancję i oznaczy telefon jako gotowy. Na razie nie musisz nic robić.'};
+  }
+  if(order.status==='IN_REPAIR'){
+    return {index:3,title:'Telefon jest naprawiany',description:'Serwis pracuje nad telefonem. Gdy naprawa się skończy, zobaczysz informację o powrocie lub odbiorze.'};
+  }
+  if(order.status==='WAITING_PARTS'){
+    return {index:3,title:'Serwis czeka na części',description:'Telefon pozostaje w serwisie. Nie musisz nic robić, dopóki części nie dotrą.'};
+  }
+  if(order.status==='DIAGNOSIS'||outsideHome){
+    return {index:2,title:'Serwis sprawdza telefon',description:'Telefon jest już po stronie serwisu. Poczekaj na informację o naprawie.'};
+  }
+  if(order.openTransfer){
+    if(order.openTransfer.status==='DELIVERED'){
+      return {index:1,title:'Telefon dotarł do serwisu — czeka na przyjęcie',description:`Dotarł ${relativeServiceTime(order.openTransfer.deliveredAt||order.openTransfer.updatedAt,now)}. Punkt docelowy powinien teraz potwierdzić przyjęcie.`};
+    }
+    return {index:1,title:'Telefon jest w drodze do serwisu',description:`Wysłano go ${relativeServiceTime(order.openTransfer.shippedAt||order.openTransfer.requestedAt,now)}. Poczekaj na potwierdzenie przyjęcia.`};
+  }
+  return {index:1,title:'Przekaż telefon do serwisu',description:'W sekcji „Gdzie jest telefon” poniżej wybierz serwis docelowy i wyślij telefon.'};
+};
+
 const sortOrdersForList = (items: ServiceOrderSummary[]) => [...items].sort((a,b) => {
   const closedA = CLOSED_SERVICE_STATUSES.has(a.status);
   const closedB = CLOSED_SERVICE_STATUSES.has(b.status);
@@ -191,6 +292,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [detailsDrafts, setDetailsDrafts] = useState<Record<string, OrderDetailsDraft>>({});
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [historyBusyId, setHistoryBusyId] = useState<string | null>(null);
+  const [serviceClock, setServiceClock] = useState(()=>Date.now());
   const [orderBusyId, setOrderBusyId] = useState<string | null>(null);
   const [warrantyBusyId, setWarrantyBusyId] = useState<string | null>(null);
   const [warrantyDrafts, setWarrantyDrafts] = useState<Record<string,string>>({});
@@ -511,6 +613,17 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [expandedOrderId]);
+
+  useEffect(() => {
+    if (!expandedOrderId || effectiveRole!=='USER') return;
+    const order=orders.find((item)=>item.id===expandedOrderId);
+    if(!order)return;
+    void ensureOrderHistory(order.id);
+    void ensureServicePoints();
+    setServiceClock(Date.now());
+    const timer=window.setInterval(()=>setServiceClock(Date.now()),60_000);
+    return()=>window.clearInterval(timer);
+  }, [expandedOrderId,effectiveRole,orders]);
 
   const search = async () => {
     const clean = query.trim();
@@ -1282,6 +1395,15 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const primaryStageBlocked = primaryStageAction?.status==='READY' && (order.canMarkReady===false || !order.warrantyReady);
         const stageSteps=['Przyjęto','Diagnoza','Części','Naprawa','Zakończono','Gotowe','Wydano'];
         const stageIndex=({RECEIVED:0,DIAGNOSIS:1,WAITING_PARTS:2,IN_REPAIR:3,REPAIR_DONE:4,READY:5,COMPLETED:6} as Record<string,number>)[order.status] ?? 0;
+        const isFrontdesk=effectiveRole==='USER';
+        const frontdeskState=frontdeskProcess(order,serviceClock);
+        const visibleStageSteps=isFrontdesk?[...FRONTDESK_STEPS]:stageSteps;
+        const visibleStageIndex=isFrontdesk?frontdeskState.index:stageIndex;
+        const visibleStageProgress=isFrontdesk
+          ? Math.max(8,Math.round((visibleStageIndex/Math.max(1,visibleStageSteps.length-1))*100))
+          : (order.workflow?.progressPercent ?? 10);
+        const visibleStageTitle=isFrontdesk?frontdeskState.title:(order.workflow?.nextAction || 'Sprawdź zlecenie.');
+        const visibleStageDescription=isFrontdesk?frontdeskState.description:'Najważniejsza czynność jest pokazana jako pierwsza.';
         return <div className="service-order-details-page">
           <section className="service-order-details-dialog service-order-details-inline" aria-label={`Szczegóły zlecenia #${order.orderNumber}`}>
             <header className="service-order-details-header">
@@ -1293,37 +1415,31 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               <button className="button secondary small service-order-details-back" title="Wróć do listy" onClick={()=>setExpandedOrderId(null)}>← Wróć do zleceń</button>
             </header>
             <div className={`service-order-workspace ${effectiveRole==='USER'?'service-order-workspace-frontdesk':''}`}>
-                      <section className="service-order-keyfacts">
-                        <article><span>Klient</span><strong>{order.customerName}</strong><small>{order.customerPhone || order.customerEmail || 'Brak kontaktu'}</small></article>
-                        <article><span>Telefon</span><strong>{formatDeviceLabel(order.brand,order.model)}</strong><small>{order.imei ? 'IMEI ' + order.imei : readableSerialNumber(order.serialNumber) ? 'S/N ' + readableSerialNumber(order.serialNumber) : 'Brak IMEI / S/N'}</small></article>
-                        <article><span>Zgłoszenie</span><strong>{order.issueDescription}</strong><small>{order.assignedTechnicianName ? 'Serwisant: ' + order.assignedTechnicianName : 'Serwisant jeszcze nieprzypisany'}</small></article>
-                        <article><span>Termin</span><strong>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL') : 'Nie podano'}</strong><small>{order.repairSummary || 'Opis wykonanej naprawy pojawi się po zakończeniu.'}</small></article>
-                      </section>
-
-                      {effectiveRole === 'USER' && <section className="service-frontdesk-card">
-                        <div><PackageCheck size={18}/><span><strong>Obsługa klienta przy ladzie</strong><small>{order.status === 'READY' ? 'Telefon jest gotowy. Sprawdź dane klienta i wykonaj krok wydania poniżej.' : 'Tu zobaczysz tylko informacje potrzebne do rozmowy z klientem.'}</small></span></div>
-                        <div className="service-frontdesk-meta"><span>{order.statusLabel}</span><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span>{order.warrantyExpiresAt&&<span>Gwarancja do {new Date(order.warrantyExpiresAt).toLocaleDateString('pl-PL')}</span>}</div>
-                      </section>}
-
                       <section className="service-workspace-card service-stage-card service-stage-guided">
                         <div className="service-process-heading">
-                          <div className="service-process-step"><span>KROK {Math.min(stageIndex+1,stageSteps.length)} Z {stageSteps.length}</span><strong>{order.workflow?.nextAction || 'Sprawdź zlecenie.'}</strong></div>
+                          <div className="service-process-step">
+                            <span>KROK {Math.min(visibleStageIndex+1,visibleStageSteps.length)} Z {visibleStageSteps.length}</span>
+                            <strong>{visibleStageTitle}</strong>
+                            <small>{visibleStageDescription}</small>
+                          </div>
                           <div className="service-process-location"><MapPin size={14}/><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span></div>
                         </div>
                         <div className="service-stage-overview">
-                          <div className="service-stage-progress"><span style={{width:`${order.workflow?.progressPercent ?? 10}%`}}/></div>
-                          <div className="service-repair-stage-rail service-repair-stage-rail-compact">
-                            {stageSteps.map((label,index)=><span key={label} className={index<stageIndex?'done':index===stageIndex?'current':index===stageIndex+1?'next':''}>{label}</span>)}
+                          <div className="service-stage-progress"><span style={{width:`${visibleStageProgress}%`}}/></div>
+                          <div className={`service-repair-stage-rail service-repair-stage-rail-compact ${isFrontdesk?'service-frontdesk-stage-rail':''}`}>
+                            {visibleStageSteps.map((label,index)=><span key={label} className={index<visibleStageIndex?'done':index===visibleStageIndex?'current':index===visibleStageIndex+1?'next':''}>{label}</span>)}
                           </div>
                         </div>
 
                         {order.openTransfer && <div className="service-process-logistics">
-                          <div><Truck size={18}/><span><strong>{order.openTransfer.kind==='RETURN_HOME'?'Telefon wraca do punktu macierzystego':'Telefon jest w przekazaniu'}</strong><small>{order.openTransfer.fromPointName} → {order.openTransfer.toPointName}</small></span></div>
+                          <div><Truck size={18}/><span><strong>{isFrontdesk
+                              ? (order.openTransfer.kind==='RETURN_HOME'?'Telefon wraca do Twojego punktu':'Telefon jest w drodze do serwisu')
+                              : (order.openTransfer.kind==='RETURN_HOME'?'Telefon wraca do punktu macierzystego':'Telefon jest w przekazaniu')}</strong><small>{order.openTransfer.fromPointName} → {order.openTransfer.toPointName}</small></span></div>
                           <div className="service-stage-actions">
                             {order.openTransfer.status==='IN_TRANSIT'&&canActTransferDestination&&<button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'DELIVERED')}>Telefon dotarł do punktu</button>}
                             {order.openTransfer.status==='DELIVERED'&&canActTransferDestination&&<button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'ACCEPTED')}><PackageCheck size={14}/> Przyjmij telefon w punkcie</button>}
                             {order.openTransfer.status==='IN_TRANSIT'&&canActTransferSource&&<button className="button secondary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'CANCELLED')}>Anuluj wysyłkę</button>}
-                            {!canActTransferDestination&&!canActTransferSource&&<small>Akcję potwierdza punkt, w którym telefon fizycznie się znajduje lub do którego właśnie dotarł.</small>}
+                            {!canActTransferDestination&&!canActTransferSource&&<small>{isFrontdesk?'Teraz nic nie musisz robić. Drugi punkt potwierdzi odbiór telefonu.':'Akcję potwierdza punkt, w którym telefon fizycznie się znajduje lub do którego właśnie dotarł.'}</small>}
                           </div>
                         </div>}
 
@@ -1340,13 +1456,17 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </div>}
 
                         {!order.openTransfer&&order.returnRequired&&order.status==='REPAIR_DONE'&&<div className="service-process-logistics">
-                          <div><RotateCcw size={18}/><span><strong>Naprawa zakończona poza punktem macierzystym</strong><small>Teraz odeślij telefon. Po przyjęciu w punkcie macierzystym ServiceOS pokaże krok z gwarancją i odbiorem.</small></span></div>
-                          {canTransferHere&&canEditStatus
-                            ? <button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}>Odeślij do punktu macierzystego</button>
-                            : <small>Zwrot rozpoczyna osoba pracująca w punkcie, w którym telefon znajduje się teraz.</small>}
+                          <div><RotateCcw size={18}/><span><strong>{isFrontdesk?'Naprawa skończona — telefon ma wrócić do punktu przyjęcia':'Naprawa zakończona poza punktem macierzystym'}</strong><small>{isFrontdesk?'Po powrocie telefonu zobaczysz krok przygotowania go do odbioru przez klienta.':'Teraz odeślij telefon. Po przyjęciu w punkcie macierzystym ServiceOS pokaże krok z gwarancją i odbiorem.'}</small></span></div>
+                          {canTransferHere
+                            ? <button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}>{isFrontdesk?'Wyślij telefon z powrotem do punktu przyjęcia':'Odeślij do punktu macierzystego'}</button>
+                            : <small>{isFrontdesk?'Teraz nic nie musisz robić. Punkt, w którym jest telefon, rozpocznie jego powrót.':'Zwrot rozpoczyna osoba pracująca w punkcie, w którym telefon znajduje się teraz.'}</small>}
                         </div>}
 
-                        {!order.openTransfer&&order.handlingMode!=='TRANSFER_ONLY'&&<div className="service-stage-actions">
+                        {isFrontdesk&&!order.openTransfer&&order.status==='RECEIVED'&&canTransferHere&&<div className="service-stage-actions service-frontdesk-stage-action">
+                          <button type="button" className="button primary service-stage-primary" onClick={()=>document.getElementById('service-logistics-'+order.id)?.scrollIntoView({behavior:'smooth',block:'start'})}><Truck size={14}/> Przekaż telefon do serwisu</button>
+                          <small>Niżej wybierzesz punkt, do którego ma pojechać telefon.</small>
+                        </div>}
+                                                {!order.openTransfer&&order.handlingMode!=='TRANSFER_ONLY'&&<div className="service-stage-actions">
                           {primaryStageAction && (canEditOrderHere || (primaryStageAction.status==='COMPLETED' && canCompletePickupHere)) && <button
                             type="button"
                             className="button primary service-stage-primary"
@@ -1372,6 +1492,18 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           </details>}
                         </div>}
                       </section>
+
+                      <section className="service-order-keyfacts">
+                        <article><span>Klient</span><strong>{order.customerName}</strong><small>{order.customerPhone || order.customerEmail || 'Brak kontaktu'}</small></article>
+                        <article><span>Telefon</span><strong>{formatDeviceLabel(order.brand,order.model)}</strong><small>{order.imei ? 'IMEI ' + order.imei : readableSerialNumber(order.serialNumber) ? 'S/N ' + readableSerialNumber(order.serialNumber) : 'Brak IMEI / S/N'}</small></article>
+                        <article><span>Zgłoszenie</span><strong>{order.issueDescription}</strong><small>{order.assignedTechnicianName ? 'Serwisant: ' + order.assignedTechnicianName : 'Serwisant jeszcze nieprzypisany'}</small></article>
+                        <article><span>Termin</span><strong>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL') : 'Nie podano'}</strong><small>{order.repairSummary || 'Opis wykonanej naprawy pojawi się po zakończeniu.'}</small></article>
+                      </section>
+
+                      {effectiveRole === 'USER' && <section className="service-frontdesk-card">
+                        <div><PackageCheck size={18}/><span><strong>Obsługa klienta przy ladzie</strong><small>{order.status === 'READY' ? 'Telefon jest gotowy. Sprawdź dane klienta i wykonaj krok wydania poniżej.' : 'Tu zobaczysz tylko informacje potrzebne do rozmowy z klientem.'}</small></span></div>
+                        <div className="service-frontdesk-meta"><span>{order.statusLabel}</span><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span>{order.warrantyExpiresAt&&<span>Gwarancja do {new Date(order.warrantyExpiresAt).toLocaleDateString('pl-PL')}</span>}</div>
+                      </section>}
 
                       {canUseOrderFinance && ['WAITING_PARTS','IN_REPAIR'].includes(order.status) && (
                         <section className="service-stage-task-card">
@@ -1432,17 +1564,21 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         {openPanels[order.id+':finance']&&<div className="service-collapse-body service-finance-collapse"><OrderCostingCard order={order}/></div>}
                       </details>}
 
-                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" onToggle={(event)=>{if(event.currentTarget.open)void ensureServicePoints();}}>
-                        <summary><Truck size={15}/><span><strong>Logistyka urządzenia</strong><small>{order.openTransfer||order.returnRequired?'Wymaga uwagi — sprawdź transport lub powrót.':'Przekazanie do innego punktu, gdy jest potrzebne.'}</small></span></summary>
+                      <details id={'service-logistics-'+order.id} className={`service-workspace-card service-workspace-collapse service-transfer-card ${isFrontdesk?'service-frontdesk-always-open':''}`} open={isFrontdesk?true:undefined} onToggle={(event)=>{if(event.currentTarget.open)void ensureServicePoints();}}>
+                        <summary onClick={(event)=>{if(isFrontdesk)event.preventDefault();}}><Truck size={15}/><span><strong>{isFrontdesk?'Gdzie jest telefon':'Logistyka urządzenia'}</strong><small>{isFrontdesk?'Tu wysyłasz telefon, przyjmujesz go po dostawie i widzisz ile czasu jest w drodze.':order.openTransfer||order.returnRequired?'Wymaga uwagi — sprawdź transport lub powrót.':'Przekazanie do innego punktu, gdy jest potrzebne.'}</small></span></summary>
                         <div className="service-collapse-body">
                         <div className="active-transfer-summary">
-                          <div><MapPin size={15}/><span>Macierzysty: {order.homePointName || order.pointName}</span><b>·</b><strong>Teraz: {order.currentLocationLabel || order.currentPointName || 'W transporcie'}</strong></div>
-                          <small>{order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
+                          <div><MapPin size={15}/><span>{isFrontdesk?'Punkt przyjęcia':'Macierzysty'}: {order.homePointName || order.pointName}</span><b>·</b><strong>Telefon jest teraz: {order.currentLocationLabel || order.currentPointName || 'w drodze'}</strong></div>
+                          <small>{isFrontdesk
+                            ? order.returnRequired?'Po naprawie telefon musi wrócić do punktu, w którym został przyjęty.':'W tym miejscu zawsze widzisz aktualne położenie telefonu.'
+                            : order.returnRequired ? 'Po zakończeniu pracy urządzenie musi fizycznie wrócić do punktu macierzystego.' : 'Urządzenie jest w prawidłowym miejscu dla bieżącego etapu.'}</small>
                         </div>
                         {order.openTransfer ? (
                           <div className="active-transfer-summary">
                             <div><Truck size={15}/><span>{order.openTransfer.fromPointName}</span><b>→</b><strong>{order.openTransfer.toPointName}</strong></div>
-                            <small>{order.openTransfer.kind==='RETURN_HOME' ? 'Obowiązkowy zwrot do punktu macierzystego' : 'Wysłanie do zewnętrznego serwisu'} · {order.openTransfer.status==='IN_TRANSIT'?'w drodze':order.openTransfer.status==='DELIVERED'?'dostarczono, czeka na przyjęcie':'oczekuje'}</small>
+                            <small>{isFrontdesk
+                              ? frontdeskTransferLabel(order.openTransfer,serviceClock)
+                              : (order.openTransfer.kind==='RETURN_HOME' ? 'Obowiązkowy zwrot do punktu macierzystego' : 'Wysłanie do zewnętrznego serwisu')+' · '+(order.openTransfer.status==='IN_TRANSIT'?'w drodze':order.openTransfer.status==='DELIVERED'?'dostarczono, czeka na przyjęcie':'oczekuje')}</small>
                           </div>
                         ) : order.handlingMode === 'TRANSFER_ONLY' ? (
                           canTransferHere ? (
@@ -1457,7 +1593,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             </div>
                           ) : <div className="service-history-empty">Przekazanie może rozpocząć użytkownik obsługujący aktualny punkt urządzenia.</div>
                         ) : order.returnRequired ? (
-                          canTransferHere && canEditStatus && order.status==='REPAIR_DONE' ? (
+                          canTransferHere && order.status==='REPAIR_DONE' ? (
                             <div className="transfer-compose">
                               <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka do zwrotu, np. naprawa zakończona, komplet akcesoriów"/>
                               <button className="button primary small" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}><RotateCcw size={13}/> Odeślij do punktu macierzystego</button>
@@ -1472,15 +1608,15 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         ) : canTransferHere ? (
                           <div className="transfer-compose">
                             <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
-                              <option value="">Wybierz serwis docelowy…</option>
+                              <option value="">{isFrontdesk?'Wybierz serwis, do którego wysyłasz telefon…':'Wybierz serwis docelowy…'}</option>
                               {servicePoints.filter((point)=>point.acceptsExternalRepairs && point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
                             </select>
-                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder="Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej"/>
-                            <button className="button secondary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/> Wyślij do serwisu</button>
+                            <textarea rows={2} maxLength={500} value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).note} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),note:e.target.value}}))} placeholder={isFrontdesk?'Krótka informacja dla serwisu, np. co zgłasza klient':'Notatka dla serwisu docelowego, np. podejrzenie uszkodzenia płyty głównej'}/>
+                            <button className="button secondary small" disabled={Boolean(orderBusyId) || !(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={13}/>{isFrontdesk?' Przekaż telefon do serwisu':' Wyślij do serwisu'}</button>
                           </div>
                         ) : <div className="service-history-empty">Brak aktywnego transportu.</div>}
                         {(order.transfers ?? []).length>0 && <div className="transfer-mini-history">
-                          {(order.transfers ?? []).slice(0,4).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót: ':'Do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small>{item.status} · {new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
+                          {(order.transfers ?? []).slice(0,6).map((item)=><div key={item.id}><span>{item.kind==='RETURN_HOME'?'Powrót: ':'Do serwisu: '}{item.fromPointName} → {item.toPointName}</span><small>{isFrontdesk?frontdeskTransferLabel(item,serviceClock):item.status+' · '+new Date(item.updatedAt).toLocaleString('pl-PL')}</small></div>)}
                         </div>}
                         </div>
                       </details>
@@ -1522,15 +1658,19 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </div>
                       </details>
 
-                      <details className="service-workspace-card service-workspace-collapse service-workspace-history" onToggle={(event)=>{if(event.currentTarget.open)void ensureOrderHistory(order.id);}}>
-                        <summary><History size={15}/><span><strong>Historia zlecenia</strong><small>Pełna oś czasu zmian statusu.</small></span></summary>
+                      <details className={`service-workspace-card service-workspace-collapse service-workspace-history ${isFrontdesk?'service-frontdesk-always-open':''}`} open={isFrontdesk?true:undefined} onToggle={(event)=>{if(event.currentTarget.open)void ensureOrderHistory(order.id);}}>
+                        <summary onClick={(event)=>{if(isFrontdesk)event.preventDefault();}}><History size={15}/><span><strong>{isFrontdesk?'Historia serwisu':'Historia zlecenia'}</strong><small>{isFrontdesk?'Czytelna historia tego, co działo się z telefonem.':'Pełna oś czasu zmian statusu.'}</small></span></summary>
                         <div className="service-collapse-body">
                         {(orderHistories[order.id] ?? []).map((item, index) => (
                           <div className="service-history-item" key={item.id}>
                             <div className="service-history-line"><i className={index === (orderHistories[order.id] ?? []).length - 1 ? 'current' : ''}></i></div>
                             <div className="service-history-content">
-                              <div className="service-history-status">{item.fromLabel && <span>{item.fromLabel}</span>}{item.fromLabel && <b>→</b>}<strong>{item.toLabel}</strong></div>
-                              <small>{new Date(item.changedAt).toLocaleString('pl-PL')} · {item.changedByName}</small>
+                              <div className="service-history-status">{isFrontdesk
+                                ? <strong>{frontdeskHistoryLabel(item.toStatus)}</strong>
+                                : <>{item.fromLabel && <span>{item.fromLabel}</span>}{item.fromLabel && <b>→</b>}<strong>{item.toLabel}</strong></>}</div>
+                              <small>{isFrontdesk
+                                ? `${relativeServiceTime(item.changedAt,serviceClock)} · ${new Date(item.changedAt).toLocaleString('pl-PL')}`
+                                : `${new Date(item.changedAt).toLocaleString('pl-PL')} · ${item.changedByName}`}</small>
                               {item.note && <p>{item.note}</p>}
                             </div>
                           </div>
