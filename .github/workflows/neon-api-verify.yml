@@ -2,6 +2,7 @@ name: Verify Neon API bundle
 
 on:
   push:
+    branches: ["main", "release/**"]
     paths:
       - "functions/lockon-api.mjs"
       - "package.json"
