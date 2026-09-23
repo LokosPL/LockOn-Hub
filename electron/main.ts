@@ -1011,6 +1011,18 @@ const registerIpc = () => {
     if (!['register','unregister','start','end','cancel'].includes(action)) throw new Error('Nieprawidłowa akcja spotkania.');
     return backendRequest(`/meetings/${encodeURIComponent(safeMeetingId)}/${action}`, { method:'POST', body:'{}' }, token);
   });
+  secureHandle('meetings:joinToken', async (meetingId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/join-token`, {method:'POST',body:'{}'}, token);
+  });
+  secureHandle('meetings:participants', async (meetingId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/participants`, {}, token);
+  });
+  secureHandle('meetings:moderate', async (meetingId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/moderate`, {method:'POST',body:JSON.stringify(payload ?? {})}, token);
+  });
 
 
   secureHandle('service:searchCustomers', async (query: string) => {
