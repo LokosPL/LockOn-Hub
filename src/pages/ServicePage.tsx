@@ -1526,8 +1526,16 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                   {complaintOriginal&&<div className="service-complaint-selected"><CheckCircle2 size={17}/><div><strong>Reklamacja do zlecenia #{complaintOriginal.orderNumber}</strong><span>{complaintOriginal.customerName} · {formatDeviceLabel(complaintOriginal.brand,complaintOriginal.model)}</span></div><button type="button" className="button tiny secondary" onClick={()=>{setComplaintOriginal(null);setComplaintQuery('');}}>Zmień</button></div>}
                   {!complaintOriginal&&<small className="service-complaint-hint">Reklamacja naprawy wymaga wskazania wcześniejszego zlecenia. Reklamacje telefonów sprzedanych przez sklep będą dodane osobno później.</small>}
                 </section>}
-                <section className="service-intake-section service-intake-customer-v3">
-                  <div className="service-intake-section-title"><UserRound size={16}/><div><strong>Klient</strong><small>{form.orderType==='COMPLAINT'&&complaintOriginal?'Dane pobrane z wcześniejszego zlecenia — możesz je poprawić, jeśli klient podał nowe.':'Wyszukaj istniejącego albo wpisz nowego.'}</small></div></div>
+                {form.orderType==='COMPLAINT'&&complaintOriginal&&<section className="service-intake-section service-complaint-source">
+                  <div className="service-intake-section-title"><CheckCircle2 size={16}/><div><strong>Dane z poprzedniej naprawy są przypięte</strong><small>Nie musisz ponownie wpisywać klienta ani telefonu.</small></div></div>
+                  <div className="service-complaint-source-grid">
+                    <div><span>Klient</span><strong>{complaintOriginal.customerName}</strong><small>{complaintOriginal.customerPhone||complaintOriginal.customerEmail||'Brak kontaktu'}</small></div>
+                    <div><span>Telefon</span><strong>{formatDeviceLabel(complaintOriginal.brand,complaintOriginal.model)}</strong><small>{complaintOriginal.imei?'IMEI '+complaintOriginal.imei:complaintOriginal.serialNumber?'S/N '+complaintOriginal.serialNumber:'Brak IMEI / S/N'}</small></div>
+                    <div><span>Poprzednie zgłoszenie</span><strong>{complaintOriginal.issueDescription}</strong><small>Status: {complaintOriginal.statusLabel}</small></div>
+                  </div>
+                </section>}
+                {!(form.orderType==='COMPLAINT'&&complaintOriginal)&&<section className="service-intake-section service-intake-customer-v3">
+                  <div className="service-intake-section-title"><UserRound size={16}/><div><strong>Klient</strong><small>Wyszukaj istniejącego albo wpisz nowego.</small></div></div>
                   <div className="service-search-row service-search-row-v3">
                     <input value={query} onChange={(e)=>setQuery(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter')void search();}} placeholder="Nazwisko, email lub telefon"/>
                     <button className="button secondary" disabled={searchBusy||query.trim().length<2} onClick={()=>void search()}><Search size={14}/>{searchBusy?'Szukam…':'Szukaj'}</button>
@@ -1539,26 +1547,28 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                     <label><span>Email</span><input type="email" value={form.email} onChange={(e)=>update('email',e.target.value)}/></label>
                     <label><span>Telefon</span><input value={form.phone} onChange={(e)=>update('phone',e.target.value)}/></label>
                   </div>
-                </section>
+                </section>}
 
                 <section className="service-intake-section">
-                  <div className="service-intake-section-title"><Smartphone size={16}/><div><strong>Urządzenie i realizacja</strong><small>Dane techniczne, termin i cena orientacyjna.</small></div></div>
+                  <div className="service-intake-section-title"><Smartphone size={16}/><div><strong>{form.orderType==='COMPLAINT'&&complaintOriginal?'Przyjęcie reklamacji':'Urządzenie i realizacja'}</strong><small>{form.orderType==='COMPLAINT'&&complaintOriginal?'Opisz tylko nowy problem i stan telefonu. Reszta danych jest już przypięta.':'Dane techniczne, termin i cena orientacyjna.'}</small></div></div>
                   <div className="service-form-grid service-intake-form-v3">
-                    <label className="service-brand-field"><span>Marka <em>opcjonalnie</em></span><div className="service-brand-combobox">
-                      <input value={form.brand} onFocus={()=>setBrandOpen(true)} onBlur={()=>window.setTimeout(()=>setBrandOpen(false),120)} onChange={(e)=>{update('brand',e.target.value);setBrandOpen(true);}} placeholder="Np. Samsung" autoComplete="off"/>
-                      {brandOpen&&brandSuggestions.length>0&&<div className="service-brand-suggestions">{brandSuggestions.map((brand)=><button type="button" key={brand} onMouseDown={(event)=>event.preventDefault()} onClick={()=>{update('brand',brand);setBrandOpen(false);}}><Smartphone size={14}/><span>{brand}</span></button>)}</div>}
-                    </div></label>
-                    <label><span>Model <em>opcjonalnie</em></span><input value={form.model} onChange={(e)=>update('model',e.target.value)} placeholder="Np. Galaxy S24"/></label>
-                    <label><span>IMEI <em>opcjonalnie</em></span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr"/></label>
-                    <label><span>Numer seryjny <em>opcjonalnie</em></span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Jeśli dostępny"/></label>
-                    {canSetIntakeEstimate&&<label className="service-estimate-field"><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="Np. 349,00"/></label>}
+                    {!(form.orderType==='COMPLAINT'&&complaintOriginal)&&<>
+                      <label className="service-brand-field"><span>Marka <em>opcjonalnie</em></span><div className="service-brand-combobox">
+                        <input value={form.brand} onFocus={()=>setBrandOpen(true)} onBlur={()=>window.setTimeout(()=>setBrandOpen(false),120)} onChange={(e)=>{update('brand',e.target.value);setBrandOpen(true);}} placeholder="Np. Samsung" autoComplete="off"/>
+                        {brandOpen&&brandSuggestions.length>0&&<div className="service-brand-suggestions">{brandSuggestions.map((brand)=><button type="button" key={brand} onMouseDown={(event)=>event.preventDefault()} onClick={()=>{update('brand',brand);setBrandOpen(false);}}><Smartphone size={14}/><span>{brand}</span></button>)}</div>}
+                      </div></label>
+                      <label><span>Model <em>opcjonalnie</em></span><input value={form.model} onChange={(e)=>update('model',e.target.value)} placeholder="Np. Galaxy S24"/></label>
+                      <label><span>IMEI <em>opcjonalnie</em></span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr"/></label>
+                      <label><span>Numer seryjny <em>opcjonalnie</em></span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Jeśli dostępny"/></label>
+                      {canSetIntakeEstimate&&<label className="service-estimate-field"><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="Np. 349,00"/></label>}
+                    </>}
                     {canSetIntakeEta&&<div className="service-intake-eta full"><div className="service-field-heading"><span>Przewidywany termin</span><small>domyślnie +3 dni</small></div><div className="service-quick-pills service-eta-pills">
                       <button type="button" className={!form.estimatedCompletionAt?'active':''} onClick={()=>update('estimatedCompletionAt','')}>Bez terminu</button>
                       {[1,2,3].map((days)=><button type="button" key={days} className={form.estimatedCompletionAt===dateInputAfterDays(days)?'active':''} onClick={()=>update('estimatedCompletionAt',dateInputAfterDays(days))}>{days===1?'Jutro':`+${days} dni`}</button>)}
                       <label className="service-custom-date"><span>Inna data</span><input type="date" min={dateInputAfterDays(0)} value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)}/></label>
                     </div></div>}
                     <div className="service-device-notes full"><div className="service-field-heading"><span>Stan / uwagi do urządzenia</span><small>opcjonalnie</small></div><div className="service-quick-pills service-note-presets">{DEVICE_NOTE_PRESETS.map((note)=><button type="button" key={note} className={form.deviceNotes===note?'active':''} onClick={()=>update('deviceNotes',note)}>{note}</button>)}</div><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Dodatkowe uwagi…"/></div>
-                    <label className="full"><span>Opis usterki <em>wymagane</em></span><textarea rows={5} required value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder="Krótko opisz problem zgłoszony przez klienta."/></label>
+                    <label className="full"><span>{form.orderType==='COMPLAINT'?'Co klient reklamuje?':'Opis usterki'} <em>wymagane</em></span><textarea rows={5} required value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder={form.orderType==='COMPLAINT'?'Opisz, co ponownie nie działa lub co klient zgłasza po naprawie.':'Krótko opisz problem zgłoszony przez klienta.'}/></label>
                   </div>
                 </section>
               </div>
