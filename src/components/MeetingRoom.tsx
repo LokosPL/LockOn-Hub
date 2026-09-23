@@ -29,6 +29,7 @@ const parseMetadataUserId = (value?: string | null) => {
 export function MeetingRoom({ meeting, onClose }: Props) {
   const roomRef = useRef<Room | null>(null);
   const screenPublicationRef = useRef<LocalTrackPublication | null>(null);
+  const attendanceOpenRef = useRef(false);
   const audioHostRef = useRef<HTMLDivElement | null>(null);
   const videoHostRef = useRef<HTMLDivElement | null>(null);
   const [joining, setJoining] = useState(true);
@@ -44,6 +45,12 @@ export function MeetingRoom({ meeting, onClose }: Props) {
   const [sources, setSources] = useState<MeetingScreenSource[]>([]);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [busy, setBusy] = useState('');
+
+  const closeAttendance = () => {
+    if (!attendanceOpenRef.current) return;
+    attendanceOpenRef.current = false;
+    void window.lockOn.meetings.attendanceAction(meeting.id,'LEAVE').catch(() => undefined);
+  };
 
   const refreshParticipants = (room: Room) => {
     setParticipants([
@@ -96,6 +103,7 @@ export function MeetingRoom({ meeting, onClose }: Props) {
     const onUnsubscribed = (track: RemoteTrack) => detachTrack(track);
     const onParticipantChanged = () => refreshParticipants(room);
     const onDisconnected = () => {
+      closeAttendance();
       if (!disposed) {
         setConnected(false);
         setMicEnabled(false);
@@ -125,6 +133,8 @@ export function MeetingRoom({ meeting, onClose }: Props) {
         }
         // Mikrofon pozostaje wyłączony po wejściu. Użytkownik włącza go świadomie.
         setConnected(true);
+        await window.lockOn.meetings.attendanceAction(meeting.id,'JOIN').catch(() => undefined);
+        attendanceOpenRef.current = true;
         refreshParticipants(room);
         for (const participant of room.remoteParticipants.values()) {
           for (const publication of participant.trackPublications.values()) {
@@ -145,6 +155,7 @@ export function MeetingRoom({ meeting, onClose }: Props) {
           if (publication.track) detachTrack(publication.track);
         }
       }
+      closeAttendance();
       const localScreen = screenPublicationRef.current?.track;
       if (localScreen) {
         void room.localParticipant.unpublishTrack(localScreen);
@@ -258,6 +269,7 @@ export function MeetingRoom({ meeting, onClose }: Props) {
   };
 
   const leave = () => {
+    closeAttendance();
     roomRef.current?.disconnect();
     onClose();
   };
