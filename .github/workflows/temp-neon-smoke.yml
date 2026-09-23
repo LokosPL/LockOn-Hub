@@ -307,6 +307,14 @@ jobs:
           user_order_id="$(node -e "const d=require('./user-intake.json');if(!d.order?.id)throw new Error('USER intake failed');process.stdout.write(d.order.id)")"
           user_customer_id="$(node -e "const d=require('./user-intake.json');if(!d.customer?.id)throw new Error('USER intake customer missing');process.stdout.write(d.customer.id)")"
 
+          user_api GET "/service/customers?q=$(node -p "encodeURIComponent(process.argv[1])" "$suffix")" > user-customers.json
+          node - <<'NODE' "$user_customer_id"
+          const d=require('./user-customers.json'), customerId=process.argv[2];
+          const customer=d.customers?.find(x=>x.id===customerId);
+          if(!customer)throw new Error('USER customer directory did not include own point customer');
+          if(Number(customer.activeOrders)<1)throw new Error('USER customer directory did not expose active service count');
+          NODE
+
           user_api POST "/customer-accounts/$user_customer_id/notification-preferences" '{"serviceUpdates":false,"readyForPickup":true,"quoteUpdates":false,"messages":true}' > user-notification-prefs.json
           node - <<'NODE'
           const d=require('./user-notification-prefs.json');
@@ -316,12 +324,37 @@ jobs:
           NODE
 
           user_api POST "/service/orders/$user_order_id/transfer" "$(node -e "process.stdout.write(JSON.stringify({kind:'OUTBOUND_SERVICE',toPointId:process.argv[1],note:'USER outbound TEMP E2E'}))" "$destination")" > user-outbound.json
+          user_outbound_transfer_id="$(node -e "const d=require('./user-outbound.json');if(!d.transfer?.id)throw new Error('USER outbound transfer missing');process.stdout.write(d.transfer.id)")"
           node - <<'NODE' "$user_point" "$destination"
           const d=require('./user-outbound.json'), from=process.argv[2], to=process.argv[3];
           if(d.transfer?.status!=='IN_TRANSIT'||d.transfer?.fromPointId!==from||d.transfer?.toPointId!==to)throw new Error('USER could not send device to another point');
           NODE
 
           owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$destination")" > owner-user-destination.json
+
+          owner_api POST "/service/transfers/$user_outbound_transfer_id/status" '{"status":"DELIVERED","note":"Dotarł do serwisu TEMP E2E"}' > user-outbound-delivered.json
+          owner_api POST "/service/transfers/$user_outbound_transfer_id/status" '{"status":"ACCEPTED","note":"Serwis przyjął telefon TEMP E2E"}' > user-outbound-accepted.json
+          user_api GET /service/orders > user-orders-after-service-accept.json
+          node - <<'NODE' "$user_order_id" "$destination"
+          const orders=require('./user-orders-after-service-accept.json'), orderId=process.argv[2], destination=process.argv[3];
+          const order=orders.find(x=>x.id===orderId);
+          if(!order)throw new Error('Origin USER lost order visibility after service accepted the phone');
+          if(order.currentPointId!==destination)throw new Error('Origin USER does not see current service location after acceptance');
+          NODE
+
+          user_api POST "/service/customers/$user_customer_id/profile" '{"firstName":"CI","lastName":"USER FrontDesk updated","email":"'"$suffix"'@invalid.test","phone":"+48123123999"}' > user-customer-profile.json
+          node - <<'NODE' "$user_customer_id"
+          const d=require('./user-customer-profile.json'), customerId=process.argv[2];
+          if(d.customer?.id!==customerId||d.customer?.phone!=='+48123123999')throw new Error('USER could not update own visible customer');
+          NODE
+          user_api GET "/service/customers?q=$(node -p "encodeURIComponent(process.argv[1])" "$suffix")" > user-customers-after-handoff.json
+          node - <<'NODE' "$user_customer_id"
+          const d=require('./user-customers-after-handoff.json'), customerId=process.argv[2];
+          const customer=d.customers?.find(x=>x.id===customerId);
+          if(!customer)throw new Error('Origin USER lost customer after phone moved to service');
+          if(customer.phone!=='+48123123999')throw new Error('Updated customer phone missing from USER directory');
+          NODE
+
           node - <<'NODE' "$suffix" > user-incoming-body.json
           const suffix=process.argv[2];
           process.stdout.write(JSON.stringify({
@@ -397,7 +430,7 @@ jobs:
           user_api POST "/service/orders/$pickup_order_id/status" '{"status":"COMPLETED","note":"Wydano klientowi przez USER"}' > user-pickup-completed.json
           node -e "const d=require('./user-pickup-completed.json');if(d.order?.status!=='COMPLETED')throw new Error('USER pickup completion failed')"
 
-          echo "USER front-desk E2E passed: intake, notification choice, outbound, manual accept, scan accept, pickup."
+          echo "USER front-desk E2E passed: intake, customer directory/edit, retained origin visibility, outbound, manual accept, scan accept, pickup."
 
       - name: Temp service intake, PDF and logistics E2E
         shell: bash
