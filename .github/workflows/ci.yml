@@ -112,6 +112,8 @@ jobs:
           }
           $service = Get-Content src/pages/ServicePage.tsx -Raw
           if (-not $service.Contains("searchRequestRef")) { throw "Missing service search race guard." }
+          $pickupCtaCount = ([regex]::Matches($service, 'Wydaj telefon klientowi')).Count
+          if ($pickupCtaCount -ne 1) { throw "Pickup CTA must appear exactly once in ServicePage, found $pickupCtaCount." }
           @(
             "isActualTechnician ? 'CALENDAR' : 'ORDERS'",
             "service-stage-actions",
