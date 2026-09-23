@@ -144,7 +144,8 @@ jobs:
           }
 
           @(
-            "FRONTDESK_STEPS = ['Przyjęcie','Przekazanie','W serwisie','Naprawa','Powrót','Gotowy','Wydany']",
+            "FRONTDESK_STEPS = ['Przyjęto','Wyślij do serwisu','W serwisie','Naprawa','Wraca do punktu','Do odbioru','Wydany']",
+            "CO TERAZ",
             "Gdzie jest telefon i co dalej?",
             "Historia serwisu",
             "relativeTimePl",
