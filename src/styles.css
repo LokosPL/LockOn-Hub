@@ -5323,6 +5323,7 @@ input,textarea,select{line-height:1.45}
   line-height:1.4;
 }
 .service-mail-identity-strip strong{color:var(--text);font-weight:800}
+.service-mail-identity-strip .button{margin-left:4px}
 .service-mail-identity-strip.connected{border-color:rgba(255,255,255,.12)}
 .service-mail-identity-strip.disconnected{border-color:rgba(255,151,98,.22)}
 
