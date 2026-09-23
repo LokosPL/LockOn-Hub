@@ -48,7 +48,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: lockon-ci-${{ github.workflow }}-${{ github.ref }}
+  group: lockon-ci-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
