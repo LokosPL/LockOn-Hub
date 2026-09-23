@@ -5,6 +5,7 @@ import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectComm
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import pdfMake from 'pdfmake/build/pdfmake.js';
 import pdfFonts from 'pdfmake/build/vfs_fonts.js';
+import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
 pool.on('error', (error) => console.error('[postgres idle client]', error));
@@ -23,6 +24,16 @@ const SITE_ORIGINS = new Set(
 const GMAIL_TOKEN_KEY = String(process.env.LOCKON_GMAIL_TOKEN_KEY || '');
 const PUBLIC_PORTAL_URL = String(process.env.LOCKON_SITE_ORIGIN || 'https://app.serviceos.pl').trim().replace(/\/$/,'') || 'https://app.serviceos.pl';
 const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
+const LIVEKIT_URL = String(process.env.LIVEKIT_URL || '').trim().replace(/\/$/,'');
+const LIVEKIT_API_KEY = String(process.env.LIVEKIT_API_KEY || '').trim();
+const LIVEKIT_API_SECRET = String(process.env.LIVEKIT_API_SECRET || '').trim();
+const LIVEKIT_SERVER_URL = LIVEKIT_URL.replace(/^wss:/i,'https:').replace(/^ws:/i,'http:');
+const LIVEKIT_CLIENT_URL = LIVEKIT_URL.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:');
+const livekitConfigured = () => Boolean(LIVEKIT_SERVER_URL && LIVEKIT_API_KEY && LIVEKIT_API_SECRET);
+const livekitRooms = () => {
+  if (!livekitConfigured()) throw Object.assign(new Error('Usługa spotkań audio nie jest jeszcze skonfigurowana.'),{status:503,code:'LIVEKIT_NOT_CONFIGURED'});
+  return new RoomServiceClient(LIVEKIT_SERVER_URL,LIVEKIT_API_KEY,LIVEKIT_API_SECRET);
+};
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 90;
@@ -626,6 +637,51 @@ const meetingEvent = async (meetingId, actorUserId, eventType, metadata={}) =>
   q("INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,$4,$5::jsonb)",[
     makeId('mte'),meetingId,actorUserId||null,eventType,JSON.stringify(metadata||{})
   ]);
+
+const meetingRoomName = (meetingId) => 'lockon-' + String(meetingId).replace(/[^A-Za-z0-9_-]/g,'').slice(0,100);
+const meetingParticipantIdentity = (meetingId,userId) =>
+  'p_' + crypto.createHash('sha256').update(meetingId+':'+userId).digest('hex').slice(0,28);
+
+const meetingPublishSources = (meeting,user,isManager) => {
+  if (isManager) return [TrackSource.MICROPHONE,TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO];
+  const sources=[];
+  if(meeting.allow_participant_audio===true)sources.push(TrackSource.MICROPHONE);
+  if(meeting.allow_participant_screen_share===true)sources.push(TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO);
+  return sources;
+};
+
+const createMeetingJoinToken = async (meeting,user) => {
+  if(!livekitConfigured())throw Object.assign(new Error('Usługa spotkań audio nie jest jeszcze skonfigurowana.'),{status:503,code:'LIVEKIT_NOT_CONFIGURED'});
+  const isManager=meetingCanManage(user,meeting);
+  const sources=meetingPublishSources(meeting,user,isManager);
+  const room=meetingRoomName(meeting.id);
+  const identity=meetingParticipantIdentity(meeting.id,user.id);
+  const token=new AccessToken(LIVEKIT_API_KEY,LIVEKIT_API_SECRET,{
+    identity,
+    name:operationalIdentityName(user.name,user.email,user.role_code)||'Uczestnik',
+    metadata:JSON.stringify({serviceOsUserId:user.id,role:user.role_code||null,meetingId:meeting.id,manager:isManager}),
+    ttl:'10m'
+  });
+  token.addGrant({
+    roomJoin:true,
+    room,
+    canSubscribe:true,
+    canPublish:sources.length>0,
+    canPublishData:false,
+    canPublishSources:sources
+  });
+  return {
+    serverUrl:LIVEKIT_CLIENT_URL,
+    token:await token.toJwt(),
+    roomName:room,
+    identity,
+    canManage:isManager,
+    permissions:{
+      microphone:isManager||meeting.allow_participant_audio===true,
+      screenShare:isManager||meeting.allow_participant_screen_share===true
+    }
+  };
+};
 
 const searchCustomers = async (user, term) => {
   const query = cleanText(term, 120);
@@ -4270,6 +4326,76 @@ const route = async (request) => {
     return json(request,{ok:true,meeting:meetings.find((item)=>item.id===meetingId)||null},201);
   }
 
+  const meetingJoinToken=url.pathname.match(/^\/meetings\/([^/]+)\/join-token$/);
+  if(method==='POST'&&meetingJoinToken){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingJoinToken[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(meeting.status!=='LIVE')return json(request,{error:'MEETING_NOT_LIVE',message:'Do pokoju można dołączyć dopiero po rozpoczęciu spotkania.'},409);
+    if(!await meetingEligible(u,meetingId)&&!meetingCanManage(u,meeting))return json(request,{error:'MEETING_NOT_ELIGIBLE',message:'To spotkanie nie jest przeznaczone dla Twojego konta.'},403);
+    if(!meetingCanManage(u,meeting)){
+      const registration=(await q("SELECT status FROM meeting_registrations WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meetingId,u.id])).rows[0];
+      if(registration?.status!=='REGISTERED')return json(request,{error:'MEETING_REGISTRATION_REQUIRED',message:'Najpierw zapisz się na spotkanie.'},409);
+    }
+    const payload=await createMeetingJoinToken(meeting,u);
+    await meetingEvent(meetingId,u.id,'JOIN_TOKEN_ISSUED',{identity:payload.identity});
+    return json(request,payload);
+  }
+
+  const meetingParticipants=url.pathname.match(/^\/meetings\/([^/]+)\/participants$/);
+  if(method==='GET'&&meetingParticipants){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingParticipants[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN'},403);
+    if(!livekitConfigured())return json(request,{participants:[],configured:false});
+    const participants=await livekitRooms().listParticipants(meetingRoomName(meetingId));
+    return json(request,{
+      configured:true,
+      participants:participants.map((item)=>({
+        identity:item.identity,
+        name:item.name||'Uczestnik',
+        metadata:item.metadata||'',
+        joinedAt:item.joinedAt?String(item.joinedAt):null,
+        tracks:(item.tracks||[]).map((track)=>({sid:track.sid,source:track.source,muted:track.muted===true}))
+      }))
+    });
+  }
+
+  const meetingModerate=url.pathname.match(/^\/meetings\/([^/]+)\/moderate$/);
+  if(method==='POST'&&meetingModerate){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingModerate[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN'},403);
+    const body=await readJson(request),identity=cleanText(body.identity,120),action=String(body.action||'').toUpperCase();
+    if(!identity||!['MUTE','REMOVE','ALLOW_MIC','BLOCK_MIC'].includes(action))return json(request,{error:'MEETING_MODERATION_ACTION'},400);
+    const room=meetingRoomName(meetingId),client=livekitRooms();
+    if(action==='REMOVE'){
+      await client.removeParticipant(room,identity);
+    }else if(action==='MUTE'){
+      const participant=await client.getParticipant(room,identity);
+      const mic=(participant.tracks||[]).find((track)=>track.source===TrackSource.MICROPHONE);
+      if(mic)await client.mutePublishedTrack(room,identity,mic.sid,true);
+    }else{
+      const allowMic=action==='ALLOW_MIC';
+      const sources=[];
+      if(allowMic)sources.push(TrackSource.MICROPHONE);
+      if(meeting.allow_participant_screen_share===true)sources.push(TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO);
+      await client.updateParticipant(room,identity,{
+        permission:{canSubscribe:true,canPublish:sources.length>0,canPublishData:false,canPublishSources:sources}
+      });
+      if(!allowMic){
+        const participant=await client.getParticipant(room,identity).catch(()=>null);
+        const mic=participant?.tracks?.find((track)=>track.source===TrackSource.MICROPHONE);
+        if(mic)await client.mutePublishedTrack(room,identity,mic.sid,true).catch(()=>undefined);
+      }
+    }
+    await meetingEvent(meetingId,u.id,'MODERATION',{identity,action});
+    await audit(session,'MEETING_MODERATION','meeting',meetingId,null,{identity,action});
+    return json(request,{ok:true});
+  }
+
   const meetingAction=url.pathname.match(/^\/meetings\/([^/]+)\/(register|unregister|start|end|cancel)$/);
   if(meetingAction&&method==='POST'){
     const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingAction[1],120),action=meetingAction[2];
@@ -4314,6 +4440,12 @@ const route = async (request) => {
     if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zarządzać tym spotkaniem.'},403);
     const target=action==='start'?'LIVE':action==='end'?'ENDED':'CANCELLED';
     const allowed=action==='start'?['SCHEDULED']:action==='end'?['LIVE']:['SCHEDULED','LIVE'];
+    if(action==='start'){
+      const client=livekitRooms();
+      const room=meetingRoomName(meetingId);
+      const existing=await client.listRooms([room]);
+      if(!existing.length)await client.createRoom({name:room,maxParticipants:Number(meeting.max_participants||50),emptyTimeout:15*60,departureTimeout:5*60,metadata:JSON.stringify({meetingId})});
+    }
     if(!allowed.includes(meeting.status))return json(request,{error:'MEETING_STATE',message:'Ta zmiana etapu spotkania nie jest teraz dostępna.'},409);
     const result=await q(
       "UPDATE meetings SET status=$2,started_at=CASE WHEN $2='LIVE' THEN COALESCE(started_at,now()) ELSE started_at END,ended_at=CASE WHEN $2='ENDED' THEN now() ELSE ended_at END,cancelled_at=CASE WHEN $2='CANCELLED' THEN now() ELSE cancelled_at END,updated_at=now() WHERE id=$1 AND status=$3 RETURNING *",
