@@ -20,11 +20,13 @@ concurrency:
 jobs:
   release-windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - name: Wait for exact-SHA verification gates
         shell: pwsh
@@ -73,6 +75,53 @@ jobs:
 
           Write-Error "Timed out waiting for Verify LockOn ServiceOS and CodeQL security scan on $env:GITHUB_SHA."
           exit 1
+
+      - name: Verify successful production deployment gate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&event=workflow_dispatch&status=success&per_page=100"
+          $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get
+          $prod = $response.workflow_runs |
+            Where-Object { $_.name -eq 'Production Neon exact deploy' -and $_.conclusion -eq 'success' } |
+            Sort-Object created_at -Descending |
+            Select-Object -First 1
+
+          if ($null -eq $prod) {
+            Write-Error "No successful Production Neon exact deploy was found on main."
+            exit 1
+          }
+
+          $prodSha = [string]$prod.head_sha
+          git merge-base --is-ancestor $prodSha $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "The successful PROD deployment SHA $prodSha is not an ancestor of release SHA $env:GITHUB_SHA."
+            exit 1
+          }
+
+          $allowed = @(
+            'RELEASE_READY',
+            'RELEASE_VERSION',
+            'BUILD_VERSION',
+            'package.json',
+            'package-lock.json',
+            'electron/appConfig.ts'
+          )
+          $changed = @(git diff --name-only $prodSha $env:GITHUB_SHA)
+          $unexpected = @($changed | Where-Object { $_ -and $_ -notin $allowed })
+          if ($unexpected.Count -gt 0) {
+            Write-Error ("Code changed after the last successful PROD deployment. Re-run TEMP and PROD before release. Unexpected files: " + ($unexpected -join ', '))
+            exit 1
+          }
+
+          Write-Host "Production deployment gate verified from $prodSha. Release-only changes: $($changed -join ', ')."
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
