@@ -5162,3 +5162,33 @@ input,textarea,select{line-height:1.45}
     width: fit-content;
   }
 }
+
+
+/* Integrated Service screens: neutralize legacy modal/sticky styles */
+.service-intake-details-dialog.service-intake-inline {
+  width: 100% !important;
+  max-height: none !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  border-radius: 22px !important;
+  background: var(--panel) !important;
+  box-shadow: none !important;
+}
+.service-intake-details-dialog.service-intake-inline .service-intake-details-head,
+.service-intake-details-dialog.service-intake-inline .service-intake-details-footer {
+  position: relative;
+  top: auto;
+  bottom: auto;
+  backdrop-filter: none;
+  background: var(--panel);
+}
+.service-order-details-dialog.service-order-details-inline {
+  width: 100%;
+  max-height: none;
+  overflow: hidden;
+  box-shadow: none;
+}
+.service-order-details-dialog.service-order-details-inline > .service-order-workspace {
+  overflow: visible;
+  min-height: 0;
+}
