@@ -993,6 +993,25 @@ const registerIpc = () => {
     return fetchStartWeather(city);
   });
 
+  secureHandle('meetings:list', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/meetings', {}, token);
+  });
+  secureHandle('meetings:options', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/meetings/options', {}, token);
+  });
+  secureHandle('meetings:create', async (payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest('/meetings', { method:'POST', body:JSON.stringify(payload ?? {}) }, token);
+  });
+  secureHandle('meetings:action', async (meetingId: string, action: 'register'|'unregister'|'start'|'end'|'cancel') => {
+    const token = requireSessionToken();
+    const safeMeetingId = safeId(meetingId, 'mtg');
+    if (!['register','unregister','start','end','cancel'].includes(action)) throw new Error('Nieprawidłowa akcja spotkania.');
+    return backendRequest(`/meetings/${encodeURIComponent(safeMeetingId)}/${action}`, { method:'POST', body:'{}' }, token);
+  });
+
 
   secureHandle('service:searchCustomers', async (query: string) => {
     const token = requireSessionToken();
