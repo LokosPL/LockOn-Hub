@@ -32,6 +32,8 @@ jobs:
       PROD_API_URL: https://br-steep-bonus-b1f1qh8u-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
       PROD_SITE_ORIGIN: https://app.serviceos.pl
       GH_TOKEN: ${{ github.token }}
+      TEMP_RUN_ID: ${{ inputs.temp_run_id }}
+      DEPLOY_CONFIRMATION: ${{ inputs.confirmation }}
 
     steps:
       - name: Enforce production gate
@@ -42,7 +44,7 @@ jobs:
             echo "::error::Production deploy can run only from main."
             exit 1
           fi
-          if [[ "${{ inputs.confirmation }}" != "DEPLOY_PROD" ]]; then
+          if [[ "$DEPLOY_CONFIRMATION" != "DEPLOY_PROD" ]]; then
             echo "::error::Confirmation must be exactly DEPLOY_PROD."
             exit 1
           fi
@@ -61,7 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          run_id="${{ inputs.temp_run_id }}"
+          run_id="$TEMP_RUN_ID"
           if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
             echo "::error::temp_run_id must be a numeric GitHub Actions run ID."
             exit 1
