@@ -2141,8 +2141,16 @@ const requireCustomerAccountAccess = async (user, customerId, accessMode = 'SUPP
   return customer;
 };
 
-const customerAccountManagementOverview = async (user, search = '') => {
-  requireSupportAccess(user);
+const customerAccountManagementOverview = async (user, search = '', accessMode = 'SUPPORT') => {
+  const serviceView=accessMode==='SERVICE';
+  if(serviceView){
+    if(!SERVICE_CREATE_ROLES.has(user?.role_code)&&!hasSupportAccess(user)){
+      throw Object.assign(new Error('Brak uprawnień do klientów tego punktu.'),{status:403,code:'SERVICE_CUSTOMER_FORBIDDEN'});
+    }
+  }else{
+    requireSupportAccess(user);
+  }
+  const supportView=hasSupportAccess(user);
   const ids=GLOBAL_ROLES.has(user.role_code) ? [] : await visiblePointIds(user);
   const params=[GLOBAL_ROLES.has(user.role_code),ids];
   let filter=" WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[])) OR EXISTS(SELECT 1 FROM customer_quote_requests r0 WHERE r0.customer_id=c.id AND (r0.requested_point_id=ANY($2::text[]) OR r0.routed_point_id=ANY($2::text[]))))";
@@ -2157,10 +2165,10 @@ const customerAccountManagementOverview = async (user, search = '') => {
     "a.notify_service_updates,a.notify_ready_for_pickup,a.notify_quote_updates,a.notify_messages,"+
     "(SELECT count(*)::int FROM customer_portal_sessions ps WHERE ps.customer_id=c.id AND ps.expires_at>now()) AS active_sessions,"+
     "(SELECT max(ps.last_seen_at) FROM customer_portal_sessions ps WHERE ps.customer_id=c.id AND ps.expires_at>now()) AS last_seen_at,"+
-    "(SELECT count(*)::int FROM service_orders s WHERE s.customer_id=c.id) AS order_count,"+
-    "(SELECT count(*)::int FROM customer_quote_requests r WHERE r.customer_id=c.id AND r.status IN ('OPEN','QUOTED')) AS open_quote_count "+
+    "(SELECT count(*)::int FROM service_orders s WHERE s.customer_id=c.id AND ($1::boolean OR COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[]))) AS order_count,"+
+    "(SELECT count(*)::int FROM customer_quote_requests r WHERE r.customer_id=c.id AND r.status IN ('OPEN','QUOTED') AND ($1::boolean OR r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) AS open_quote_count "+
     "FROM customers c LEFT JOIN customer_portal_accounts a ON a.customer_id=c.id"+filter+
-    " ORDER BY COALESCE(a.last_login_at,c.updated_at) DESC,c.last_name,c.first_name LIMIT 250",
+    " ORDER BY c.updated_at DESC,c.last_name,c.first_name LIMIT 250",
     params
   )).rows;
   const customers=rows.map(row=>({
@@ -2168,20 +2176,20 @@ const customerAccountManagementOverview = async (user, search = '') => {
     name:[row.first_name,row.last_name].filter(Boolean).join(' '),
     email:row.email||null,
     phone:row.phone||null,
-    codeCreatedAt:row.portal_code_created_at||null,
+    codeCreatedAt:supportView?(row.portal_code_created_at||null):null,
     googleLinked:Boolean(row.google_sub),
-    googleEmail:row.google_email||null,
-    googleName:row.google_name||null,
-    googlePicture:row.google_picture_url||null,
-    linkedAt:row.linked_at||null,
-    lastLoginAt:row.last_login_at||null,
-    blocked:Boolean(row.blocked_at),
-    blockedAt:row.blocked_at||null,
-    blockedReason:row.blocked_reason||null,
-    activeSessions:Number(row.active_sessions||0),
-    lastSeenAt:row.last_seen_at||null,
+    googleEmail:supportView?(row.google_email||null):null,
+    googleName:supportView?(row.google_name||null):null,
+    googlePicture:supportView?(row.google_picture_url||null):null,
+    linkedAt:supportView?(row.linked_at||null):null,
+    lastLoginAt:supportView?(row.last_login_at||null):null,
+    blocked:supportView?Boolean(row.blocked_at):false,
+    blockedAt:supportView?(row.blocked_at||null):null,
+    blockedReason:supportView?(row.blocked_reason||null):null,
+    activeSessions:supportView?Number(row.active_sessions||0):0,
+    lastSeenAt:supportView?(row.last_seen_at||null):null,
     orders:Number(row.order_count||0),
-    openQuotes:Number(row.open_quote_count||0),
+    openQuotes:supportView?Number(row.open_quote_count||0):0,
     notificationPreferences:{
       serviceUpdates:row.notify_service_updates!==false,
       readyForPickup:row.notify_ready_for_pickup!==false,
@@ -2192,9 +2200,9 @@ const customerAccountManagementOverview = async (user, search = '') => {
   return {
     stats:{
       customers:customers.length,
-      googleAccounts:customers.filter(item=>item.googleLinked).length,
-      activeSessions:customers.reduce((sum,item)=>sum+item.activeSessions,0),
-      blocked:customers.filter(item=>item.blocked).length
+      googleAccounts:supportView?customers.filter(item=>item.googleLinked).length:0,
+      activeSessions:supportView?customers.reduce((sum,item)=>sum+item.activeSessions,0):0,
+      blocked:supportView?customers.filter(item=>item.blocked).length:0
     },
     customers
   };
@@ -3401,8 +3409,11 @@ const route = async (request) => {
 
   if (method === 'GET' && url.pathname === '/customer-accounts') {
     const session=await requireActive(request);
-    requireSupportAccess(session.user);
-    return json(request,await customerAccountManagementOverview(session.user,url.searchParams.get('q')||''));
+    const serviceView=!hasSupportAccess(session.user)&&SERVICE_CREATE_ROLES.has(session.user.role_code);
+    if(!serviceView&&!hasSupportAccess(session.user)){
+      throw Object.assign(new Error('Brak uprawnień do klientów tego punktu.'),{status:403,code:'SERVICE_CUSTOMER_FORBIDDEN'});
+    }
+    return json(request,await customerAccountManagementOverview(session.user,url.searchParams.get('q')||'',serviceView?'SERVICE':'SUPPORT'));
   }
 
   const customerAccountCodeMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/code$/);
@@ -3481,7 +3492,7 @@ const route = async (request) => {
   const customerAccountProfileMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/profile$/);
   if(method==='POST'&&customerAccountProfileMatch){
     const session=await requireActive(request),u=session.user;
-    const customer=await requireCustomerAccountAccess(u,customerAccountProfileMatch[1]);
+    const customer=await requireCustomerAccountAccess(u,customerAccountProfileMatch[1],'SERVICE');
     const body=await readJson(request);
     const firstName=cleanText(body.firstName,100);
     const lastName=cleanText(body.lastName,100);
