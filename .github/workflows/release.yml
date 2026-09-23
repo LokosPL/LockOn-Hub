@@ -220,10 +220,23 @@ jobs:
           VERSION: ${{ steps.version.outputs.product_version }}
           BUILD_VERSION: ${{ steps.version.outputs.build_version }}
         run: |
+          $highlights = ""
+          if ($env:VERSION -eq "1.0.0.20") {
+            $highlights = @"
+
+          Najważniejsze zmiany:
+          - Gmail nadawcy jest przypisany do zalogowanego pracownika; ServiceOS nie przełącza wiadomości na konto innej osoby ani innego punktu.
+          - Spotkania i szkolenia w Dashboardzie: zapisy, audio, udostępnianie ekranu, moderacja prowadzącego i frekwencja.
+          - Zaproszenia na spotkania używają odseparowanego sendera administracyjnego i nie mieszają się z wiadomościami serwisowymi.
+          - Usprawniony front-desk USER, obsługa klientów i przepływy serwisowe.
+          "@
+          }
+
           $notes = @"
           Oficjalne wydanie LockOn ServiceOS v$env:VERSION.
 
           Techniczny build aktualizatora: $env:BUILD_VERSION.
+          $highlights
 
           Pobierz **LockOn-ServiceOS-Setup.exe**.
           Instalator i pliki aktualizatora powstały w tym workflow i mają poświadczenie pochodzenia buildu w GitHub Artifact Attestations.
