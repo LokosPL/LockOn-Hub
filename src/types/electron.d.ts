@@ -240,6 +240,7 @@ declare global {
         list: () => Promise<MeetingListPayload>;
         options: () => Promise<MeetingOptions>;
         create: (payload:{title:string;description?:string;startsAt:string;plannedMinutes:number;maxParticipants:number;allowParticipantAudio:boolean;allowParticipantScreenShare:boolean;hostUserId?:string;audience:Array<{type:'ALL'|'POINT'|'USER';pointId?:string;userId?:string}>}) => Promise<MeetingMutationResult>;
+        update: (meetingId:string,payload:{startsAt:string}) => Promise<MeetingMutationResult & {email?:{eligible:number;queued:number;unchanged?:boolean}}>;
         action: (meetingId:string,action:'register'|'unregister'|'start'|'end'|'cancel') => Promise<MeetingMutationResult>;
         joinToken: (meetingId:string) => Promise<MeetingJoinToken>;
         participants: (meetingId:string) => Promise<MeetingParticipantsPayload>;
