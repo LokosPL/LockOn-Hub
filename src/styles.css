@@ -5208,3 +5208,366 @@ input,textarea,select{line-height:1.45}
   font-size: 11px;
   line-height: 1.45;
 }
+
+
+/* Front desk service UX 1.0.0.20 */
+.service-order-workspace-frontdesk .service-frontdesk-always-open {
+  display: block !important;
+}
+.service-order-workspace-frontdesk .service-frontdesk-always-open > summary {
+  cursor: default;
+}
+.service-order-workspace-frontdesk .service-frontdesk-always-open > summary::after {
+  content: 'Zawsze widoczne';
+}
+.service-process-step small {
+  max-width: 720px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.service-frontdesk-stage-rail {
+  grid-template-columns: repeat(7,minmax(90px,1fr));
+}
+.service-frontdesk-stage-rail > span {
+  min-height: 44px;
+  white-space: normal;
+  line-height: 1.25;
+  text-align: center;
+}
+.service-frontdesk-stage-action {
+  padding-top: 2px;
+}
+.service-frontdesk-stage-action small {
+  color: var(--muted);
+}
+.service-order-workspace-frontdesk .service-stage-card {
+  order: -10;
+}
+.service-order-workspace-frontdesk .service-order-keyfacts {
+  order: -9;
+}
+.service-order-workspace-frontdesk .service-frontdesk-card {
+  order: -8;
+}
+.service-order-workspace-frontdesk .service-frontdesk-always-open.service-transfer-card {
+  order: -7;
+}
+.service-order-workspace-frontdesk .service-frontdesk-always-open.service-workspace-history {
+  order: -6;
+}
+.service-order-workspace-frontdesk .service-transfer-card .transfer-compose {
+  margin-top: 10px;
+}
+.service-order-workspace-frontdesk .active-transfer-summary small,
+.service-order-workspace-frontdesk .transfer-mini-history small {
+  font-size: 11px;
+  line-height: 1.45;
+}
+.service-order-workspace-frontdesk .transfer-mini-history {
+  margin-top: 12px;
+}
+
+/* Simple customer workspace for ordinary users */
+.frontdesk-customers-page {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+.frontdesk-customers-heading,
+.frontdesk-customer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+.frontdesk-customers-heading h1,
+.frontdesk-customer-head h1 {
+  margin: 7px 0 5px;
+  font-size: 26px;
+  letter-spacing: -.035em;
+}
+.frontdesk-customers-heading p,
+.frontdesk-customer-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.frontdesk-customer-head {
+  justify-content: flex-start;
+}
+.frontdesk-customer-head > div {
+  min-width: 0;
+}
+.frontdesk-customer-notice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 12px;
+}
+.frontdesk-customer-notice.ok {
+  border-color: rgba(62,203,134,.28);
+  background: rgba(62,203,134,.06);
+}
+.frontdesk-customer-notice.error {
+  border-color: rgba(255,96,80,.26);
+  background: rgba(255,96,80,.055);
+}
+.frontdesk-customers-summary {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,220px));
+  gap: 10px;
+}
+.frontdesk-customers-summary article {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+}
+.frontdesk-customers-summary article > span {
+  display: grid;
+  gap: 2px;
+}
+.frontdesk-customers-summary small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.frontdesk-customers-summary strong {
+  font-size: 20px;
+}
+.frontdesk-customers-list-card,
+.frontdesk-customer-profile,
+.frontdesk-customer-orders {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 17px;
+  background: var(--panel);
+}
+.frontdesk-customers-search {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255,255,255,.025);
+}
+.frontdesk-customers-search input {
+  width: 100%;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.frontdesk-customers-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+.frontdesk-customers-list > button {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 38px minmax(180px,1fr) 84px 130px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255,255,255,.018);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.frontdesk-customers-list > button:hover {
+  border-color: rgba(255,113,56,.32);
+  background: rgba(255,113,56,.045);
+}
+.frontdesk-customer-avatar {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: rgba(255,113,56,.08);
+  color: var(--accent);
+}
+.frontdesk-customer-list-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.frontdesk-customer-list-main strong,
+.frontdesk-customer-list-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.frontdesk-customer-list-main small,
+.frontdesk-customer-list-count small,
+.frontdesk-customer-list-last {
+  color: var(--muted);
+  font-size: 10px;
+}
+.frontdesk-customer-list-count {
+  display: grid;
+  gap: 2px;
+  text-align: center;
+}
+.frontdesk-customer-list-last {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  white-space: nowrap;
+}
+.frontdesk-customer-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 13px;
+}
+.frontdesk-customer-section-title > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.frontdesk-customer-section-title > div:first-child > span {
+  display: grid;
+  gap: 2px;
+}
+.frontdesk-customer-section-title small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.frontdesk-customer-edit-actions {
+  display: flex;
+  gap: 7px;
+}
+.frontdesk-customer-fields {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 10px;
+}
+.frontdesk-customer-fields label {
+  display: grid;
+  gap: 6px;
+}
+.frontdesk-customer-fields label > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+.frontdesk-customer-fields input:disabled {
+  opacity: 1;
+  color: var(--text);
+  background: rgba(255,255,255,.018);
+}
+.frontdesk-customer-orders {
+  display: grid;
+  gap: 8px;
+}
+.frontdesk-customer-orders .frontdesk-customer-section-title {
+  margin-bottom: 4px;
+}
+.frontdesk-customer-order {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0,1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: rgba(255,255,255,.018);
+}
+.frontdesk-customer-order-number {
+  display: grid;
+  gap: 3px;
+}
+.frontdesk-customer-order-number strong {
+  font-size: 15px;
+}
+.frontdesk-customer-order-number small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.frontdesk-customer-order-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.frontdesk-customer-order-main > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.frontdesk-customer-order-main > span {
+  color: #f0b28f;
+  font-size: 11px;
+  font-weight: 800;
+}
+.frontdesk-customer-order-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.frontdesk-customer-order-meta small {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+@media (max-width: 980px) {
+  .service-frontdesk-stage-rail {
+    grid-template-columns: repeat(4,minmax(100px,1fr));
+  }
+  .frontdesk-customers-list > button {
+    grid-template-columns: 38px minmax(0,1fr) 76px;
+  }
+  .frontdesk-customer-list-last {
+    grid-column: 2 / -1;
+    justify-content: flex-start;
+  }
+}
+@media (max-width: 720px) {
+  .frontdesk-customers-heading,
+  .frontdesk-customer-head,
+  .frontdesk-customer-section-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .frontdesk-customers-summary,
+  .frontdesk-customer-fields {
+    grid-template-columns: 1fr;
+  }
+  .frontdesk-customers-list > button,
+  .frontdesk-customer-order {
+    grid-template-columns: 38px minmax(0,1fr);
+  }
+  .frontdesk-customer-list-count,
+  .frontdesk-customer-list-last,
+  .frontdesk-customer-order > button {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .service-frontdesk-stage-rail {
+    display: flex;
+    overflow-x: auto;
+  }
+  .service-frontdesk-stage-rail > span {
+    flex: 0 0 118px;
+  }
+}
