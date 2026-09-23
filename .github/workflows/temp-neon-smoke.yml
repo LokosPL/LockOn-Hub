@@ -118,6 +118,14 @@ jobs:
           NODE
           gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${target_path}" --input bundle-upload.json >/dev/null
 
+      - name: Block stale TEMP smoke without exact deployment
+        if: steps.neon_credential.outputs.available != 'true'
+        shell: bash
+        run: |
+          echo "::error::TEMP gate requires an exact candidate deployment. Repository secret NEON_API_KEY is not configured, so migrations/deploy cannot run and HTTP smoke would only test the stale TEMP revision."
+          echo "::error::The exact bundle artifact and connector staging files were produced successfully. Configure NEON_API_KEY (or restore an equivalent exact-deploy path) and rerun this workflow."
+          exit 1
+
       - name: Apply additive 1.0.0.20 migrations to temp Neon
         if: steps.neon_credential.outputs.available == 'true'
         shell: bash
