@@ -117,6 +117,27 @@ const isTransferredToService = (order: ServiceOrderSummary) =>
   Boolean(order.homePointId && order.currentPointId && order.currentPointId !== order.homePointId) ||
   Boolean(order.returnRequired && order.currentPointId && order.currentPointId !== (order.homePointId || order.pointId));
 
+const CLOSED_SERVICE_STATUSES = new Set(['COMPLETED','CANCELLED','REJECTED']);
+const INTERNAL_NO_SERIAL_PREFIX = 'BRAK-SN-ZL-';
+const isInternalNoSerial = (value?: string | null) => Boolean(value?.startsWith(INTERNAL_NO_SERIAL_PREFIX));
+const readableSerialNumber = (value?: string | null) => value && !isInternalNoSerial(value) ? value : null;
+const complaintFallbackSerial = (order: ServiceOrderSummary) =>
+  `${INTERNAL_NO_SERIAL_PREFIX}${order.orderNumber ?? order.deviceId.slice(-10)}`;
+
+const sortOrdersForList = (items: ServiceOrderSummary[]) => [...items].sort((a,b) => {
+  const closedA = CLOSED_SERVICE_STATUSES.has(a.status);
+  const closedB = CLOSED_SERVICE_STATUSES.has(b.status);
+  if (closedA !== closedB) return closedA ? 1 : -1;
+  if (closedA) {
+    const timeA = new Date(a.completedAt || a.updatedAt || a.createdAt || a.receivedAt || 0).getTime();
+    const timeB = new Date(b.completedAt || b.updatedAt || b.createdAt || b.receivedAt || 0).getTime();
+    return timeA - timeB;
+  }
+  const timeA = new Date(a.receivedAt || a.createdAt || a.updatedAt || 0).getTime();
+  const timeB = new Date(b.receivedAt || b.createdAt || b.updatedAt || 0).getTime();
+  return timeB - timeA;
+});
+
 type ServiceTab = 'CALENDAR' | 'NEW' | 'ORDERS' | 'TRANSFERS' | 'QUOTES' | 'EMAILS' | 'INVOICES' | 'TECH_NOTES';
 
 export function ServicePage({ auth, effectiveRole, focusOrderId = null }: ServicePageProps) {
@@ -161,6 +182,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryItem[]>([]);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const [openPanels, setOpenPanels] = useState<Record<string, boolean>>({});
   const [orderHistories, setOrderHistories] = useState<Record<string, ServiceStatusHistoryItem[]>>({});
   const [orderNotes, setOrderNotes] = useState<Record<string, ServiceOrderNote[]>>({});
   const [customerCards, setCustomerCards] = useState<Record<string, ServiceCustomerDetail>>({});
@@ -227,14 +249,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     {code:'READY_FOR_PICKUP',label:'Gotowe do odbioru',count:orders.filter((order)=>order.workflow?.flags.includes('READY_FOR_PICKUP')).length}
   ], [orders,transferredToServiceCount]);
 
-  const visibleOrders = useMemo(
-    () => orderFilter === 'ALL'
+  const visibleOrders = useMemo(() => {
+    const filtered = orderFilter === 'ALL'
       ? orders
       : orderFilter === 'TRANSFERRED_SERVICE'
         ? orders.filter(isTransferredToService)
-        : orders.filter((order)=>order.workflow?.flags.includes(orderFilter)),
-    [orders,orderFilter]
-  );
+        : orders.filter((order)=>order.workflow?.flags.includes(orderFilter));
+    return sortOrdersForList(filtered);
+  }, [orders,orderFilter]);
   const renderedOrders=useMemo(()=>visibleOrders.slice(0,ordersVisibleLimit),[visibleOrders,ordersVisibleLimit]);
   useEffect(()=>{setOrdersVisibleLimit(28);},[orderFilter]);
 
@@ -319,7 +341,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       ...current,
       [order.id]: current[order.id] ?? {
         imei: order.imei ?? '',
-        serialNumber: order.serialNumber ?? '',
+        serialNumber: readableSerialNumber(order.serialNumber) ?? '',
         deviceNotes: order.deviceNotes ?? '',
         assignedTechnicianId: order.assignedTechnicianId ?? '',
         estimatedCost: order.estimatedCost == null ? '' : String(order.estimatedCost),
@@ -335,40 +357,70 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       ...current,
       [order.id]: current[order.id] ?? (order.repairSummary || '')
     }));
-
-    setHistoryBusyId(order.id);
     setError('');
+  };
+
+  const setPanelOpen = (orderId:string, panel:string, open:boolean) => {
+    const key = orderId + ':' + panel;
+    setOpenPanels((current)=> current[key] === open ? current : {...current,[key]:open});
+  };
+
+  const ensureOrderHistory = async (orderId:string) => {
+    if (orderHistories[orderId]) return;
+    setHistoryBusyId(orderId);
     try {
-      const requests: Promise<unknown>[] = [];
-      if (canTransferService && servicePoints.length === 0) {
-        requests.push(window.lockOn.service.listServicePoints().then(setServicePoints));
-      }
-      if (!orderHistories[order.id]) {
-        requests.push(window.lockOn.service.getHistory(order.id).then((history) =>
-          setOrderHistories((current) => ({ ...current, [order.id]: history }))
-        ));
-      }
-      if (canEditStatus && !orderNotes[order.id]) {
-        requests.push(window.lockOn.service.getNotes(order.id).then((notes) =>
-          setOrderNotes((current) => ({ ...current, [order.id]: notes }))
-        ));
-      }
-      if (!customerCards[order.customerId]) {
-        requests.push(window.lockOn.service.getCustomer(order.customerId).then((card) =>
-          setCustomerCards((current) => ({ ...current, [order.customerId]: card }))
-        ));
-      }
-      const workPointId = order.currentPointId || order.homePointId || order.pointId;
-      if (canManageOrderMeta && !techniciansByPoint[workPointId]) {
-        requests.push(window.lockOn.service.listTechnicians(workPointId).then((items) =>
-          setTechniciansByPoint((current) => ({ ...current, [workPointId]: items }))
-        ));
-      }
-      await Promise.all(requests);
+      const history = await window.lockOn.service.getHistory(orderId);
+      setOrderHistories((current)=>({...current,[orderId]:history}));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Nie udało się pobrać szczegółów zlecenia.');
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać historii zlecenia.');
     } finally {
-      setHistoryBusyId(null);
+      setHistoryBusyId((current)=>current===orderId?null:current);
+    }
+  };
+
+  const ensureOrderNotes = async (orderId:string) => {
+    if (orderNotes[orderId]) return;
+    setHistoryBusyId(orderId);
+    try {
+      const notes = await window.lockOn.service.getNotes(orderId);
+      setOrderNotes((current)=>({...current,[orderId]:notes}));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać notatek zlecenia.');
+    } finally {
+      setHistoryBusyId((current)=>current===orderId?null:current);
+    }
+  };
+
+  const ensureCustomerCard = async (order:ServiceOrderSummary) => {
+    if (customerCards[order.customerId]) return;
+    setHistoryBusyId(order.id);
+    try {
+      const card = await window.lockOn.service.getCustomer(order.customerId);
+      setCustomerCards((current)=>({...current,[order.customerId]:card}));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać historii klienta.');
+    } finally {
+      setHistoryBusyId((current)=>current===order.id?null:current);
+    }
+  };
+
+  const ensureTechnicians = async (order:ServiceOrderSummary) => {
+    const workPointId = order.currentPointId || order.homePointId || order.pointId;
+    if (!canManageOrderMeta || !workPointId || techniciansByPoint[workPointId]) return;
+    try {
+      const items = await window.lockOn.service.listTechnicians(workPointId);
+      setTechniciansByPoint((current)=>({...current,[workPointId]:items}));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać listy serwisantów.');
+    }
+  };
+
+  const ensureServicePoints = async () => {
+    if (!canTransferService || servicePoints.length > 0) return;
+    try {
+      setServicePoints(await window.lockOn.service.listServicePoints());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nie udało się pobrać punktów serwisowych.');
     }
   };
 
@@ -423,8 +475,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   }, [tab]);
 
   useEffect(() => {
-    if(!focusOrderId||ordersLoadedRef.current)return;
-    void loadOrders();
+    if(!focusOrderId)return;
+    if(!ordersLoadedRef.current) void loadOrders();
+    setTab('ORDERS');
   }, [focusOrderId]);
 
   useEffect(() => {
@@ -443,11 +496,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
   }, [pointId, canManageGmail]);
 
   useEffect(() => {
-    if (!focusOrderId || expandedOrderId === focusOrderId) return;
+    if (tab !== 'ORDERS' || !focusOrderId || expandedOrderId === focusOrderId) return;
     const order = orders.find((item)=>item.id===focusOrderId);
     if (!order) return;
     void toggleOrderHistory(order);
-  }, [focusOrderId,orders]);
+  }, [focusOrderId,orders,tab]);
 
   useEffect(() => {
     if (!expandedOrderId) return;
@@ -490,7 +543,8 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     setComplaintSearchBusy(true);
     setError('');
     try {
-      setComplaintMatches(await window.lockOn.service.searchOrders(clean));
+      const found = await window.lockOn.service.searchOrders(clean);
+      setComplaintMatches(found.filter((order)=>order.handlingMode!=='TRANSFER_ONLY'));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nie udało się znaleźć wcześniejszej naprawy.');
     } finally {
@@ -502,8 +556,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     const fallbackParts = order.customerName.trim().split(/\s+/);
     const firstName = order.customerFirstName || fallbackParts[0] || '';
     const lastName = order.customerLastName || fallbackParts.slice(1).join(' ') || '';
+    const serialNumber = order.serialNumber || (!order.imei ? complaintFallbackSerial(order) : '');
     setComplaintOriginal(order);
     setComplaintMatches([]);
+    setMatches([]);
+    setQuery('');
     setComplaintQuery('#' + String(order.orderNumber ?? ''));
     setForm((current) => ({
       ...current,
@@ -515,7 +572,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
       brand:order.brand || '',
       model:order.model || '',
       imei:order.imei || '',
-      serialNumber:order.serialNumber || '',
+      serialNumber,
       deviceNotes:order.deviceNotes || 'Brak uwag'
     }));
   };
@@ -553,6 +610,19 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     submitBusyRef.current = true;
     setBusy(true); setError(''); setNotice(''); setResult(null);
     try {
+      if (
+        form.orderType === 'COMPLAINT' &&
+        complaintOriginal &&
+        !complaintOriginal.imei &&
+        !complaintOriginal.serialNumber
+      ) {
+        await window.lockOn.service.updateDetails(complaintOriginal.id, {
+          imei:'',
+          serialNumber:form.serialNumber || complaintFallbackSerial(complaintOriginal),
+          deviceNotes:complaintOriginal.deviceNotes || 'Brak uwag'
+        });
+      }
+
       const created = await window.lockOn.service.createOrder({
         ...form,
         brand: form.brand.trim(),
@@ -1032,7 +1102,16 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
     });
   };
 
+  const switchServiceTab = (next:ServiceTab) => {
+    setExpandedOrderId(null);
+    setHistoryBusyId(null);
+    setBrandOpen(false);
+    setError('');
+    setTab(next);
+  };
+
   const openOrderFromWorkspace = (order: ServiceOrderSummary) => {
+    if (tab !== 'ORDERS') setTab('ORDERS');
     if (expandedOrderId !== order.id) void toggleOrderHistory(order);
   };
 
@@ -1056,14 +1135,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
           <p>Przyjęcie telefonu, reklamacje, statusy oraz centralne powiadomienia klienta.</p>
         </div>
         <div className="service-tabs">
-          {isActualTechnician && <button className={tab === 'CALENDAR' ? 'active' : ''} onClick={() => setTab('CALENDAR')}><CalendarDays size={15}/> Plan pracy</button>}
-          <button className={tab === 'NEW' ? 'active' : ''} onClick={() => { setIntakeStage('TYPE'); setTab('NEW'); }}><ClipboardPlus size={15}/> Nowe zlecenie</button>
-          <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => setTab('ORDERS')}><ClipboardList size={15}/> Zlecenia{transferredToServiceCount>0&&<b className="service-tab-count" title="Telefony przekazane do serwisu">{transferredToServiceCount}</b>}</button>
-          <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {setTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
-          {canHandleCustomerQuotes && <button className={tab === 'QUOTES' ? 'active' : ''} onClick={() => {setTab('QUOTES');void loadCustomerQuotes(pointId);}}><MessageSquareText size={15}/> Wyceny klientów{customerQuotes.filter((item)=>item.status==='OPEN').length > 0 && <b className="service-tab-count">{customerQuotes.filter((item)=>item.status==='OPEN').length}</b>}</button>}
-          {canEditCosts && <button className={tab === 'INVOICES' ? 'active' : ''} onClick={() => setTab('INVOICES')}><FileArchive size={15}/> Magazyn faktur</button>}
-          {isActualTechnician && <button className={tab === 'TECH_NOTES' ? 'active' : ''} onClick={() => setTab('TECH_NOTES')}><NotebookPen size={15}/> Moje notatki</button>}
-          {canManageGmail && <button className={tab === 'EMAILS' ? 'active' : ''} onClick={() => { setTab('EMAILS'); void loadMailData(pointId); }}><BellRing size={15}/> Powiadomienia</button>}
+          {isActualTechnician && <button className={tab === 'CALENDAR' ? 'active' : ''} onClick={() => switchServiceTab('CALENDAR')}><CalendarDays size={15}/> Plan pracy</button>}
+          <button className={tab === 'NEW' ? 'active' : ''} onClick={() => { setIntakeStage('TYPE'); switchServiceTab('NEW'); }}><ClipboardPlus size={15}/> Nowe zlecenie</button>
+          <button className={tab === 'ORDERS' ? 'active' : ''} onClick={() => switchServiceTab('ORDERS')}><ClipboardList size={15}/> Zlecenia{transferredToServiceCount>0&&<b className="service-tab-count" title="Telefony przekazane do serwisu">{transferredToServiceCount}</b>}</button>
+          <button className={tab === 'TRANSFERS' ? 'active' : ''} onClick={() => {switchServiceTab('TRANSFERS');void loadTransfers();}}><Truck size={15}/> Przekazania</button>
+          {canHandleCustomerQuotes && <button className={tab === 'QUOTES' ? 'active' : ''} onClick={() => {switchServiceTab('QUOTES');void loadCustomerQuotes(pointId);}}><MessageSquareText size={15}/> Wyceny klientów{customerQuotes.filter((item)=>item.status==='OPEN').length > 0 && <b className="service-tab-count">{customerQuotes.filter((item)=>item.status==='OPEN').length}</b>}</button>}
+          {canEditCosts && <button className={tab === 'INVOICES' ? 'active' : ''} onClick={() => switchServiceTab('INVOICES')}><FileArchive size={15}/> Magazyn faktur</button>}
+          {isActualTechnician && <button className={tab === 'TECH_NOTES' ? 'active' : ''} onClick={() => switchServiceTab('TECH_NOTES')}><NotebookPen size={15}/> Moje notatki</button>}
+          {canManageGmail && <button className={tab === 'EMAILS' ? 'active' : ''} onClick={() => { switchServiceTab('EMAILS'); void loadMailData(pointId); }}><BellRing size={15}/> Powiadomienia</button>}
         </div>
       </section>
 
@@ -1135,12 +1214,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
         const physicalPointId = order.currentPointId || order.homePointId || order.pointId;
         const canManageWarrantyHere = canEditOrderHere && Boolean(operatingPointId) && physicalPointId === operatingPointId;
         const canShowWarranty = order.handlingMode!=='TRANSFER_ONLY' && (
-          canManageWarrantyHere ||
-          Boolean(order.warrantyMonths) ||
+          order.status==='REPAIR_DONE' ||
           order.status==='READY' ||
-          order.status==='COMPLETED'
+          order.status==='COMPLETED' ||
+          Boolean(order.warrantyMonths)
         );
-        const primaryStageAction = ({
+        const canActTransferDestination = Boolean(order.openTransfer) && operatingPointId === order.openTransfer?.toPointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(operatingPointId));
+        const canActTransferSource = Boolean(order.openTransfer) && operatingPointId === order.openTransfer?.fromPointId && (['OWNER','BOSS'].includes(effectiveRole) || pointAccessSet.has(operatingPointId));
+        const primaryStageAction = order.handlingMode==='TRANSFER_ONLY' ? undefined : ({
           RECEIVED:{status:'DIAGNOSIS',label:'Rozpocznij diagnozę'},
           DIAGNOSIS:{status:'IN_REPAIR',label:'Rozpocznij naprawę'},
           WAITING_PARTS:{status:'IN_REPAIR',label:'Części są — rozpocznij naprawę'},
@@ -1162,11 +1243,9 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
               <button className="button secondary small service-order-details-back" title="Wróć do listy" onClick={()=>setExpandedOrderId(null)}>← Wróć do zleceń</button>
             </header>
             <div className={`service-order-workspace ${effectiveRole==='USER'?'service-order-workspace-frontdesk':''}`}>
-                      {historyBusyId === order.id && <div className="service-history-empty">Pobieram pełne dane zlecenia…</div>}
-
                       <section className="service-order-keyfacts">
                         <article><span>Klient</span><strong>{order.customerName}</strong><small>{order.customerPhone || order.customerEmail || 'Brak kontaktu'}</small></article>
-                        <article><span>Telefon</span><strong>{formatDeviceLabel(order.brand,order.model)}</strong><small>{order.imei ? 'IMEI ' + order.imei : order.serialNumber ? 'S/N ' + order.serialNumber : 'Brak IMEI / S/N'}</small></article>
+                        <article><span>Telefon</span><strong>{formatDeviceLabel(order.brand,order.model)}</strong><small>{order.imei ? 'IMEI ' + order.imei : readableSerialNumber(order.serialNumber) ? 'S/N ' + readableSerialNumber(order.serialNumber) : 'Brak IMEI / S/N'}</small></article>
                         <article><span>Zgłoszenie</span><strong>{order.issueDescription}</strong><small>{order.assignedTechnicianName ? 'Serwisant: ' + order.assignedTechnicianName : 'Serwisant jeszcze nieprzypisany'}</small></article>
                         <article><span>Termin</span><strong>{order.estimatedCompletionAt ? new Date(order.estimatedCompletionAt).toLocaleDateString('pl-PL') : 'Nie podano'}</strong><small>{order.repairSummary || 'Opis wykonanej naprawy pojawi się po zakończeniu.'}</small></article>
                       </section>
@@ -1177,24 +1256,52 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         {canCompletePickupHere && <button className="button primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeStatus(order,'COMPLETED')}>Wydaj telefon klientowi</button>}
                       </section>}
 
-                      <section className="service-workspace-card service-stage-card">
-                        <div className="service-workspace-title"><CheckCircle2 size={15}/><div><strong>Co teraz ze zleceniem?</strong><span>Najważniejsza akcja jest na wierzchu. Pełna korekta etapu jest schowana niżej.</span></div></div>
+                      <section className="service-workspace-card service-stage-card service-stage-guided">
+                        <div className="service-process-heading">
+                          <div className="service-process-step"><span>KROK {Math.min(stageIndex+1,stageSteps.length)} Z {stageSteps.length}</span><strong>{order.workflow?.nextAction || 'Sprawdź zlecenie.'}</strong></div>
+                          <div className="service-process-location"><MapPin size={14}/><span>{order.currentLocationLabel || order.currentPointName || order.pointName}</span></div>
+                        </div>
                         <div className="service-stage-overview">
                           <div className="service-stage-progress"><span style={{width:`${order.workflow?.progressPercent ?? 10}%`}}/></div>
                           <div className="service-repair-stage-rail service-repair-stage-rail-compact">
                             {stageSteps.map((label,index)=><span key={label} className={index<stageIndex?'done':index===stageIndex?'current':index===stageIndex+1?'next':''}>{label}</span>)}
                           </div>
-                          <div className="service-stage-meta service-stage-meta-simple">
-                            <div><span>Teraz</span><strong>{order.statusLabel}</strong></div>
-                            <div><span>Następnie</span><strong>{order.workflow?.nextAction || 'Sprawdź szczegóły zlecenia.'}</strong></div>
-                            <div><span>Telefon jest</span><strong>{order.currentLocationLabel || order.currentPointName || order.pointName}</strong></div>
-                          </div>
                         </div>
-                        {(canEditOrderHere || canCompletePickupHere) ? <div className="service-stage-actions">
+
+                        {order.openTransfer && <div className="service-process-logistics">
+                          <div><Truck size={18}/><span><strong>{order.openTransfer.kind==='RETURN_HOME'?'Telefon wraca do punktu macierzystego':'Telefon jest w przekazaniu'}</strong><small>{order.openTransfer.fromPointName} → {order.openTransfer.toPointName}</small></span></div>
+                          <div className="service-stage-actions">
+                            {order.openTransfer.status==='IN_TRANSIT'&&canActTransferDestination&&<button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'DELIVERED')}>Telefon dotarł do punktu</button>}
+                            {order.openTransfer.status==='DELIVERED'&&canActTransferDestination&&<button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'ACCEPTED')}><PackageCheck size={14}/> Przyjmij telefon w punkcie</button>}
+                            {order.openTransfer.status==='IN_TRANSIT'&&canActTransferSource&&<button className="button secondary" disabled={Boolean(orderBusyId)} onClick={()=>void changeTransferStatus(order.openTransfer!,'CANCELLED')}>Anuluj wysyłkę</button>}
+                            {!canActTransferDestination&&!canActTransferSource&&<small>Akcję potwierdza punkt, w którym telefon fizycznie się znajduje lub do którego właśnie dotarł.</small>}
+                          </div>
+                        </div>}
+
+                        {!order.openTransfer&&order.handlingMode==='TRANSFER_ONLY'&&canTransferHere&&<div className="service-process-logistics">
+                          <div><Truck size={18}/><span><strong>Wybierz, dokąd wysłać telefon</strong><small>Po kliknięciu ServiceOS ustawi telefon jako „w drodze”.</small></span></div>
+                          <div className="transfer-compose">
+                            <select value={(transferDrafts[order.id] ?? {toPointId:'',note:''}).toPointId} onFocus={()=>void ensureServicePoints()} onChange={(e)=>setTransferDrafts((current)=>({...current,[order.id]:{...(current[order.id]??{toPointId:'',note:''}),toPointId:e.target.value}}))}>
+                              <option value="">Wybierz punkt docelowy…</option>
+                              {currentServicePointId !== (order.homePointId || order.pointId) && <option value={order.homePointId || order.pointId}>{order.homePointName || order.pointName} — punkt macierzysty</option>}
+                              {servicePoints.filter((point)=>point.id!==currentServicePointId && point.id!==(order.homePointId || order.pointId)).map((point)=><option key={point.id} value={point.id}>{point.name} — {point.city}</option>)}
+                            </select>
+                            <button className="button primary" disabled={Boolean(orderBusyId)||!(transferDrafts[order.id]?.toPointId)} onClick={()=>void sendTransfer(order)}><Truck size={14}/> Wyślij telefon</button>
+                          </div>
+                        </div>}
+
+                        {!order.openTransfer&&order.returnRequired&&order.status==='REPAIR_DONE'&&<div className="service-process-logistics">
+                          <div><RotateCcw size={18}/><span><strong>Naprawa zakończona poza punktem macierzystym</strong><small>Teraz odeślij telefon. Po przyjęciu w punkcie macierzystym ServiceOS pokaże krok z gwarancją i odbiorem.</small></span></div>
+                          {canTransferHere&&canEditStatus
+                            ? <button className="button primary service-stage-primary" disabled={Boolean(orderBusyId)} onClick={()=>void sendReturnHome(order)}>Odeślij do punktu macierzystego</button>
+                            : <small>Zwrot rozpoczyna osoba pracująca w punkcie, w którym telefon znajduje się teraz.</small>}
+                        </div>}
+
+                        {!order.openTransfer&&order.handlingMode!=='TRANSFER_ONLY'&&<div className="service-stage-actions">
                           {primaryStageAction && (canEditOrderHere || (primaryStageAction.status==='COMPLETED' && canCompletePickupHere)) && <button
                             type="button"
                             className="button primary service-stage-primary"
-                            disabled={Boolean(orderBusyId)||primaryStageBlocked}
+                            disabled={Boolean(orderBusyId)||primaryStageBlocked||(primaryStageAction.status==='READY'&&Boolean(order.returnRequired))}
                             onClick={()=>void changeStatus(order,primaryStageAction.status)}
                           >{primaryStageAction.label}</button>}
                           {canEditOrderHere && (order.status==='DIAGNOSIS'||order.status==='IN_REPAIR') && <button
@@ -1203,9 +1310,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             disabled={Boolean(orderBusyId)}
                             onClick={()=>void changeStatus(order,'WAITING_PARTS')}
                           >Czekam na części</button>}
-                          {order.status==='REPAIR_DONE' && !order.warrantyReady && <small className="service-stage-gate">Aby oznaczyć „Gotowe do odbioru”, przygotuj gwarancję poniżej.</small>}
+                          {order.status==='REPAIR_DONE' && !order.warrantyReady && !order.returnRequired && <small className="service-stage-gate">Następny krok: wpisz wykonaną naprawę, ustaw gwarancję i przygotuj kartę poniżej.</small>}
+                          {!canEditOrderHere&&!canCompletePickupHere&&order.status!=='COMPLETED'&&<small>{!operatingPointId?'Wybierz konkretny aktywny punkt, aby wykonać ten krok.':'Ten krok wykonuje punkt, w którym fizycznie znajduje się telefon.'}</small>}
                           {canEditOrderHere && <details className="service-stage-more">
-                            <summary>Inna zmiana / korekta etapu</summary>
+                            <summary>Ręczna korekta etapu</summary>
                             <label className="service-stage-select">
                               <span>Status</span>
                               <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e)=>void changeStatus(order,e.target.value)}>
@@ -1213,7 +1321,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                               </select>
                             </label>
                           </details>}
-                        </div> : <div className="service-history-empty">{!operatingPointId?'Wybierz konkretny aktywny punkt zamiast „Wszystkie punkty”, aby obsługiwać ten telefon.':'Etap może zmienić tylko punkt, w którym fizycznie znajduje się telefon.'}</div>}
+                        </div>}
                       </section>
 
                       {canUseOrderFinance && ['WAITING_PARTS','IN_REPAIR'].includes(order.status) && (
@@ -1253,7 +1361,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                       )}
 
                       {draft && (
-                        <details className="service-workspace-card service-workspace-collapse">
+                        <details className="service-workspace-card service-workspace-collapse" onToggle={(event)=>{if(event.currentTarget.open)void ensureTechnicians(order);}}>
                           <summary><Smartphone size={15}/><span><strong>Dane urządzenia i realizacja</strong><small>IMEI, numer seryjny, termin, technik i ceny.</small></span></summary>
                           <div className="service-collapse-body">
                           <div className="service-details-grid">
@@ -1270,12 +1378,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </details>
                       )}
 
-                      {canUseOrderFinance && !['WAITING_PARTS','IN_REPAIR'].includes(order.status) && <details className="service-workspace-card service-workspace-collapse">
-                        <summary><BadgeDollarSign size={15}/><span><strong>Koszty, części i faktury</strong><small>Rozwiń tylko podczas rozliczania naprawy.</small></span></summary>
-                        <div className="service-collapse-body service-finance-collapse"><OrderCostingCard order={order}/></div>
+                      {canUseOrderFinance && !['WAITING_PARTS','IN_REPAIR'].includes(order.status) && <details className="service-workspace-card service-workspace-collapse" onToggle={(event)=>setPanelOpen(order.id,'finance',event.currentTarget.open)}>
+                        <summary><BadgeDollarSign size={15}/><span><strong>Koszty, części i faktury</strong><small>Otwórz tylko, gdy chcesz sprawdzić rozliczenie.</small></span></summary>
+                        {openPanels[order.id+':finance']&&<div className="service-collapse-body service-finance-collapse"><OrderCostingCard order={order}/></div>}
                       </details>}
 
-                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" open={Boolean(order.openTransfer||order.returnRequired||order.handlingMode==='TRANSFER_ONLY')}>
+                      <details className="service-workspace-card service-workspace-collapse service-transfer-card" onToggle={(event)=>{if(event.currentTarget.open)void ensureServicePoints();}}>
                         <summary><Truck size={15}/><span><strong>Logistyka urządzenia</strong><small>{order.openTransfer||order.returnRequired?'Wymaga uwagi — sprawdź transport lub powrót.':'Przekazanie do innego punktu, gdy jest potrzebne.'}</small></span></summary>
                         <div className="service-collapse-body">
                         <div className="active-transfer-summary">
@@ -1336,7 +1444,7 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </div>
                       </details>
 
-                      <details className="service-workspace-card service-workspace-collapse">
+                      <details className="service-workspace-card service-workspace-collapse" onToggle={(event)=>{if(event.currentTarget.open)void ensureCustomerCard(order);}}>
                         <summary><IdCard size={15}/><span><strong>Klient i jego wcześniejsze zlecenia</strong><small>Rozwiń tylko, gdy potrzebujesz historii klienta.</small></span></summary>
                         <div className="service-collapse-body">
                         {card ? <>
@@ -1347,11 +1455,11 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="service-customer-order-mini">
                             {card.orders.slice(0,5).map((item)=><div key={item.id}><span>#{item.orderNumber} · {item.brand} {item.model}</span><small>{item.statusLabel} · {new Date(item.receivedAt).toLocaleDateString('pl-PL')}</small></div>)}
                           </div>
-                        </> : <div className="service-history-empty">Pobieram kartę klienta…</div>}
+                        </> : <div className="service-history-empty">{historyBusyId===order.id?'Pobieram historię klienta…':'Otwórz sekcję, aby pobrać historię klienta.'}</div>}
                         </div>
                       </details>
 
-                      <details className="service-workspace-card service-workspace-collapse">
+                      <details className="service-workspace-card service-workspace-collapse" onToggle={(event)=>{if(event.currentTarget.open)void ensureOrderNotes(order.id);}}>
                         <summary><StickyNote size={15}/><span><strong>Notatki wewnętrzne</strong><small>Diagnoza, części i ustalenia zespołu.</small></span></summary>
                         <div className="service-collapse-body">
                         {canEditStatus && <div className="service-note-compose">
@@ -1360,12 +1468,12 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                         </div>}
                         <div className="service-note-list">
                           {notes.map((note)=><div key={note.id}><div><strong>{note.authorName}</strong><span>{new Date(note.createdAt).toLocaleString('pl-PL')}</span></div><p>{note.body}</p></div>)}
-                          {notes.length===0 && <div className="service-history-empty">Brak notatek wewnętrznych.</div>}
+                          {notes.length===0 && <div className="service-history-empty">{historyBusyId===order.id?'Pobieram notatki…':'Brak zapisanych notatek.'}</div>}
                         </div>
                         </div>
                       </details>
 
-                      <details className="service-workspace-card service-workspace-collapse service-workspace-history">
+                      <details className="service-workspace-card service-workspace-collapse service-workspace-history" onToggle={(event)=>{if(event.currentTarget.open)void ensureOrderHistory(order.id);}}>
                         <summary><History size={15}/><span><strong>Historia zlecenia</strong><small>Pełna oś czasu zmian statusu.</small></span></summary>
                         <div className="service-collapse-body">
                         {(orderHistories[order.id] ?? []).map((item, index) => (
@@ -1378,14 +1486,14 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                             </div>
                           </div>
                         ))}
-                        {(orderHistories[order.id] ?? []).length === 0 && <div className="service-history-empty">Brak zapisanych zmian statusu.</div>}
+                        {(orderHistories[order.id] ?? []).length === 0 && <div className="service-history-empty">{historyBusyId===order.id?'Pobieram historię…':'Brak zapisanych zmian statusu.'}</div>}
                         </div>
                       </details>
                     </div>
           </section>
         </div>;
       })()}
-      {isActualTechnician && pointId && <MonthlyInvoicePrompt pointId={pointId} onOpenWarehouse={() => setTab('INVOICES')}/>} 
+      {isActualTechnician && pointId && <MonthlyInvoicePrompt pointId={pointId} onOpenWarehouse={() => switchServiceTab('INVOICES')}/>} 
       {showGmailOnboarding && (
         <section className="panel-card service-mail-card">
           <div className="service-mail-copy">
@@ -1433,7 +1541,6 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                     <h2>Co przyjmujesz?</h2>
                     <p>Wybierz typ, a formularz pozostanie w tym samym dużym panelu ServiceOS.</p>
                   </div>
-                  <button className="service-order-details-close" title="Zamknij" onClick={()=>setTab(isActualTechnician?'CALENDAR':'ORDERS')}><XCircle size={20}/></button>
                 </header>
                 <section className="service-intake-type-screen">
                   <div className="service-order-type-picker service-order-type-picker-v3" role="group" aria-label="Typ zlecenia">
@@ -1483,8 +1590,16 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                   {complaintOriginal&&<div className="service-complaint-selected"><CheckCircle2 size={17}/><div><strong>Reklamacja do zlecenia #{complaintOriginal.orderNumber}</strong><span>{complaintOriginal.customerName} · {formatDeviceLabel(complaintOriginal.brand,complaintOriginal.model)}</span></div><button type="button" className="button tiny secondary" onClick={()=>{setComplaintOriginal(null);setComplaintQuery('');}}>Zmień</button></div>}
                   {!complaintOriginal&&<small className="service-complaint-hint">Reklamacja naprawy wymaga wskazania wcześniejszego zlecenia. Reklamacje telefonów sprzedanych przez sklep będą dodane osobno później.</small>}
                 </section>}
-                <section className="service-intake-section service-intake-customer-v3">
-                  <div className="service-intake-section-title"><UserRound size={16}/><div><strong>Klient</strong><small>{form.orderType==='COMPLAINT'&&complaintOriginal?'Dane pobrane z wcześniejszego zlecenia — możesz je poprawić, jeśli klient podał nowe.':'Wyszukaj istniejącego albo wpisz nowego.'}</small></div></div>
+                {form.orderType==='COMPLAINT'&&complaintOriginal&&<section className="service-intake-section service-complaint-source">
+                  <div className="service-intake-section-title"><CheckCircle2 size={16}/><div><strong>Dane z poprzedniej naprawy są przypięte</strong><small>Nie musisz ponownie wpisywać klienta ani telefonu.</small></div></div>
+                  <div className="service-complaint-source-grid">
+                    <div><span>Klient</span><strong>{complaintOriginal.customerName}</strong><small>{complaintOriginal.customerPhone||complaintOriginal.customerEmail||'Brak kontaktu'}</small></div>
+                    <div><span>Telefon</span><strong>{formatDeviceLabel(complaintOriginal.brand,complaintOriginal.model)}</strong><small>{complaintOriginal.imei?'IMEI '+complaintOriginal.imei:readableSerialNumber(complaintOriginal.serialNumber)?'S/N '+readableSerialNumber(complaintOriginal.serialNumber):'Brak IMEI / S/N'}</small></div>
+                    <div><span>Poprzednie zgłoszenie</span><strong>{complaintOriginal.issueDescription}</strong><small>Status: {complaintOriginal.statusLabel}</small></div>
+                  </div>
+                </section>}
+                {!(form.orderType==='COMPLAINT'&&complaintOriginal)&&<section className="service-intake-section service-intake-customer-v3">
+                  <div className="service-intake-section-title"><UserRound size={16}/><div><strong>Klient</strong><small>Wyszukaj istniejącego albo wpisz nowego.</small></div></div>
                   <div className="service-search-row service-search-row-v3">
                     <input value={query} onChange={(e)=>setQuery(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter')void search();}} placeholder="Nazwisko, email lub telefon"/>
                     <button className="button secondary" disabled={searchBusy||query.trim().length<2} onClick={()=>void search()}><Search size={14}/>{searchBusy?'Szukam…':'Szukaj'}</button>
@@ -1496,26 +1611,28 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                     <label><span>Email</span><input type="email" value={form.email} onChange={(e)=>update('email',e.target.value)}/></label>
                     <label><span>Telefon</span><input value={form.phone} onChange={(e)=>update('phone',e.target.value)}/></label>
                   </div>
-                </section>
+                </section>}
 
                 <section className="service-intake-section">
-                  <div className="service-intake-section-title"><Smartphone size={16}/><div><strong>Urządzenie i realizacja</strong><small>Dane techniczne, termin i cena orientacyjna.</small></div></div>
+                  <div className="service-intake-section-title"><Smartphone size={16}/><div><strong>{form.orderType==='COMPLAINT'&&complaintOriginal?'Przyjęcie reklamacji':'Urządzenie i realizacja'}</strong><small>{form.orderType==='COMPLAINT'&&complaintOriginal?'Opisz tylko nowy problem i stan telefonu. Reszta danych jest już przypięta.':'Dane techniczne, termin i cena orientacyjna.'}</small></div></div>
                   <div className="service-form-grid service-intake-form-v3">
-                    <label className="service-brand-field"><span>Marka <em>opcjonalnie</em></span><div className="service-brand-combobox">
-                      <input value={form.brand} onFocus={()=>setBrandOpen(true)} onBlur={()=>window.setTimeout(()=>setBrandOpen(false),120)} onChange={(e)=>{update('brand',e.target.value);setBrandOpen(true);}} placeholder="Np. Samsung" autoComplete="off"/>
-                      {brandOpen&&brandSuggestions.length>0&&<div className="service-brand-suggestions">{brandSuggestions.map((brand)=><button type="button" key={brand} onMouseDown={(event)=>event.preventDefault()} onClick={()=>{update('brand',brand);setBrandOpen(false);}}><Smartphone size={14}/><span>{brand}</span></button>)}</div>}
-                    </div></label>
-                    <label><span>Model <em>opcjonalnie</em></span><input value={form.model} onChange={(e)=>update('model',e.target.value)} placeholder="Np. Galaxy S24"/></label>
-                    <label><span>IMEI <em>opcjonalnie</em></span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr"/></label>
-                    <label><span>Numer seryjny <em>opcjonalnie</em></span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Jeśli dostępny"/></label>
-                    {canSetIntakeEstimate&&<label className="service-estimate-field"><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="Np. 349,00"/></label>}
+                    {!(form.orderType==='COMPLAINT'&&complaintOriginal)&&<>
+                      <label className="service-brand-field"><span>Marka <em>opcjonalnie</em></span><div className="service-brand-combobox">
+                        <input value={form.brand} onFocus={()=>setBrandOpen(true)} onBlur={()=>window.setTimeout(()=>setBrandOpen(false),120)} onChange={(e)=>{update('brand',e.target.value);setBrandOpen(true);}} placeholder="Np. Samsung" autoComplete="off"/>
+                        {brandOpen&&brandSuggestions.length>0&&<div className="service-brand-suggestions">{brandSuggestions.map((brand)=><button type="button" key={brand} onMouseDown={(event)=>event.preventDefault()} onClick={()=>{update('brand',brand);setBrandOpen(false);}}><Smartphone size={14}/><span>{brand}</span></button>)}</div>}
+                      </div></label>
+                      <label><span>Model <em>opcjonalnie</em></span><input value={form.model} onChange={(e)=>update('model',e.target.value)} placeholder="Np. Galaxy S24"/></label>
+                      <label><span>IMEI <em>opcjonalnie</em></span><input inputMode="numeric" maxLength={16} value={form.imei} onChange={(e)=>update('imei',e.target.value.replace(/\D/g,''))} placeholder="14–16 cyfr"/></label>
+                      <label><span>Numer seryjny <em>opcjonalnie</em></span><input maxLength={120} value={form.serialNumber} onChange={(e)=>update('serialNumber',e.target.value)} placeholder="Jeśli dostępny"/></label>
+                      {canSetIntakeEstimate&&<label className="service-estimate-field"><span>Cena orientacyjna (PLN)</span><input type="number" min="0" step="0.01" value={form.estimatedCost} onChange={(e)=>update('estimatedCost',e.target.value)} placeholder="Np. 349,00"/></label>}
+                    </>}
                     {canSetIntakeEta&&<div className="service-intake-eta full"><div className="service-field-heading"><span>Przewidywany termin</span><small>domyślnie +3 dni</small></div><div className="service-quick-pills service-eta-pills">
                       <button type="button" className={!form.estimatedCompletionAt?'active':''} onClick={()=>update('estimatedCompletionAt','')}>Bez terminu</button>
                       {[1,2,3].map((days)=><button type="button" key={days} className={form.estimatedCompletionAt===dateInputAfterDays(days)?'active':''} onClick={()=>update('estimatedCompletionAt',dateInputAfterDays(days))}>{days===1?'Jutro':`+${days} dni`}</button>)}
                       <label className="service-custom-date"><span>Inna data</span><input type="date" min={dateInputAfterDays(0)} value={form.estimatedCompletionAt} onChange={(e)=>update('estimatedCompletionAt',e.target.value)}/></label>
                     </div></div>}
                     <div className="service-device-notes full"><div className="service-field-heading"><span>Stan / uwagi do urządzenia</span><small>opcjonalnie</small></div><div className="service-quick-pills service-note-presets">{DEVICE_NOTE_PRESETS.map((note)=><button type="button" key={note} className={form.deviceNotes===note?'active':''} onClick={()=>update('deviceNotes',note)}>{note}</button>)}</div><textarea rows={3} maxLength={1000} value={form.deviceNotes} onChange={(e)=>update('deviceNotes',e.target.value)} placeholder="Dodatkowe uwagi…"/></div>
-                    <label className="full"><span>Opis usterki <em>wymagane</em></span><textarea rows={5} required value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder="Krótko opisz problem zgłoszony przez klienta."/></label>
+                    <label className="full"><span>{form.orderType==='COMPLAINT'?'Co klient reklamuje?':'Opis usterki'} <em>wymagane</em></span><textarea rows={5} required value={form.issueDescription} onChange={(e)=>update('issueDescription',e.target.value)} placeholder={form.orderType==='COMPLAINT'?'Opisz, co ponownie nie działa lub co klient zgłasza po naprawie.':'Krótko opisz problem zgłoszony przez klienta.'}/></label>
                   </div>
                 </section>
               </div>
@@ -1593,14 +1710,10 @@ export function ServicePage({ auth, effectiveRole, focusOrderId = null }: Servic
                           <div className="transfer-only-status"><span className="status-badge">{order.handlingMode === 'TRANSFER_ONLY' ? 'Tylko przekazanie' : order.statusLabel}</span><button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button></div>
                         ) : canEditOrderHere && order.handlingMode === 'TRANSFER_ONLY' ? (
                           <div className="transfer-only-status"><span className="status-badge">Tylko przekazanie</span>{order.status !== 'CANCELLED' && <button className="button small danger-soft" disabled={Boolean(orderBusyId)} onClick={() => void changeStatus(order,'CANCELLED')}>Anuluj</button>}</div>
-                        ) : canEditOrderHere ? (
-                          <select value={order.status} disabled={Boolean(orderBusyId)} onChange={(e) => void changeStatus(order, e.target.value)}>
-                            {statuses.map(([value,label]) => <option key={value} value={value} disabled={(value==='READY' && (order.canMarkReady===false || order.status!=='REPAIR_DONE' || !order.warrantyReady)) || (value==='COMPLETED' && order.status!=='READY')}>{label}</option>)}
-                          </select>
                         ) : (
                           <div className="service-status-readonly">
                             <span className="status-badge">{order.handlingMode==='TRANSFER_ONLY' && order.status!=='CANCELLED' ? 'Tylko przekazanie' : order.statusLabel}</span>
-                            {canEditStatus && <small>{order.openTransfer ? 'Status zablokowany na czas transportu.' : 'Status zmienia punkt, w którym fizycznie znajduje się urządzenie.'}</small>}
+                            <small>{order.openTransfer ? 'Transport w toku — wejdź w szczegóły.' : canEditOrderHere ? 'Kolejny krok wykonasz w szczegółach.' : canEditStatus ? 'Etap zmienia punkt, w którym jest telefon.' : order.workflow?.attentionLabel}</small>
                           </div>
                         )}
                       </div>
