@@ -4,7 +4,7 @@ import {
   RefreshCw, Square, UserMinus, UserPlus, UsersRound, XCircle
 } from 'lucide-react';
 import type {
-  MeetingAudienceOptions, MeetingAudienceType, MeetingCreateInput, MeetingSummary, UserRole
+  MeetingAttendanceItem, MeetingAudienceOptions, MeetingAudienceType, MeetingCreateInput, MeetingSummary, UserRole
 } from '../types/electron';
 import { MeetingRoom } from './MeetingRoom';
 
@@ -45,6 +45,9 @@ export function MeetingCenter({ role, currentUserId }: MeetingCenterProps) {
   const [error,setError]=useState('');
   const [creating,setCreating]=useState(false);
   const [activeMeetingId,setActiveMeetingId]=useState<string|null>(null);
+  const [attendanceMeeting,setAttendanceMeeting]=useState<MeetingSummary|null>(null);
+  const [attendance,setAttendance]=useState<MeetingAttendanceItem[]>([]);
+  const [attendanceLoading,setAttendanceLoading]=useState(false);
   const [form,setForm]=useState<MeetingCreateInput>({
     title:'',
     description:'',
@@ -87,6 +90,10 @@ export function MeetingCenter({ role, currentUserId }: MeetingCenterProps) {
   const primary=upcoming[0]??null;
   const later=upcoming.slice(1,5);
   const activeMeeting=activeMeetingId?meetings.find((item)=>item.id===activeMeetingId)??null:null;
+  const recentHosted=useMemo(()=>meetings
+    .filter((item)=>item.canHost&&item.status==='ENDED')
+    .sort((a,b)=>new Date(b.endedAt||b.startsAt).getTime()-new Date(a.endedAt||a.startsAt).getTime())
+    .slice(0,4),[meetings]);
 
   const openCreate=async()=>{
     setCreating(true);setError('');setNotice('');
@@ -120,6 +127,15 @@ export function MeetingCenter({ role, currentUserId }: MeetingCenterProps) {
       await load(true);
     }catch(e){setError(e instanceof Error?e.message:'Nie udało się utworzyć spotkania.');}
     finally{setBusyId(null);}
+  };
+
+  const openAttendance=async(item:MeetingSummary)=>{
+    setAttendanceMeeting(item);setAttendance([]);setAttendanceLoading(true);setError('');
+    try{
+      const result=await window.lockOn.meetings.getAttendance(item.id);
+      setAttendance(result.attendance??[]);
+    }catch(e){setError(e instanceof Error?e.message:'Nie udało się pobrać obecności.');}
+    finally{setAttendanceLoading(false);}
   };
 
   const act=async(item:MeetingSummary,action:'register'|'unregister'|'start'|'end'|'cancel')=>{
@@ -198,7 +214,34 @@ export function MeetingCenter({ role, currentUserId }: MeetingCenterProps) {
       </article>)}
     </div>}
 
+    {canHost&&recentHosted.length>0&&<div className="meeting-history">
+      <div className="meeting-history-head"><strong>Ostatnie spotkania</strong><span>Historia obecności prowadzącego</span></div>
+      {recentHosted.map((item)=><article key={item.id}>
+        <div><strong>{item.title}</strong><small>{dateLabel(item.startsAt)} · zakończone</small></div>
+        <span><UsersRound size={12}/>{item.registeredCount} zapisanych</span>
+        <button className="button tiny secondary" onClick={()=>void openAttendance(item)}>Obecność</button>
+      </article>)}
+    </div>}
+
     {activeMeeting&&activeMeeting.status==='LIVE'&&<MeetingRoom meeting={activeMeeting} currentUserId={currentUserId} onClose={()=>setActiveMeetingId(null)}/>}
+    {attendanceMeeting&&<div className="meeting-create-backdrop" role="presentation">
+      <section className="meeting-attendance-dialog" role="dialog" aria-modal="true" aria-labelledby="meeting-attendance-title">
+        <div className="meeting-create-head">
+          <div><span className="eyebrow"><UsersRound size={13}/> HISTORIA OBECNOŚCI</span><h2 id="meeting-attendance-title">{attendanceMeeting.title}</h2><p>{dateLabel(attendanceMeeting.startsAt)} · {attendanceMeeting.hostName}</p></div>
+          <button className="button tiny secondary" onClick={()=>setAttendanceMeeting(null)}>Zamknij</button>
+        </div>
+        {attendanceLoading?<div className="meeting-empty"><RefreshCw className="spin" size={18}/><div><strong>Pobieram obecność…</strong></div></div>:
+          attendance.length===0?<div className="meeting-empty"><UsersRound size={20}/><div><strong>Brak zarejestrowanej obecności.</strong><span>Nikt nie połączył się z pokojem audio.</span></div></div>:
+          <div className="meeting-attendance-list">
+            {attendance.map((item)=><article key={item.userId}>
+              <div><strong>{item.name}</strong><small>{item.role||'pracownik'}{item.registered?' · zapisany':' · bez wcześniejszego zapisu'}</small></div>
+              <span>{item.joinCount} wejść</span>
+              <span><Clock3 size={12}/>{Math.max(1,Math.round(item.totalSeconds/60))} min</span>
+              <span>{item.present?'nadal obecny':item.lastLeftAt?'wyszedł '+new Date(item.lastLeftAt).toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'}):'brak wyjścia'}</span>
+            </article>)}
+          </div>}
+      </section>
+    </div>}
     {creating&&canHost&&<div className="meeting-create-backdrop" role="presentation">
       <section className="meeting-create-dialog" role="dialog" aria-modal="true" aria-labelledby="meeting-create-title">
         <div className="meeting-create-head">
