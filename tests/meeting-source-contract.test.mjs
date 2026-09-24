@@ -56,3 +56,34 @@ test('Daty formularza są wysyłane jako jednoznaczne ISO i wyświetlane lokalni
   assert.match(source,/toLocaleString\('pl-PL'/);
   assert.match(source,/getTimezoneOffset\(\)/);
 });
+
+
+test('OWNER, BOSS i COORDINATOR mają kontrakt planowania spotkań, a globalne zarządzanie zostaje przy OWNER/BOSS', async () => {
+  const backend=await read('functions/lockon-api.mjs');
+  const ui=await read('src/components/MeetingsCard.tsx');
+  assert.match(backend,/MEETING_CREATE_ROLES = new Set\(\['OWNER', 'BOSS', 'COORDINATOR'\]\)/);
+  assert.match(backend,/MEETING_GLOBAL_MANAGE_ROLES = new Set\(\['OWNER', 'BOSS'\]\)/);
+  assert.match(backend,/scopeMeetingAudience/);
+  assert.match(ui,/role === 'OWNER' \|\| role === 'BOSS' \|\| role === 'COORDINATOR'/);
+  assert.match(ui,/Wszyscy w moich punktach/);
+});
+
+test('Pokój, edycja i frekwencja są widokami panelu zamiast modalami nakładanymi na Dashboard', async () => {
+  const room=await read('src/components/MeetingRoom.tsx');
+  const meetings=await read('src/components/MeetingsCard.tsx');
+  const styles=await read('src/styles.css');
+  assert.match(room,/className="meeting-room-panel"/);
+  assert.doesNotMatch(room,/className="meeting-room-backdrop"/);
+  assert.match(meetings,/meetings-card-workspace/);
+  assert.match(meetings,/Wróć do spotkań/);
+  assert.match(meetings,/meeting-attendance-panel/);
+  assert.doesNotMatch(meetings,/meeting-attendance-backdrop/);
+  assert.match(styles,/\.app-dialog-backdrop\{z-index:4000\}/);
+});
+
+test('Start spotkania otwiera zintegrowany pokój po odpowiedzi backendu', async () => {
+  const source=await read('src/components/MeetingsCard.tsx');
+  assert.match(source,/if \(action === 'start'\)/);
+  assert.match(source,/setActiveRoom\(liveMeeting\)/);
+  assert.match(source,/Otwórz pokój spotkania/);
+});

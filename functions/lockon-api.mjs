@@ -65,7 +65,8 @@ const SERVICE_INTAKE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECH
 const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
-const MEETING_MANAGE_ROLES = new Set(['OWNER', 'BOSS']);
+const MEETING_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
+const MEETING_GLOBAL_MANAGE_ROLES = new Set(['OWNER', 'BOSS']);
 const CUSTOMER_QUOTE_STAFF_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const FINANCE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const DEV_TEST_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER', 'SUPPORT']);
@@ -593,15 +594,37 @@ const visiblePointIds = async (user) => {
   return rows.map((r) => r.id);
 };
 
+const meetingScopeForUser = async (user) => ({
+  global:MEETING_GLOBAL_MANAGE_ROLES.has(user.role_code),
+  pointIds:await visiblePointIds(user)
+});
+
+const meetingTargetUserInScope = async (user, scope, targetUserId) => {
+  if(scope.global){
+    return (await q("SELECT id,status,blocked_at FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[targetUserId])).rows[0]||null;
+  }
+  return (await q(
+    "SELECT u.id,u.status,u.blocked_at FROM users u WHERE u.id=$1 AND u.status='ACTIVE' AND u.blocked_at IS NULL AND (u.id=$2 OR EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=u.id AND upa.point_id=ANY($3::text[]))) LIMIT 1",
+    [targetUserId,user.id,scope.pointIds]
+  )).rows[0]||null;
+};
+
+const scopeMeetingAudience = (audience, scope) => {
+  if(!audience.some((item)=>item.type==='ALL'))return audience;
+  if(scope.global)return [{type:'ALL',pointId:null,userId:null}];
+  if(!scope.pointIds.length)throw Object.assign(new Error('Koordynator nie ma przypisanego aktywnego punktu dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_SCOPE'});
+  return scope.pointIds.map((pointId)=>({type:'POINT',pointId,userId:null}));
+};
+
 const meetingCanManage = (user, meeting) =>
-  MEETING_MANAGE_ROLES.has(user.role_code) ||
+  MEETING_GLOBAL_MANAGE_ROLES.has(user.role_code) ||
   meeting?.created_by_user_id === user.id ||
   meeting?.host_user_id === user.id;
 
 const meetingEligible = async (user, meetingId) => {
-  if (MEETING_MANAGE_ROLES.has(user.role_code)) return true;
+  if (MEETING_GLOBAL_MANAGE_ROLES.has(user.role_code)) return true;
   const row=(await q(
-    "SELECT EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=$1 AND (a.audience_type='ALL' OR (a.audience_type='USER' AND a.user_id=$2) OR (a.audience_type='POINT' AND EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=$2 AND upa.point_id=a.point_id)))) AS allowed",
+    "SELECT EXISTS(SELECT 1 FROM meetings m WHERE m.id=$1 AND (m.created_by_user_id=$2 OR m.host_user_id=$2 OR EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=m.id AND (a.audience_type='ALL' OR (a.audience_type='USER' AND a.user_id=$2) OR (a.audience_type='POINT' AND EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=$2 AND upa.point_id=a.point_id)))))) AS allowed",
     [meetingId,user.id]
   )).rows[0];
   return row?.allowed===true;
@@ -633,7 +656,7 @@ const meetingView = (row, user) => ({
 });
 
 const listMeetingsForUser = async (user) => {
-  const global=MEETING_MANAGE_ROLES.has(user.role_code);
+  const global=MEETING_GLOBAL_MANAGE_ROLES.has(user.role_code);
   const visibility=global
     ? 'true'
     : "(m.created_by_user_id=$1 OR m.host_user_id=$1 OR EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=m.id AND (a.audience_type='ALL' OR (a.audience_type='USER' AND a.user_id=$1) OR (a.audience_type='POINT' AND EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=$1 AND upa.point_id=a.point_id)))))";
@@ -643,7 +666,7 @@ const listMeetingsForUser = async (user) => {
     "EXISTS(SELECT 1 FROM meeting_registrations r WHERE r.meeting_id=m.id AND r.user_id=$1 AND r.status='REGISTERED') AS registered_by_me,"+
     "COALESCE((SELECT json_agg(json_build_object('type',a.audience_type,'pointId',a.point_id,'pointName',p.name,'userId',a.user_id,'userName',operational.name)) FROM meeting_audience a LEFT JOIN points p ON p.id=a.point_id LEFT JOIN LATERAL (SELECT CASE WHEN au.role_code='OWNER' THEN $2 ELSE COALESCE(NULLIF(au.name,''),au.email) END AS name FROM users au WHERE au.id=a.user_id) operational ON true WHERE a.meeting_id=m.id),'[]'::json) AS audience "+
     "FROM meetings m JOIN users cu ON cu.id=m.created_by_user_id JOIN users hu ON hu.id=m.host_user_id WHERE "+visibility+
-    (global?"":" AND m.status<>'CANCELLED'")+
+    (global?"":" AND (m.status<>'CANCELLED' OR m.created_by_user_id=$1 OR m.host_user_id=$1)")+
     " ORDER BY CASE m.status WHEN 'LIVE' THEN 0 WHEN 'SCHEDULED' THEN 1 WHEN 'ENDED' THEN 2 ELSE 3 END,m.starts_at ASC,m.created_at DESC LIMIT 100";
   const rows=(await q(sql,[user.id,OWNER_OPERATIONAL_NAME])).rows;
   return rows.map((row)=>meetingView(row,user));
@@ -4434,10 +4457,15 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/meetings/options'){
     const session=await requireActive(request),u=session.user;
-    if(!MEETING_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do planowania spotkań.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    if(!MEETING_CREATE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do planowania spotkań.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    const scope=await meetingScopeForUser(u);
     const [pointsResult,usersResult]=await Promise.all([
-      q("SELECT id,name,city FROM points WHERE active=true ORDER BY name"),
-      q("SELECT id,name,email,role_code FROM users WHERE status='ACTIVE' AND blocked_at IS NULL AND role_code IS NOT NULL ORDER BY lower(name),lower(email)")
+      scope.global
+        ? q("SELECT id,name,city FROM points WHERE active=true ORDER BY name")
+        : q("SELECT id,name,city FROM points WHERE active=true AND id=ANY($1::text[]) ORDER BY name",[scope.pointIds]),
+      scope.global
+        ? q("SELECT id,name,email,role_code FROM users WHERE status='ACTIVE' AND blocked_at IS NULL AND role_code IS NOT NULL ORDER BY lower(name),lower(email)")
+        : q("SELECT u.id,u.name,u.email,u.role_code FROM users u WHERE u.status='ACTIVE' AND u.blocked_at IS NULL AND u.role_code IS NOT NULL AND (u.id=$1 OR EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=u.id AND upa.point_id=ANY($2::text[]))) ORDER BY lower(u.name),lower(u.email)",[u.id,scope.pointIds])
     ]);
     return json(request,{
       points:pointsResult.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
@@ -4447,7 +4475,7 @@ const route = async (request) => {
 
   if(method==='POST'&&url.pathname==='/meetings'){
     const session=await requireActive(request),u=session.user;
-    if(!MEETING_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Spotkania może planować OWNER lub BOSS.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    if(!MEETING_CREATE_ROLES.has(u.role_code))throw Object.assign(new Error('Spotkania może planować OWNER, BOSS lub COORDINATOR.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
     const body=await readJson(request);
     const title=cleanText(body.title,120),description=cleanText(body.description,2000);
     const startsAtRaw=cleanText(body.startsAt,80),startsAt=new Date(startsAtRaw);
@@ -4457,9 +4485,10 @@ const route = async (request) => {
     if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy termin spotkania.'},400);
     if(startsAt.getTime()<Date.now()-10*60_000)return json(request,{error:'MEETING_DATE',message:'Nie można zaplanować spotkania w przeszłości.'},400);
 
+    const scope=await meetingScopeForUser(u);
     let hostUserId=cleanText(body.hostUserId,120)||u.id;
-    const host=(await q("SELECT id,status,blocked_at FROM users WHERE id=$1 LIMIT 1",[hostUserId])).rows[0];
-    if(!host||host.status!=='ACTIVE'||host.blocked_at)return json(request,{error:'MEETING_HOST',message:'Wybrany prowadzący nie ma aktywnego konta.'},409);
+    const host=await meetingTargetUserInScope(u,scope,hostUserId);
+    if(!host)return json(request,{error:'MEETING_HOST',message:'Wybrany prowadzący nie jest dostępny w zakresie Twoich punktów.'},409);
 
     const sourceAudience=Array.isArray(body.audience)&&body.audience.length?body.audience:[{type:'ALL'}];
     const audience=[];
@@ -4477,7 +4506,8 @@ const route = async (request) => {
       }
     }
     if(!audience.length)audience.push({type:'ALL',pointId:null,userId:null});
-    if(audience.some((item)=>item.type==='ALL'))audience.splice(0,audience.length,{type:'ALL',pointId:null,userId:null});
+    const scopedAudience=scopeMeetingAudience(audience,scope);
+    audience.splice(0,audience.length,...scopedAudience);
 
     const meetingId=makeId('mtg');
     const client=await pool.connect();
@@ -4491,10 +4521,13 @@ const route = async (request) => {
         if(item.type==='POINT'){
           const exists=(await client.query("SELECT id FROM points WHERE id=$1 AND active=true LIMIT 1",[item.pointId])).rows[0];
           if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego punktu dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_POINT'});
+          if(!scope.global&&!scope.pointIds.includes(item.pointId))throw Object.assign(new Error('Nie możesz kierować spotkania do punktu poza swoim zakresem.'),{status:403,code:'MEETING_AUDIENCE_SCOPE'});
         }
         if(item.type==='USER'){
-          const exists=(await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0];
-          if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_USER'});
+          const exists=scope.global
+            ? (await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0]
+            : (await client.query("SELECT u.id FROM users u WHERE u.id=$1 AND u.status='ACTIVE' AND u.blocked_at IS NULL AND (u.id=$2 OR EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=u.id AND upa.point_id=ANY($3::text[]))) LIMIT 1",[item.userId,u.id,scope.pointIds])).rows[0];
+          if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika w zakresie Twoich punktów.'),{status:409,code:'MEETING_AUDIENCE_USER'});
         }
         await client.query(
           "INSERT INTO meeting_audience(id,meeting_id,audience_type,point_id,user_id) VALUES($1,$2,$3,$4,$5)",
@@ -4524,6 +4557,7 @@ const route = async (request) => {
     if(!meeting)return json(request,{error:'NOT_FOUND'},404);
     if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zmieniać tego spotkania.'},403);
     if(meeting.status!=='SCHEDULED')return json(request,{error:'MEETING_STATE',message:'Spotkanie można edytować tylko przed rozpoczęciem.'},409);
+    const scope=await meetingScopeForUser(u);
 
     const body=await readJson(request);
     const title=body.title===undefined?meeting.title:cleanText(body.title,120);
@@ -4569,7 +4603,8 @@ const route = async (request) => {
         }
       }
       if(!audience.length)audience.push({type:'ALL',pointId:null,userId:null});
-      if(audience.some((item)=>item.type==='ALL'))audience.splice(0,audience.length,{type:'ALL',pointId:null,userId:null});
+      const scopedAudience=scopeMeetingAudience(audience,scope);
+      audience.splice(0,audience.length,...scopedAudience);
     }
 
     const oldStartsAt=new Date(meeting.starts_at).toISOString();
@@ -4588,10 +4623,13 @@ const route = async (request) => {
           if(item.type==='POINT'){
             const exists=(await client.query("SELECT id FROM points WHERE id=$1 AND active=true LIMIT 1",[item.pointId])).rows[0];
             if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego punktu dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_POINT'});
+            if(!scope.global&&!scope.pointIds.includes(item.pointId))throw Object.assign(new Error('Nie możesz kierować spotkania do punktu poza swoim zakresem.'),{status:403,code:'MEETING_AUDIENCE_SCOPE'});
           }
           if(item.type==='USER'){
-            const exists=(await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0];
-            if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_USER'});
+            const exists=scope.global
+              ? (await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0]
+              : (await client.query("SELECT u.id FROM users u WHERE u.id=$1 AND u.status='ACTIVE' AND u.blocked_at IS NULL AND (u.id=$2 OR EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=u.id AND upa.point_id=ANY($3::text[]))) LIMIT 1",[item.userId,u.id,scope.pointIds])).rows[0];
+            if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika w zakresie Twoich punktów.'),{status:409,code:'MEETING_AUDIENCE_USER'});
           }
         }
       }

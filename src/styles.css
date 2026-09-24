@@ -5435,3 +5435,72 @@ input,textarea,select{line-height:1.45}
 .meeting-participant-mic{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:rgba(255,255,255,.035);flex:0 0 auto}
 .meeting-participant-mic.active{color:#84dfab;background:rgba(70,210,130,.07)}.meeting-participant-mic.muted{color:#79858f}
 @media(max-width:760px){.meeting-room-error{align-items:stretch;flex-direction:column}.meeting-inline-editor>.button{justify-self:stretch}}
+
+
+/* Meetings integrated workspace — panel navigation instead of stacked overlays */
+.meetings-card-workspace{padding:18px;gap:14px;overflow:hidden}
+.meeting-workspace-heading{display:flex;align-items:flex-start;gap:16px;padding:2px 2px 12px;border-bottom:1px solid rgba(255,255,255,.07)}
+.meeting-workspace-heading>.button{flex:0 0 auto;margin-top:2px}
+.meeting-workspace-heading>div{min-width:0}
+.meeting-workspace-heading h2{margin:5px 0 4px;font-size:20px;letter-spacing:-.035em}
+.meeting-workspace-heading p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}
+.meeting-editor-actions{display:flex;justify-content:flex-end;gap:9px;flex-wrap:wrap}
+.meetings-card-workspace .meeting-create-panel{border:0;background:transparent;padding:4px 2px 2px}
+.meetings-card-workspace .meeting-create-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.meetings-card-workspace .meeting-create-grid>label:first-child,
+.meetings-card-workspace .meeting-create-description,
+.meetings-card-workspace .meeting-audience-picker{grid-column:1/-1}
+.meetings-card-workspace .meeting-create-grid input,
+.meetings-card-workspace .meeting-create-grid textarea,
+.meetings-card-workspace .meeting-create-grid select{width:100%;padding:10px 11px;min-height:40px}
+.meetings-card-workspace .meeting-create-flags{padding:12px;border:1px solid rgba(255,255,255,.06);border-radius:12px;background:rgba(255,255,255,.018)}
+
+.meeting-room-panel{min-width:0;display:grid;gap:0}
+.meeting-room-panel .meeting-room-shell{
+  width:100%;height:auto;min-height:650px;max-height:none;
+  border-radius:16px;box-shadow:none;background:#101419;
+  display:flex;flex-direction:column
+}
+.meeting-room-panel .meeting-room-header{padding:16px 18px}
+.meeting-room-back{white-space:nowrap}
+.meeting-room-panel .meeting-room-layout{min-height:500px;flex:1}
+.meeting-room-panel .meeting-screen-host{min-height:440px}
+.meeting-room-panel .meeting-room-controls{position:sticky;bottom:0;z-index:4}
+.meeting-room-panel .meeting-participants-panel{min-width:250px}
+
+.meeting-attendance-panel{border:1px solid rgba(255,255,255,.07);border-radius:14px;background:rgba(255,255,255,.018);overflow:hidden}
+.meeting-attendance-panel .meeting-attendance-list{max-height:560px}
+.meeting-reschedule-panel{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.7fr);gap:16px;align-items:end;padding:18px;border:1px solid rgba(255,255,255,.07);border-radius:14px;background:rgba(255,255,255,.018)}
+.meeting-reschedule-summary{display:grid;gap:5px;align-self:center}
+.meeting-reschedule-summary strong{font-size:15px;color:#e9edf1}
+.meeting-reschedule-summary span{font-size:11px;color:var(--muted)}
+.meeting-reschedule-panel>label{display:grid;gap:7px}
+.meeting-reschedule-panel>label>span{font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.04em}
+.meeting-reschedule-panel input{width:100%;min-height:40px;padding:0 10px}
+.meeting-reschedule-panel .meeting-editor-actions{grid-column:1/-1}
+
+/* Dialogs must always render above workspace content and screen-source picker. */
+.app-dialog-backdrop{z-index:4000}
+.meeting-source-picker-backdrop{z-index:3900}
+
+@media(max-width:900px){
+  .meeting-room-panel .meeting-room-shell{min-height:0}
+  .meeting-room-panel .meeting-room-layout{grid-template-columns:1fr;min-height:0}
+  .meeting-room-panel .meeting-screen-host{min-height:360px}
+  .meeting-room-panel .meeting-participants-panel{max-height:260px;border-left:0;border-top:1px solid rgba(255,255,255,.07)}
+  .meeting-reschedule-panel{grid-template-columns:1fr}
+}
+@media(max-width:700px){
+  .meeting-workspace-heading{flex-direction:column}
+  .meeting-workspace-heading>.button{width:100%}
+  .meetings-card-workspace .meeting-create-grid{grid-template-columns:1fr}
+  .meetings-card-workspace .meeting-create-grid>label:first-child,
+  .meetings-card-workspace .meeting-create-description,
+  .meetings-card-workspace .meeting-audience-picker{grid-column:auto}
+  .meeting-room-panel .meeting-room-header{flex-direction:column}
+  .meeting-room-back{width:100%}
+  .meeting-room-panel .meeting-screen-host{min-height:280px}
+  .meeting-room-panel .meeting-room-controls{justify-content:stretch}
+  .meeting-room-panel .meeting-control{flex:1 1 180px}
+  .meeting-editor-actions>.button{flex:1 1 160px}
+}

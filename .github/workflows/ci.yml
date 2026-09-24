@@ -311,7 +311,9 @@ jobs:
         run: |
           $central = Get-Content functions/lockon-api.mjs -Raw
           @(
-            "MEETING_MANAGE_ROLES",
+            "MEETING_CREATE_ROLES",
+            "MEETING_GLOBAL_MANAGE_ROLES",
+            "OWNER', 'BOSS', 'COORDINATOR",
             "url.pathname==='/meetings'",
             "/join-token",
             "canPublishSources",
@@ -342,7 +344,9 @@ jobs:
             "Udostępnij ekran",
             "Spróbuj ponownie",
             "CONNECTION_ERROR_MESSAGE",
-            "room.connect(serverUrl, credentials.token"
+            "room.connect(serverUrl, credentials.token",
+            "meeting-room-panel",
+            "Wróć do spotkań"
           ) | ForEach-Object {
             if (-not $room.Contains($_)) { throw "Missing live meeting UI contract: $_" }
           }
@@ -355,7 +359,9 @@ jobs:
             "Termin minął · oczekiwanie na prowadzącego",
             "Brak zaplanowanych spotkań.",
             "Rozpocznij spotkanie",
-            "Dołącz do spotkania",
+            "Otwórz pokój spotkania",
+            "Wróć do spotkań",
+            "role === 'COORDINATOR'",
             "Frekwencja"
           ) | ForEach-Object {
             if (-not $meetings.Contains($_)) { throw "Missing meeting scheduling UX contract: $_" }
