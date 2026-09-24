@@ -83,6 +83,12 @@ export function MeetingActivityDock({ activePage, onOpenMeeting }: Props) {
     if (expanded && messages.length > seenMessageCount) setSeenMessageCount(messages.length);
   }, [expanded, messages.length, seenMessageCount]);
 
+  useEffect(() => {
+    if (activePage !== 'browser') return;
+    void window.lockOn.browser.setVisible(!expanded).catch(() => undefined);
+    return () => { void window.lockOn.browser.setVisible(true).catch(() => undefined); };
+  }, [activePage, expanded]);
+
   const unreadCount = Math.max(0, messages.length - Math.max(0, seenMessageCount));
   const latestMessages = useMemo(() => messages.slice(-4), [messages]);
 
@@ -106,7 +112,7 @@ export function MeetingActivityDock({ activePage, onOpenMeeting }: Props) {
   if (!meeting || activePage === 'meetings') return null;
 
   return (
-    <aside className={'meeting-activity-dock ' + (expanded ? 'expanded' : 'compact')} aria-live="polite">
+    <aside className={'meeting-activity-dock ' + (expanded ? 'expanded' : 'compact') + (activePage === 'browser' ? ' on-browser' : '')} aria-live="polite">
       <div className="meeting-activity-dock-head">
         <button
           type="button"
