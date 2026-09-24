@@ -1,21 +1,35 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowDown,
   ArrowRight,
   BadgeDollarSign,
   Building2,
   CalendarDays,
+  CheckCircle2,
+  ClipboardCheck,
+  ClipboardList,
   Cloud,
   CloudDownload,
   CloudLightning,
   CloudRain,
   CloudSnow,
   CloudSun,
+  FileCheck2,
+  FileText,
   Globe2,
   Headphones,
+  Mail,
   MapPin,
+  MessageCircleMore,
+  PackageCheck,
   RefreshCw,
   Settings2,
+  ShieldCheck,
+  Smartphone,
   Sun,
+  Truck,
+  UserCog,
+  UserRound,
   UsersRound,
   Wrench
 } from 'lucide-react';
@@ -59,7 +73,7 @@ const formatDate = (date: Date) => {
   return value.charAt(0).toUpperCase() + value.slice(1);
 };
 
-function WeatherIcon({ code, size = 38 }: { code: number; size?: number }) {
+function WeatherIcon({ code, size = 34 }: { code: number; size?: number }) {
   if (code === 0 || code === 1) return <Sun size={size} strokeWidth={1.7} />;
   if (code === 2) return <CloudSun size={size} strokeWidth={1.7} />;
   if (code === 3 || code === 45 || code === 48) return <Cloud size={size} strokeWidth={1.7} />;
@@ -75,6 +89,66 @@ type Shortcut = {
   icon: typeof Globe2;
   action: () => void;
 };
+
+const serviceJourney = [
+  {
+    step: '01',
+    title: 'Klient przychodzi do punktu',
+    description: 'Pracownik wyszukuje klienta albo zakłada jego kartę i zapisuje urządzenie, usterkę oraz dane kontaktowe.',
+    icon: UserRound
+  },
+  {
+    step: '02',
+    title: 'Powstaje zlecenie i karta serwisowa',
+    description: 'System nadaje numer zlecenia, zapisuje termin i przygotowuje czytelną kartę z danymi urządzenia oraz warunkami przyjęcia.',
+    icon: ClipboardList
+  },
+  {
+    step: '03',
+    title: 'Urządzenie trafia do właściwej osoby',
+    description: 'Zlecenie może zostać przypisane serwisantowi albo przekazane do innego punktu, jeżeli naprawa ma odbyć się gdzie indziej.',
+    icon: Truck
+  },
+  {
+    step: '04',
+    title: 'Serwis prowadzi naprawę krok po kroku',
+    description: 'Diagnoza, części, naprawa, notatki i kolejne etapy są w jednym miejscu. Każda zmiana zostaje w historii zlecenia.',
+    icon: Wrench
+  },
+  {
+    step: '05',
+    title: 'Koszty i dokumenty są przy zleceniu',
+    description: 'Można zapisać koszt części, cenę dla klienta, faktury, opis wykonanej naprawy i przygotować kartę gwarancyjną.',
+    icon: FileText
+  },
+  {
+    step: '06',
+    title: 'Klient dostaje informacje',
+    description: 'Wiadomości o ważnych zmianach mogą być wysyłane z konta pracownika, który obsługuje sprawę. Klient widzi też swój panel i historię.',
+    icon: Mail
+  },
+  {
+    step: '07',
+    title: 'Telefon wraca do punktu i czeka na odbiór',
+    description: 'Przekazanie powrotne jest widoczne po obu stronach. Punkt wie, kiedy urządzenie jest w drodze, kiedy dotarło i kiedy można je wydać.',
+    icon: PackageCheck
+  },
+  {
+    step: '08',
+    title: 'Zlecenie kończy się pełną historią',
+    description: 'Po odbiorze zostaje komplet informacji: kto obsługiwał urządzenie, co wykonano, jakie były koszty, dokumenty i gwarancja.',
+    icon: FileCheck2
+  }
+] as const;
+
+const roleShowcase = [
+  { role: 'Właściciel', scope: 'Cała firma', description: 'Widok wszystkich punktów, pracowników, dostępu, rozliczeń, klientów, wsparcia i ustawień systemu.' },
+  { role: 'Szef', scope: 'Wszystkie punkty', description: 'Nadzór nad pracą serwisu, przekazaniami, rozliczeniami oraz spotkaniami zespołu.' },
+  { role: 'Koordynator', scope: 'Przypisane punkty', description: 'Organizuje pracę swoich punktów, obsługuje zlecenia, przekazania i może prowadzić spotkania.' },
+  { role: 'Serwisant', scope: 'Przypisane punkty', description: 'Ma własną kolejkę pracy, kalendarz, notatki, zlecenia, części, dokumenty i swoje rozliczenia.' },
+  { role: 'Pracownik punktu', scope: 'Swój punkt', description: 'Przyjmuje klienta, tworzy zlecenie, drukuje kartę, przekazuje urządzenie i wydaje je po naprawie.' },
+  { role: 'Wsparcie', scope: 'Wybrany zakres', description: 'Pomaga pracownikom, widzi zgłoszenia o pomoc i dołącza do rozmowy dopiero wtedy, gdy użytkownik o to poprosi.' }
+] as const;
 
 export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, weatherCity }: DashboardProps) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
@@ -158,176 +232,232 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, w
   const firstName = userName.split(' ').filter(Boolean)[0] ?? userName;
   const timeText = clock.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
   const dateText = formatDate(clock);
+  const canOpenService = roleDefinition.navigation.includes('service');
+  const canOpenCustomers = roleDefinition.navigation.includes('customers');
+  const canOpenEarnings = roleDefinition.navigation.includes('earnings');
+  const canOpenAdministration = roleDefinition.navigation.includes('administration');
 
   const shortcutPool: Shortcut[] = [
-    ...(roleDefinition.navigation.includes('service') ? [{
+    ...(canOpenService ? [{
       key: 'service',
       title: 'Serwis',
-      description: 'Zlecenia, urządzenia i bieżąca praca serwisu.',
+      description: 'Przyjęcia, zlecenia, przekazania, naprawy i dokumenty.',
       icon: Wrench,
       action: () => onNavigate('service')
     }] : []),
-    ...(roleDefinition.navigation.includes('administration') ? [{
-      key: 'administration',
-      title: 'Administracja',
-      description: 'Pracownicy, punkty i dostępy.',
+    ...(canOpenCustomers ? [{
+      key: 'customers',
+      title: 'Klienci',
+      description: 'Karty klientów, urządzenia, historia i dostęp do panelu klienta.',
       icon: UsersRound,
+      action: () => onNavigate('customers')
+    }] : []),
+    ...(canOpenAdministration ? [{
+      key: 'administration',
+      title: 'Zespół i punkty',
+      description: 'Pracownicy, role, punkty i zakresy dostępu.',
+      icon: UserCog,
       action: () => onNavigate('administration')
     }] : []),
-    ...(roleDefinition.navigation.includes('earnings') ? [{
+    ...(canOpenEarnings ? [{
       key: 'earnings',
       title: 'Rozliczenia',
-      description: role === 'TECHNICIAN' ? 'Twoje przychody i historia rozliczeń.' : 'Przychody i rozliczenia w jednym miejscu.',
+      description: role === 'TECHNICIAN' ? 'Twoje rozliczenia i historia pracy.' : 'Przychody i rozliczenia zespołu.',
       icon: BadgeDollarSign,
       action: () => onNavigate('earnings')
     }] : []),
     {
       key: 'browser',
       title: 'Przeglądarka',
-      description: 'Internet bez wychodzenia z LockOn.',
+      description: 'Potrzebne strony i wyszukiwanie bez wychodzenia z ServiceOS.',
       icon: Globe2,
       action: () => onNavigate('browser')
     },
     {
       key: 'help',
       title: 'Pomoc',
-      description: 'Porozmawiaj z pomocą lub szybko znajdź odpowiedź.',
+      description: 'Pomoc automatyczna i możliwość poproszenia konsultanta.',
       icon: Headphones,
       action: onOpenHelp
     },
     {
       key: 'settings',
       title: 'Ustawienia',
-      description: 'Wygląd aplikacji i ustawienia Twojego konta.',
+      description: 'Wygląd aplikacji, konto i informacje o połączeniu wiadomości.',
       icon: Settings2,
       action: () => onNavigate('settings')
     }
   ];
 
-  const shortcuts = role === 'USER'
-    ? shortcutPool.filter((item) => ['browser', 'help', 'settings'].includes(item.key))
-    : shortcutPool.slice(0, 3);
-
+  const shortcuts = shortcutPool.slice(0, 6);
   const hasRoleStats = role !== 'USER';
   const showUpdateCard = roleDefinition.canManageUpdates && ['available', 'downloaded', 'error'].includes(update.status);
+  const scrollToGuide = () => document.getElementById('jak-dziala-serviceos')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   return (
-    <div className="dashboard dashboard-start page-enter">
-      <section className="start-hero-premium">
-        <div className="start-hero-glow" />
-        <div className="start-hero-arc" />
-
-        <div className="start-welcome-column">
-          <div className="start-context"><span className="live-dot" /> {pointName}</div>
-          <h1>{greeting()}, <span>{firstName}.</span></h1>
-          <p>Wszystko gotowe do pracy. Wybierz, od czego chcesz zacząć lub skorzystaj z szybkich skrótów.</p>
-          <div className="start-primary-actions">
-            <button className="button primary start-browser-action" onClick={() => onNavigate('browser')}>
-              <Globe2 size={17} /> Otwórz przeglądarkę <ArrowRight size={16} />
-            </button>
-            <button className="button start-help-action" onClick={onOpenHelp}>
-              <Headphones size={17} /> Pomoc
-            </button>
+    <div className="dashboard dashboard-showcase page-enter">
+      <section className="showcase-hero">
+        <div className="showcase-hero-glow" />
+        <div className="showcase-hero-main">
+          <div className="showcase-context"><span className="live-dot" /> {pointName}</div>
+          <p className="showcase-kicker">{greeting()}, {firstName}</p>
+          <h1>Cały serwis w jednym miejscu.<br/><span>Od przyjęcia klienta do odbioru urządzenia.</span></h1>
+          <p className="showcase-lead">
+            ServiceOS prowadzi pracownika przez całą obsługę: klienta, zlecenie, kartę serwisową, przekazanie między punktami,
+            naprawę, dokumenty, wiadomości, spotkania i rozliczenia.
+          </p>
+          <div className="showcase-actions">
+            {canOpenService && <button className="button primary" onClick={() => onNavigate('service')}><Wrench size={17}/> Otwórz serwis <ArrowRight size={16}/></button>}
+            <button className="button secondary" onClick={scrollToGuide}><ArrowDown size={17}/> Zobacz jak działa całość</button>
+          </div>
+          <div className="showcase-proof-row">
+            <span><CheckCircle2 size={14}/> jedna historia zlecenia</span>
+            <span><CheckCircle2 size={14}/> jasne role pracowników</span>
+            <span><CheckCircle2 size={14}/> przekazania między punktami</span>
+            <span><CheckCircle2 size={14}/> dokumenty i kontakt z klientem</span>
           </div>
         </div>
 
-        <div className="start-time-column">
-          <div className="start-date-line">{dateText}</div>
-          <div className="start-clock start-clock-animated" aria-label={timeText}>
-            {timeText.split('').map((character, index) => character === ':' ? (
-              <span className="start-clock-separator" aria-hidden="true" key={'separator-'+index}>:</span>
-            ) : (
-              <span className="start-clock-slot" aria-hidden="true" key={'slot-'+index}>
-                <span className="start-clock-digit" key={character}>{character}</span>
-              </span>
-            ))}
+        <aside className="showcase-today-card">
+          <div className="showcase-today-head">
+            <div><CalendarDays size={16}/><span>{dateText}</span></div>
+            <strong>{timeText}</strong>
           </div>
-          <div className="start-time-note">
-            <CalendarDays size={18} />
+          <div className="showcase-today-divider"/>
+          <div className="showcase-weather-line">
+            {weatherLoading && !weather ? <RefreshCw size={28} className="spin"/> : weather ? <WeatherIcon code={weather.weatherCode}/> : <CloudSun size={34}/>}
             <div>
-              <strong>Dobry moment na działanie.</strong>
-              <span>Najważniejsze rzeczy masz pod ręką.</span>
+              <span><MapPin size={12}/> {weather?.city || weatherCity || 'Twój punkt'}</span>
+              <strong>{weather ? Math.round(weather.temperature) + '° · ' + weather.condition : (weatherError || 'Twój dzień pracy')}</strong>
             </div>
           </div>
+          <div className="showcase-role-summary">
+            <ShieldCheck size={17}/>
+            <div><span>Twój widok</span><strong>{roleDefinition.label}</strong><small>{roleDefinition.scope === 'GLOBAL' ? 'Zakres: wszystkie punkty' : 'Zakres: przypisane punkty'}</small></div>
+          </div>
+        </aside>
+      </section>
+
+      {hasRoleStats && (
+        <section className="showcase-stats" aria-label="Podsumowanie">
+          <article><Building2 size={18}/><div><span>Punkty w Twoim widoku</span><strong>{dashboardData?.pointCount ?? 0}</strong></div></article>
+          <article><UsersRound size={18}/><div><span>Aktywne konta</span><strong>{dashboardData?.activeUsers ?? 0}</strong></div></article>
+          <article><BadgeDollarSign size={18}/><div><span>{role === 'TECHNICIAN' ? 'Moje rozliczenie' : 'Zatwierdzony przychód'}</span><strong>{money(role === 'TECHNICIAN' ? (dashboardData?.technicianShare ?? 0) : (dashboardData?.approvedRevenue ?? 0))}</strong></div></article>
+          <article><ShieldCheck size={18}/><div><span>Rola</span><strong>{roleDefinition.shortLabel}</strong></div></article>
+        </section>
+      )}
+
+      <section className="showcase-section" id="jak-dziala-serviceos">
+        <div className="showcase-section-heading">
+          <div><span>PROSTY PRZEWODNIK</span><h2>Tak wygląda pełna wizyta klienta</h2><p>Każdy etap ma swoje miejsce, dlatego pracownik nie musi pamiętać, gdzie szukać informacji.</p></div>
+          {canOpenService && <button className="button secondary" onClick={() => onNavigate('service')}>Przejdź do serwisu <ArrowRight size={15}/></button>}
         </div>
 
-        <aside className="start-weather-card" aria-live="polite">
-          <div className="start-weather-label">Pogoda teraz</div>
-          <div className="start-weather-location"><MapPin size={14} /> {weather?.city || weatherCity || 'Twoje miasto'}</div>
+        <div className="service-journey">
+          {serviceJourney.map(({ step, title, description, icon: Icon }, index) => (
+            <article className="service-journey-step" key={step}>
+              <div className="service-journey-number">{step}</div>
+              <div className="service-journey-icon"><Icon size={22}/></div>
+              <div className="service-journey-copy"><strong>{title}</strong><p>{description}</p></div>
+              {index < serviceJourney.length - 1 && <div className="service-journey-line" aria-hidden="true"/>}
+            </article>
+          ))}
+        </div>
+      </section>
 
-          {weatherLoading && !weather ? (
-            <div className="start-weather-state">
-              <RefreshCw size={24} className="spin" />
-              <span>Sprawdzam pogodę…</span>
-            </div>
-          ) : weather ? (
-            <div className="start-weather-current">
-              <div className="start-weather-icon"><WeatherIcon code={weather.weatherCode} /></div>
-              <div className="start-weather-temperature">{Math.round(weather.temperature)}°</div>
-              <div className="start-weather-condition">{weather.condition}</div>
-            </div>
-          ) : (
-            <div className="start-weather-state start-weather-unavailable">
-              <CloudSun size={30} />
-              <strong>Pogoda niedostępna</strong>
-              <span>{weatherError || 'Sprawdź miasto zapisane na koncie.'}</span>
-              {weatherCity && <button onClick={() => void loadWeather()}>Spróbuj ponownie</button>}
-            </div>
-          )}
-        </aside>
+      <section className="showcase-section">
+        <div className="showcase-section-heading">
+          <div><span>CO JEST W SERVICEOS</span><h2>Najważniejsze obszary pracy</h2><p>Nie tylko zlecenia — system łączy obsługę klienta, zespół i codzienną organizację pracy.</p></div>
+        </div>
+
+        <div className="capability-grid">
+          <article className="capability-card">
+            <div className="capability-icon"><Smartphone size={22}/></div>
+            <span>OBSŁUGA KLIENTA</span><h3>Klient i urządzenie od pierwszej wizyty</h3>
+            <p>Karta klienta, urządzenia, historia napraw, wyceny i informacje potrzebne przy kolejnej wizycie.</p>
+            {canOpenCustomers && <button onClick={() => onNavigate('customers')}>Otwórz klientów <ArrowRight size={14}/></button>}
+          </article>
+          <article className="capability-card">
+            <div className="capability-icon"><Truck size={22}/></div>
+            <span>PRZEKAZANIA</span><h3>Wiadomo, gdzie jest urządzenie</h3>
+            <p>Pracownik widzi wysyłkę do serwisu, drogę urządzenia, przyjęcie w drugim punkcie i powrót do miejsca odbioru.</p>
+            {canOpenService && <button onClick={() => onNavigate('service')}>Zobacz pracę serwisu <ArrowRight size={14}/></button>}
+          </article>
+          <article className="capability-card">
+            <div className="capability-icon"><FileCheck2 size={22}/></div>
+            <span>DOKUMENTY</span><h3>Karty serwisowe, gwarancje i faktury</h3>
+            <p>Dokumenty powstają przy zleceniu i zostają z nim razem. Łatwo je otworzyć ponownie, wydrukować albo sprawdzić później.</p>
+            {canOpenService && <button onClick={() => onNavigate('service')}>Otwórz dokumenty <ArrowRight size={14}/></button>}
+          </article>
+          <article className="capability-card">
+            <div className="capability-icon"><CalendarDays size={22}/></div>
+            <span>SPOTKANIA I SZKOLENIA</span><h3>Spotkania zespołu w tym samym systemie</h3>
+            <p>Szef, właściciel i koordynator mogą planować spotkania. Uczestnicy zapisują się i dołączają dopiero po rozpoczęciu przez prowadzącego.</p>
+          </article>
+          <article className="capability-card">
+            <div className="capability-icon"><MessageCircleMore size={22}/></div>
+            <span>POMOC I WIADOMOŚCI</span><h3>Wsparcie pracownika bez szukania kontaktu</h3>
+            <p>Pracownik może zapytać pomoc w aplikacji, a gdy potrzebuje człowieka, sam prosi konsultanta o dołączenie do rozmowy.</p>
+            <button onClick={onOpenHelp}>Otwórz pomoc <ArrowRight size={14}/></button>
+          </article>
+          <article className="capability-card">
+            <div className="capability-icon"><BadgeDollarSign size={22}/></div>
+            <span>ROZLICZENIA</span><h3>Praca i pieniądze są połączone</h3>
+            <p>Szef widzi rozliczenia, a serwisant swoją część. Informacje są powiązane z rzeczywistą pracą wykonaną w serwisie.</p>
+            {canOpenEarnings && <button onClick={() => onNavigate('earnings')}>Otwórz rozliczenia <ArrowRight size={14}/></button>}
+          </article>
+        </div>
       </section>
 
       <MeetingsCard role={role} />
 
-      <section className="start-section">
-        <div className="start-section-heading">
-          <div>
-            <h2>Szybki dostęp</h2>
-            <p>Najważniejsze funkcje systemu w zasięgu ręki.</p>
-          </div>
-          <span>Wybierz moduł z menu lub użyj skrótu</span>
+      <section className="showcase-section role-showcase-section">
+        <div className="showcase-section-heading">
+          <div><span>ROLE W ZESPOLE</span><h2>Każdy widzi to, czego potrzebuje do swojej pracy</h2><p>Pracownik punktu nie dostaje widoku właściciela, a koordynator działa tylko w swoim zakresie.</p></div>
+          {canOpenAdministration && <button className="button secondary" onClick={() => onNavigate('administration')}>Zespół i dostępy <ArrowRight size={15}/></button>}
         </div>
+        <div className="role-showcase-grid">
+          {roleShowcase.map((item) => (
+            <article key={item.role} className={item.role === roleDefinition.shortLabel || (role === 'USER' && item.role === 'Pracownik punktu') ? 'current' : ''}>
+              <ShieldCheck size={17}/>
+              <div><strong>{item.role}</strong><span>{item.scope}</span><p>{item.description}</p></div>
+            </article>
+          ))}
+        </div>
+      </section>
 
+      <section className="boss-showcase">
+        <div className="boss-showcase-heading">
+          <span>DLA SZEFA</span>
+          <h2>Co daje ServiceOS w codziennej pracy?</h2>
+          <p>Najważniejsze informacje są w jednym miejscu i wynikają z tego, co pracownicy faktycznie robią przy zleceniu.</p>
+        </div>
+        <div className="boss-benefits">
+          <article><ClipboardCheck size={20}/><strong>Pełna historia</strong><span>Od przyjęcia urządzenia aż do wydania klientowi.</span></article>
+          <article><Building2 size={20}/><strong>Praca wielu punktów</strong><span>Przekazania nie znikają między sklepem a serwisem.</span></article>
+          <article><UsersRound size={20}/><strong>Jasne odpowiedzialności</strong><span>Wiadomo, kto prowadzi zlecenie i kto wykonał zmianę.</span></article>
+          <article><FileText size={20}/><strong>Mniej szukania dokumentów</strong><span>Karty, faktury, gwarancje i notatki są przy sprawie.</span></article>
+        </div>
+      </section>
+
+      <section className="showcase-section">
+        <div className="showcase-section-heading">
+          <div><span>SZYBKI DOSTĘP</span><h2>Przejdź od razu do pracy</h2><p>Widoczne skróty są dopasowane do Twojej roli.</p></div>
+        </div>
         <div className="start-shortcut-grid">
           {shortcuts.map(({ key, title, description, icon: Icon, action }) => (
             <button className="start-shortcut-card" key={key} onClick={action}>
-              <div className="start-shortcut-icon"><Icon size={24} /></div>
-              <div className="start-shortcut-copy">
-                <strong>{title}</strong>
-                <span>{description}</span>
-              </div>
-              <ArrowRight size={18} className="start-shortcut-arrow" />
+              <div className="start-shortcut-icon"><Icon size={24}/></div>
+              <div className="start-shortcut-copy"><strong>{title}</strong><span>{description}</span></div>
+              <ArrowRight size={18} className="start-shortcut-arrow"/>
             </button>
           ))}
         </div>
       </section>
 
-      {hasRoleStats && (
-        <section className="start-mini-stats" aria-label="Podsumowanie">
-          <article>
-            <div className="start-mini-stat-icon"><Building2 size={17} /></div>
-            <div><span>Punkty</span><strong>{dashboardData?.pointCount ?? 0}</strong></div>
-            <small>{roleDefinition.scope === 'GLOBAL' ? 'Wszystkie dostępne lokalizacje' : 'Twój zakres dostępu'}</small>
-          </article>
-          <article>
-            <div className="start-mini-stat-icon"><UsersRound size={17} /></div>
-            <div><span>Aktywne konta</span><strong>{dashboardData?.activeUsers ?? 0}</strong></div>
-            <small>{role === 'OWNER' ? String(dashboardData?.pendingUsers ?? 0) + ' oczekuje na decyzję' : 'W Twoim zakresie'}</small>
-          </article>
-          <article>
-            <div className="start-mini-stat-icon"><BadgeDollarSign size={17} /></div>
-            <div>
-              <span>{role === 'TECHNICIAN' ? 'Moja część' : 'Przychód'}</span>
-              <strong>{money(role === 'TECHNICIAN' ? (dashboardData?.technicianShare ?? 0) : (dashboardData?.approvedRevenue ?? 0))}</strong>
-            </div>
-            <small>Zatwierdzone rozliczenia</small>
-          </article>
-        </section>
-      )}
-
       {showUpdateCard && (
         <section className="start-update-strip">
-          <div className="start-update-icon"><RefreshCw className={busy ? 'spin' : ''} size={18} /></div>
+          <div className="start-update-icon"><RefreshCw className={busy ? 'spin' : ''} size={18}/></div>
           <div>
             <strong>{update.status === 'error' ? 'Aktualizacja wymaga uwagi' : 'Dostępna jest nowa wersja LockOn'}</strong>
             <span>{update.message}</span>
@@ -337,7 +467,7 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, w
           <div className="start-update-actions">
             {update.status === 'available' && (
               <button className="button primary" disabled={busy} onClick={() => void runUpdateAction(() => window.lockOn.updater.download())}>
-                <CloudDownload size={15} /> Pobierz
+                <CloudDownload size={15}/> Pobierz
               </button>
             )}
             {update.status === 'downloaded' && (
@@ -347,7 +477,7 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, w
             )}
             {update.status === 'error' && (
               <button className="button secondary" disabled={busy} onClick={() => void runUpdateAction(() => window.lockOn.updater.check())}>
-                <RefreshCw size={15} /> Sprawdź ponownie
+                <RefreshCw size={15}/> Sprawdź ponownie
               </button>
             )}
           </div>
