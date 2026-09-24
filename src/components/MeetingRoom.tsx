@@ -97,6 +97,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const [handRaised, setHandRaised] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [sideTab, setSideTab] = useState<'participants'|'chat'>('participants');
+  const [mobileView, setMobileView] = useState<'meeting'|'participants'|'chat'>('meeting');
   const [busy, setBusy] = useState('');
 
   const closeAttendance = () => {
@@ -556,11 +557,12 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         )}
 
         <div className="meeting-room-mobile-tabs" role="tablist" aria-label="Widok spotkania">
-          <button className={sideTab==='participants'?'active':''} onClick={()=>setSideTab('participants')}>Uczestnicy</button>
-          <button className={sideTab==='chat'?'active':''} onClick={()=>setSideTab('chat')}>Chat {chatMessages.length>0&&<b>{chatMessages.length}</b>}</button>
+          <button className={mobileView==='meeting'?'active':''} onClick={()=>setMobileView('meeting')}>Spotkanie</button>
+          <button className={mobileView==='participants'?'active':''} onClick={()=>{setSideTab('participants');setMobileView('participants');}}>Uczestnicy</button>
+          <button className={mobileView==='chat'?'active':''} onClick={()=>{setSideTab('chat');setMobileView('chat');}}>Chat {chatMessages.length>0&&<b>{chatMessages.length}</b>}</button>
         </div>
         <div className="meeting-room-layout">
-          <main className="meeting-stage">
+          <main className={'meeting-stage '+(mobileView!=='meeting'?'meeting-mobile-hidden':'')}>
             <div className="meeting-screen-host" ref={videoHostRef}>
               {joining && <div className="meeting-stage-empty">Łączenie ze spotkaniem…</div>}
               {!joining && !connected && <div className="meeting-stage-empty">Połączenie nie jest aktywne.</div>}
@@ -581,7 +583,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
             <div className="meeting-audio-host" ref={audioHostRef} />
           </main>
 
-          <aside className={'meeting-participants-panel meeting-side-'+sideTab}>
+          <aside className={'meeting-participants-panel meeting-side-'+sideTab+' '+(mobileView==='meeting'?'meeting-mobile-hidden':'')}>
             <div className="meeting-side-tabs" role="tablist">
               <button className={sideTab==='participants'?'active':''} onClick={()=>setSideTab('participants')}><Shield size={14}/> Uczestnicy</button>
               <button className={sideTab==='chat'?'active':''} onClick={()=>setSideTab('chat')}><MessageSquare size={14}/> Chat</button>
