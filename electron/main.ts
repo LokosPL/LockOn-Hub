@@ -1452,11 +1452,15 @@ app.whenReady().then(async () => {
   const startupDeepLink = process.argv.find((arg) => arg.startsWith(APP_PROTOCOL + '://'));
   if (startupDeepLink) handleProtocolUrl(startupDeepLink);
 
-  const allowMeetingMedia = (webContents: WebContents, permission: string) =>
-    permission === 'media' && isTrustedRendererUrl(webContents.getURL());
+  const allowMeetingMedia = (webContents: WebContents | null, permission: string) =>
+    Boolean(webContents) && permission === 'media' && isTrustedRendererUrl(webContents!.getURL());
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
     const allowed = allowMeetingMedia(webContents, permission);
-    if (!allowed) console.warn('[permission denied]', { permission, url:new URL(webContents.getURL()).origin });
+    if (!allowed) {
+      let origin = 'unknown';
+      try { origin = new URL(webContents.getURL()).origin; } catch {}
+      console.warn('[permission denied]', { permission, origin });
+    }
     callback(allowed);
   });
   session.defaultSession.setPermissionCheckHandler((webContents, permission) =>
