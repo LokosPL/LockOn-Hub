@@ -46,6 +46,13 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (view === 'splash') return;
+    return window.lockOn.auth.onState((nextAuth) => {
+      setAuth(nextAuth);
+    });
+  }, []);
+
   const actualRole = auth?.role as UserRole | null;
   const effectiveRole = useMemo<UserRole | null>(() => {
     if (!actualRole) return null;
