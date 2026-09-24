@@ -9,10 +9,8 @@ type Props = {
 };
 
 const liveMeetingPriority = (meeting: MeetingSummary) => {
-  if (meeting.status !== 'LIVE') return -1;
-  if (meeting.canManage) return 2;
-  if (meeting.registeredByMe) return 1;
-  return -1;
+  if (meeting.status !== 'LIVE' || !meeting.canManage) return -1;
+  return meeting.hostUserId === meeting.createdByUserId ? 2 : 1;
 };
 
 export function MeetingActivityDock({ activePage, onOpenMeeting }: Props) {
@@ -34,7 +32,7 @@ export function MeetingActivityDock({ activePage, onOpenMeeting }: Props) {
         const next = (payload.meetings ?? [])
           .filter((item) => liveMeetingPriority(item) >= 0)
           .sort((a, b) => liveMeetingPriority(b) - liveMeetingPriority(a))[0] ?? null;
-        setMeeting((current) => current?.id === next?.id ? next : next);
+        setMeeting(next);
       } catch {
         if (!disposed) setMeeting(null);
       }
@@ -105,7 +103,7 @@ export function MeetingActivityDock({ activePage, onOpenMeeting }: Props) {
     }
   };
 
-  if (!meeting || activePage === 'meetings' || activePage === 'dashboard') return null;
+  if (!meeting || activePage === 'meetings') return null;
 
   return (
     <aside className={'meeting-activity-dock ' + (expanded ? 'expanded' : 'compact')} aria-live="polite">
