@@ -76,6 +76,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const videoHostRef = useRef<HTMLDivElement | null>(null);
   const localPreviewRef = useRef<HTMLVideoElement | null>(null);
   const localPreviewStreamRef = useRef<MediaStream | null>(null);
+  const chatMessagesRef = useRef<HTMLDivElement | null>(null);
   const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [joining, setJoining] = useState(true);
   const [connected, setConnected] = useState(false);
@@ -308,6 +309,12 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   }, [connected, meeting.id]);
 
   useEffect(() => {
+    const host=chatMessagesRef.current;
+    if (!host || sideTab!=='chat') return;
+    host.scrollTo({top:host.scrollHeight,behavior:'smooth'});
+  }, [chatMessages.length, sideTab]);
+
+  useEffect(() => {
     const preview=localPreviewRef.current;
     if (!preview || !screenEnabled || !selectedSource || /LockOn ServiceOS/i.test(selectedSource.name)) return;
     preview.srcObject=localPreviewStreamRef.current;
@@ -407,7 +414,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         setSelectedSource(null);
         if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
         localPreviewStreamRef.current = null;
-        void room.localParticipant.unpublishTrack(publication.track).catch(() => undefined);
+        void room.localParticipant.unpublishTrack(mediaTrack).catch(() => undefined);
         void window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
       }, { once:true });
     } catch (err) {
@@ -624,7 +631,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
                 </div>
               )}
             </> : <div className="meeting-chat-panel">
-              <div className="meeting-chat-messages">
+              <div className="meeting-chat-messages" ref={chatMessagesRef}>
                 {chatMessages.length===0?<div className="meeting-chat-empty">Brak wiadomości. Napisz pierwszą.</div>:chatMessages.map((message)=><article key={message.id} className={message.mine?'mine':''}><div><strong>{message.authorName}</strong><time>{new Date(message.createdAt).toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})}</time></div><p>{message.body}</p></article>)}
               </div>
               <div className="meeting-chat-compose">
