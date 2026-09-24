@@ -4458,7 +4458,7 @@ const route = async (request) => {
         : q("SELECT id,name,city FROM points WHERE active=true AND id=ANY($1::text[]) ORDER BY name",[scope.pointIds]),
       scope.global
         ? q("SELECT id,name,email,role_code FROM users WHERE status='ACTIVE' AND blocked_at IS NULL AND role_code IS NOT NULL ORDER BY lower(name),lower(email)")
-        : q("SELECT DISTINCT u.id,u.name,u.email,u.role_code FROM users u LEFT JOIN user_point_access upa ON upa.user_id=u.id WHERE u.status='ACTIVE' AND u.blocked_at IS NULL AND u.role_code IS NOT NULL AND (u.id=$1 OR upa.point_id=ANY($2::text[])) ORDER BY lower(u.name),lower(u.email)",[u.id,scope.pointIds])
+        : q("SELECT u.id,u.name,u.email,u.role_code FROM users u WHERE u.status='ACTIVE' AND u.blocked_at IS NULL AND u.role_code IS NOT NULL AND (u.id=$1 OR EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=u.id AND upa.point_id=ANY($2::text[]))) ORDER BY lower(u.name),lower(u.email)",[u.id,scope.pointIds])
     ]);
     return json(request,{
       points:pointsResult.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
