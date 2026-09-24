@@ -31,6 +31,7 @@ export default function App() {
   const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
   const [focusUserId, setFocusUserId] = useState<string | null>(null);
   const [focusMeetingId, setFocusMeetingId] = useState<string | null>(null);
+  const [meetingDockExpanded, setMeetingDockExpanded] = useState(false);
 
   useEffect(() => {
     if (view === 'splash') return;
@@ -79,9 +80,9 @@ export default function App() {
 
   useEffect(() => {
     if (view === 'splash') return;
-    const shouldShowBrowser = active === 'browser' && !helpOpen;
+    const shouldShowBrowser = active === 'browser' && !helpOpen && !meetingDockExpanded;
     void window.lockOn.browser.setVisible(shouldShowBrowser).catch(() => undefined);
-  }, [active, helpOpen]);
+  }, [active, helpOpen, meetingDockExpanded]);
 
   if (view === 'splash') return <SplashScreen />;
 
@@ -210,6 +211,7 @@ export default function App() {
 
         <MeetingActivityDock
           activePage={active}
+          onExpandedChange={setMeetingDockExpanded}
           onOpenMeeting={(meetingId) => {
             setFocusMeetingId(meetingId);
             setActive('meetings');
