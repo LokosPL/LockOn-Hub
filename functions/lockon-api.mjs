@@ -5,6 +5,7 @@ import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectComm
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import pdfMake from 'pdfmake/build/pdfmake.js';
 import pdfFonts from 'pdfmake/build/vfs_fonts.js';
+import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
 pool.on('error', (error) => console.error('[postgres idle client]', error));
@@ -23,6 +24,16 @@ const SITE_ORIGINS = new Set(
 const GMAIL_TOKEN_KEY = String(process.env.LOCKON_GMAIL_TOKEN_KEY || '');
 const PUBLIC_PORTAL_URL = String(process.env.LOCKON_SITE_ORIGIN || 'https://app.serviceos.pl').trim().replace(/\/$/,'') || 'https://app.serviceos.pl';
 const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
+const LIVEKIT_URL = String(process.env.LIVEKIT_URL || '').trim().replace(/\/$/,'');
+const LIVEKIT_API_KEY = String(process.env.LIVEKIT_API_KEY || '').trim();
+const LIVEKIT_API_SECRET = String(process.env.LIVEKIT_API_SECRET || '').trim();
+const LIVEKIT_SERVER_URL = LIVEKIT_URL.replace(/^wss:/i,'https:').replace(/^ws:/i,'http:');
+const LIVEKIT_CLIENT_URL = LIVEKIT_URL.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:');
+const livekitConfigured = () => Boolean(LIVEKIT_SERVER_URL && LIVEKIT_API_KEY && LIVEKIT_API_SECRET);
+const livekitRooms = () => {
+  if (!livekitConfigured()) throw Object.assign(new Error('Usługa spotkań audio nie jest jeszcze skonfigurowana.'),{status:503,code:'LIVEKIT_NOT_CONFIGURED'});
+  return new RoomServiceClient(LIVEKIT_SERVER_URL,LIVEKIT_API_KEY,LIVEKIT_API_SECRET);
+};
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 90;
@@ -42,6 +53,7 @@ const SERVICE_INTAKE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECH
 const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
+const MEETING_MANAGE_ROLES = new Set(['OWNER', 'BOSS']);
 const CUSTOMER_QUOTE_STAFF_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const FINANCE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const DEV_TEST_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER', 'SUPPORT']);
@@ -80,6 +92,13 @@ const DEFAULT_NOTIFY_STATUSES = Object.freeze(['RECEIVED','DIAGNOSIS','WAITING_P
 const nowIso = () => new Date().toISOString();
 const makeId = (prefix) => prefix + '_' + crypto.randomBytes(10).toString('hex');
 const normalizeEmail = (value = '') => String(value).trim().toLowerCase();
+const googleIdentityMatchesUser = (profile, user) => {
+  const profileSub=String(profile?.sub||'').trim();
+  const userSub=String(user?.google_sub||'').trim();
+  if(userSub)return Boolean(profileSub)&&profileSub===userSub;
+  const profileEmail=normalizeEmail(profile?.email);
+  return Boolean(profileEmail)&&profileEmail===normalizeEmail(user?.email);
+};
 const OWNER_OPERATIONAL_NAME = 'System LockOn';
 const OWNER_SUPPORT_NAME = 'Właściciel aplikacji';
 const isOwnerIdentity = (email, role = null) =>
@@ -288,7 +307,8 @@ const publicUser = async (user) => ({
 const authPayload = async (user, activePointId = null) => ({
   user: await publicUser(user),
   points: await loadPointsForUser(user),
-  activePointId: activePointId || null
+  activePointId: activePointId || null,
+  gmail: await gmailStatusForUser(user)
 });
 
 const defaultActivePointIdForUser = async (user) => {
@@ -561,6 +581,118 @@ const visiblePointIds = async (user) => {
   return rows.map((r) => r.id);
 };
 
+const meetingCanManage = (user, meeting) =>
+  MEETING_MANAGE_ROLES.has(user.role_code) ||
+  meeting?.created_by_user_id === user.id ||
+  meeting?.host_user_id === user.id;
+
+const meetingEligible = async (user, meetingId) => {
+  if (MEETING_MANAGE_ROLES.has(user.role_code)) return true;
+  const row=(await q(
+    "SELECT EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=$1 AND (a.audience_type='ALL' OR (a.audience_type='USER' AND a.user_id=$2) OR (a.audience_type='POINT' AND EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=$2 AND upa.point_id=a.point_id)))) AS allowed",
+    [meetingId,user.id]
+  )).rows[0];
+  return row?.allowed===true;
+};
+
+const meetingView = (row, user) => ({
+  id:row.id,
+  title:row.title,
+  description:row.description||'',
+  startsAt:row.starts_at,
+  plannedMinutes:Number(row.planned_minutes||60),
+  status:row.status,
+  maxParticipants:Number(row.max_participants||50),
+  allowParticipantAudio:row.allow_participant_audio===true,
+  allowParticipantScreenShare:row.allow_participant_screen_share===true,
+  registeredCount:Number(row.registered_count||0),
+  registeredByMe:row.registered_by_me===true,
+  canManage:meetingCanManage(user,row),
+  createdByUserId:row.created_by_user_id,
+  createdByName:operationalIdentityName(row.creator_name,row.creator_email,row.creator_role)||'ServiceOS',
+  hostUserId:row.host_user_id,
+  hostName:operationalIdentityName(row.host_name,row.host_email,row.host_role)||'Prowadzący',
+  audience:Array.isArray(row.audience)?row.audience:[],
+  startedAt:row.started_at||null,
+  endedAt:row.ended_at||null,
+  cancelledAt:row.cancelled_at||null,
+  createdAt:row.created_at,
+  updatedAt:row.updated_at
+});
+
+const listMeetingsForUser = async (user) => {
+  const global=MEETING_MANAGE_ROLES.has(user.role_code);
+  const visibility=global
+    ? 'true'
+    : "(m.created_by_user_id=$1 OR m.host_user_id=$1 OR EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=m.id AND (a.audience_type='ALL' OR (a.audience_type='USER' AND a.user_id=$1) OR (a.audience_type='POINT' AND EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=$1 AND upa.point_id=a.point_id)))))";
+  const sql=
+    "SELECT m.*,cu.name AS creator_name,cu.email AS creator_email,cu.role_code AS creator_role,hu.name AS host_name,hu.email AS host_email,hu.role_code AS host_role,"+
+    "(SELECT count(*)::int FROM meeting_registrations r WHERE r.meeting_id=m.id AND r.status='REGISTERED') AS registered_count,"+
+    "EXISTS(SELECT 1 FROM meeting_registrations r WHERE r.meeting_id=m.id AND r.user_id=$1 AND r.status='REGISTERED') AS registered_by_me,"+
+    "COALESCE((SELECT json_agg(json_build_object('type',a.audience_type,'pointId',a.point_id,'pointName',p.name,'userId',a.user_id,'userName',operational.name)) FROM meeting_audience a LEFT JOIN points p ON p.id=a.point_id LEFT JOIN LATERAL (SELECT CASE WHEN au.role_code='OWNER' THEN $2 ELSE COALESCE(NULLIF(au.name,''),au.email) END AS name FROM users au WHERE au.id=a.user_id) operational ON true WHERE a.meeting_id=m.id),'[]'::json) AS audience "+
+    "FROM meetings m JOIN users cu ON cu.id=m.created_by_user_id JOIN users hu ON hu.id=m.host_user_id WHERE "+visibility+
+    (global?"":" AND m.status<>'CANCELLED'")+
+    " ORDER BY CASE m.status WHEN 'LIVE' THEN 0 WHEN 'SCHEDULED' THEN 1 WHEN 'ENDED' THEN 2 ELSE 3 END,m.starts_at ASC,m.created_at DESC LIMIT 100";
+  const rows=(await q(sql,[user.id,OWNER_OPERATIONAL_NAME])).rows;
+  return rows.map((row)=>meetingView(row,user));
+};
+
+const loadMeeting = async (meetingId) =>
+  (await q("SELECT * FROM meetings WHERE id=$1 LIMIT 1",[meetingId])).rows[0]||null;
+
+const meetingEvent = async (meetingId, actorUserId, eventType, metadata={}) =>
+  q("INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,$4,$5::jsonb)",[
+    makeId('mte'),meetingId,actorUserId||null,eventType,JSON.stringify(metadata||{})
+  ]);
+
+const meetingRoomName = (meetingId) => 'lockon-' + String(meetingId).replace(/[^A-Za-z0-9_-]/g,'').slice(0,100);
+const meetingParticipantIdentity = (meetingId,userId) =>
+  'p_' + crypto.createHash('sha256').update(meetingId+':'+userId).digest('hex').slice(0,28);
+
+const meetingPublishSources = (meeting,user,isManager,control=null) => {
+  if (isManager) return [TrackSource.MICROPHONE,TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO];
+  const sources=[];
+  const microphoneAllowed=control?.microphone_allowed===true || (control?.microphone_allowed!==false && meeting.allow_participant_audio===true);
+  if(microphoneAllowed)sources.push(TrackSource.MICROPHONE);
+  if(meeting.allow_participant_screen_share===true)sources.push(TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO);
+  return sources;
+};
+
+const createMeetingJoinToken = async (meeting,user) => {
+  if(!livekitConfigured())throw Object.assign(new Error('Usługa spotkań audio nie jest jeszcze skonfigurowana.'),{status:503,code:'LIVEKIT_NOT_CONFIGURED'});
+  const isManager=meetingCanManage(user,meeting);
+  const control=isManager?null:(await q("SELECT microphone_allowed,removed_at FROM meeting_participant_controls WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meeting.id,user.id])).rows[0]||null;
+  if(control?.removed_at)throw Object.assign(new Error('Prowadzący usunął Cię z tego spotkania.'),{status:403,code:'MEETING_REMOVED'});
+  const sources=meetingPublishSources(meeting,user,isManager,control);
+  const room=meetingRoomName(meeting.id);
+  const identity=meetingParticipantIdentity(meeting.id,user.id);
+  const token=new AccessToken(LIVEKIT_API_KEY,LIVEKIT_API_SECRET,{
+    identity,
+    name:operationalIdentityName(user.name,user.email,user.role_code)||'Uczestnik',
+    metadata:JSON.stringify({serviceOsUserId:user.id,role:user.role_code||null,meetingId:meeting.id,manager:isManager}),
+    ttl:'10m'
+  });
+  token.addGrant({
+    roomJoin:true,
+    room,
+    canSubscribe:true,
+    canPublish:sources.length>0,
+    canPublishData:false,
+    canPublishSources:sources
+  });
+  return {
+    serverUrl:LIVEKIT_CLIENT_URL,
+    token:await token.toJwt(),
+    roomName:room,
+    identity,
+    canManage:isManager,
+    permissions:{
+      microphone:sources.includes(TrackSource.MICROPHONE),
+      screenShare:sources.includes(TrackSource.SCREEN_SHARE)
+    }
+  };
+};
+
 const searchCustomers = async (user, term) => {
   const query = cleanText(term, 120);
   if (query.length < 2) return [];
@@ -572,7 +704,7 @@ const searchCustomers = async (user, term) => {
     return rows.map(customerView);
   }
   const { rows } = await q(
-    "SELECT DISTINCT c.id,c.first_name,c.last_name,c.email,c.phone FROM customers c JOIN service_orders s ON s.customer_id=c.id WHERE lower(c.first_name||' '||c.last_name||' '||coalesce(c.email,'')||' '||coalesce(c.phone,'')) LIKE '%'||lower($1)||'%' AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY c.last_name,c.first_name LIMIT 20",
+    "SELECT DISTINCT c.id,c.first_name,c.last_name,c.email,c.phone FROM customers c JOIN service_orders s ON s.customer_id=c.id WHERE lower(c.first_name||' '||c.last_name||' '||coalesce(c.email,'')||' '||coalesce(c.phone,'')) LIKE '%'||lower($1)||'%' AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY c.last_name,c.first_name LIMIT 20",
     [query, user.id]
   );
   return rows.map(customerView);
@@ -938,6 +1070,21 @@ const attachTransfers = async (orders) => {
   });
 };
 
+const canReadOrder = async (user, orderId) => {
+  if (GLOBAL_ROLES.has(user.role_code)) return true;
+  const { rowCount } = await q(
+    "SELECT 1 FROM service_orders s WHERE s.id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) LIMIT 1",
+    [orderId, user.id]
+  );
+  return rowCount > 0;
+};
+
+const requireReadableOrder = async (user, orderId) => {
+  if (!(await canReadOrder(user, orderId))) {
+    throw Object.assign(new Error('Brak dostępu do podglądu tego zlecenia.'), { status:403, code:'ORDER_READ_FORBIDDEN' });
+  }
+};
+
 const canSeeOrder = async (user, orderId) => {
   if (GLOBAL_ROLES.has(user.role_code)) return true;
   const { rowCount } = await q(
@@ -1111,7 +1258,7 @@ const getVisibleOrderByNumber = async (user, number) => {
   let access = '';
   if (!GLOBAL_ROLES.has(user.role_code)) {
     params.push(user.id);
-    access = " AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')))";
+    access = " AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')))";
   }
   const { rows } = await q(
     "SELECT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts ca ON ca.customer_id=c.id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.order_number=$1" + access + ' LIMIT 1',
@@ -1134,7 +1281,7 @@ const listVisibleOrders = async (user,paging=null) => {
     return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT $2 OFFSET $3",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$1 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$1 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')) ORDER BY s.updated_at DESC,s.created_at DESC LIMIT $2 OFFSET $3",
     [user.id,limit,offset]
   );
   return sortOrdersByWorkflow(await attachTransfers(rows.map((row) => orderViewForUser(row, user))));
@@ -1174,7 +1321,7 @@ const searchVisibleOrders = async (user, term) => {
      LEFT JOIN users tech ON tech.id=s.assigned_technician_id
      WHERE ${commonMatch}
        AND (
-         EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))
+         EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)))
          OR EXISTS(
            SELECT 1 FROM service_order_transfers t
            JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id)
@@ -1197,7 +1344,7 @@ const listVisibleCustomerOrders = async (user, customerId) => {
     return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
   }
   const { rows } = await q(
-    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id)) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY s.created_at DESC LIMIT 100",
+    "SELECT DISTINCT s.*,p.name AS point_name,c.first_name,c.last_name,c.email,c.phone,d.brand,d.model,d.imei,d.serial_number,d.notes AS device_notes,tech.name AS technician_name,tech.email AS technician_email,tech.role_code AS technician_role FROM service_orders s JOIN points p ON p.id=s.point_id JOIN customers c ON c.id=s.customer_id JOIN devices d ON d.id=s.device_id LEFT JOIN users tech ON tech.id=s.assigned_technician_id WHERE s.customer_id=$1 AND (EXISTS(SELECT 1 FROM user_point_access a WHERE a.user_id=$2 AND (a.point_id=COALESCE(s.home_point_id,s.point_id) OR a.point_id=COALESCE(s.current_point_id,s.home_point_id,s.point_id))) OR EXISTS(SELECT 1 FROM service_order_transfers t JOIN user_point_access a ON a.user_id=$2 AND (a.point_id=t.from_point_id OR a.point_id=t.to_point_id) WHERE t.service_order_id=s.id AND t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED'))) ORDER BY s.created_at DESC LIMIT 100",
     [customerId, user.id]
   );
   return attachTransfers(rows.map((row) => orderViewForUser(row, user)));
@@ -1302,10 +1449,11 @@ const escapeHtml = (value) => String(value ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-const loadActiveMailSender = async (pointId) => {
+const loadUserMailSender = async (userId) => {
+  if (!userId) return null;
   const { rows } = await q(
-    "SELECT point_id AS sender_point_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,connected_at FROM point_email_senders WHERE status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN point_id=$1 THEN 0 ELSE 1 END,connected_at DESC NULLS LAST,updated_at DESC LIMIT 1",
-    [pointId]
+    "SELECT user_id AS sender_user_id,sender_email,google_sub,refresh_token_ciphertext,oauth_client_secret_ciphertext,granted_scopes,status,last_error,connected_at,updated_at FROM user_gmail_credentials WHERE user_id=$1 AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1",
+    [userId]
   );
   const sender = rows[0] || null;
   if (!sender) return null;
@@ -1313,10 +1461,29 @@ const loadActiveMailSender = async (pointId) => {
   return sender;
 };
 
-const recoverNoSenderNotifications = async (pointId) => {
+const gmailStatusForUser = async (user) => {
+  if (!user?.id) return { connected:false, reason:'NOT_CONNECTED' };
+  if (user.role_code === 'OWNER') return { connected:false, skipped:true, reason:'OWNER_PRIVACY' };
+  const row = (await q(
+    "SELECT sender_email,status,last_error,connected_at FROM user_gmail_credentials WHERE user_id=$1 LIMIT 1",
+    [user.id]
+  )).rows[0];
+  if (!row) return { connected:false, reason:'NOT_CONNECTED' };
+  return {
+    connected:row.status==='ACTIVE',
+    needsReconnect:row.status==='REVOKED',
+    email:operationalIdentityEmail(row.sender_email,user.role_code),
+    status:row.status,
+    reason:row.status==='ACTIVE'?'ACTIVE':row.status,
+    lastError:row.last_error||null,
+    connectedAt:row.connected_at
+  };
+};
+
+const recoverNoSenderNotificationsForUser = async (userId) => {
   const { rows } = await q(
-    "UPDATE notification_outbox n SET status='PENDING',attempts=0,last_error=NULL,available_at=now(),updated_at=now() FROM service_orders s WHERE n.service_order_id=s.id AND s.point_id=$1 AND n.status='FAILED' AND n.last_error='Brak aktywnego, kompletnego nadawcy Gmail dla punktu.' RETURNING n.id",
-    [pointId]
+    "UPDATE notification_outbox SET status='PENDING',attempts=0,last_error=NULL,available_at=now(),updated_at=now() WHERE user_id=$1 AND status='FAILED' AND last_error IN ('Brak aktywnego, kompletnego nadawcy Gmail dla punktu.','Brak aktywnego Gmail zalogowanego pracownika.') RETURNING id",
+    [userId]
   );
   let sent = 0;
   for (const row of rows) {
@@ -1333,84 +1500,71 @@ const autoConnectGmailFromPrimaryLogin = async (loginPayload, profile, tokens) =
   const userId = cleanText(loginPayload?.user?.id, 120);
   const status = cleanText(loginPayload?.user?.status, 40).toUpperCase();
 
-  // OWNER musi pozostać anonimowy operacyjnie. Użycie jego prywatnej skrzynki
-  // jako nadawcy ujawniłoby adres odbiorcom wiadomości.
+  // OWNER pozostaje anonimowy operacyjnie. Pozostali aktywni pracownicy
+  // wysyłają wiadomości wyłącznie ze swojego konta Google.
   if (role === 'OWNER') {
     return { connected:false, skipped:true, reason:'OWNER_PRIVACY', pointId:pointId || null };
   }
-  if (!GMAIL_MANAGE_ROLES.has(role) || status !== 'ACTIVE' || !pointId || !userId) {
-    return { connected:false, skipped:true, reason:'ROLE_OR_POINT', pointId:pointId || null };
+  if (!role || status !== 'ACTIVE' || !userId) {
+    return { connected:false, skipped:true, reason:'ROLE_OR_STATUS', pointId:pointId || null };
   }
 
   const refreshToken = cleanText(tokens?.refresh_token, 4096);
   const grantedScopes = String(tokens?.scope || '').split(/\s+/).filter(Boolean);
   if (!grantedScopes.includes('https://www.googleapis.com/auth/gmail.send')) {
-    return { connected:false, skipped:false, reason:'GMAIL_SCOPE_NOT_GRANTED', pointId };
+    return { connected:false, skipped:false, reason:'GMAIL_SCOPE_NOT_GRANTED', pointId:pointId || null };
   }
+
   if (!refreshToken) {
     const existing = (await q(
-      "SELECT sender_email,refresh_token_ciphertext,status FROM point_email_senders WHERE point_id=$1 AND status='ACTIVE' AND lower(sender_email)=lower($2) AND refresh_token_ciphertext IS NOT NULL LIMIT 1",
-      [pointId,profile.email]
+      "SELECT sender_email,google_sub,refresh_token_ciphertext,status FROM user_gmail_credentials WHERE user_id=$1 AND status='ACTIVE' AND lower(sender_email)=lower($2) AND (google_sub=$3 OR google_sub IS NULL) AND refresh_token_ciphertext IS NOT NULL LIMIT 1",
+      [userId,profile.email,profile.sub]
     )).rows[0];
-
     if (existing?.refresh_token_ciphertext) {
       try {
         await refreshGmailAccess(decryptSecret(existing.refresh_token_ciphertext), '');
-        const user = await loadUser(userId);
-        if (user) {
-          await audit(
-            { user, clientType:'DESKTOP' },
-            'GMAIL_REUSED_AT_LOGIN',
-            'point',
-            pointId,
-            pointId,
-            {
-              senderEmail: operationalIdentityEmail(existing.sender_email, role),
-              identitySource:'EXISTING_SERVER_REFRESH_TOKEN',
-              credentialLocation:'SERVER'
-            }
-          );
-        }
+        await q("UPDATE user_gmail_credentials SET google_sub=COALESCE(google_sub,$2),last_error=NULL,status='ACTIVE',updated_at=now() WHERE user_id=$1",[userId,profile.sub]);
         return {
           connected:true,
           skipped:false,
-          pointId,
+          pointId:pointId || null,
           email:operationalIdentityEmail(existing.sender_email, role),
           status:'ACTIVE',
-          reason:'EXISTING_SENDER_REUSED'
+          reason:'EXISTING_USER_SENDER_REUSED'
         };
-      } catch (error) {
-        console.error('[gmail reuse at login]', error);
+      } catch {
+        console.warn('[gmail user credential reuse at login] stored credential could not be refreshed');
       }
     }
-
-    return { connected:false, skipped:false, reason:'REFRESH_TOKEN_MISSING', pointId };
+    return { connected:false, skipped:false, reason:'REFRESH_TOKEN_MISSING', pointId:pointId || null };
   }
 
   try {
     await refreshGmailAccess(refreshToken, '');
     await q(
-      "INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
-      [pointId,userId,profile.email,encryptSecret(refreshToken)]
+      "INSERT INTO user_gmail_credentials(user_id,google_sub,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,granted_scopes,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,$5::text[],'ACTIVE',NULL,now(),now()) ON CONFLICT(user_id) DO UPDATE SET google_sub=EXCLUDED.google_sub,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,granted_scopes=EXCLUDED.granted_scopes,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
+      [userId,profile.sub,profile.email,encryptSecret(refreshToken),grantedScopes]
     );
-    await q(
-      "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,updated_by_user_id,updated_at) VALUES($1,true,$2::text[],'LockOn ServiceOS',$3,now()) ON CONFLICT(point_id) DO NOTHING",
-      [pointId,[...DEFAULT_NOTIFY_STATUSES],userId]
-    );
+    if (pointId) {
+      await q(
+        "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,updated_by_user_id,updated_at) VALUES($1,true,$2::text[],'LockOn ServiceOS',$3,now()) ON CONFLICT(point_id) DO NOTHING",
+        [pointId,[...DEFAULT_NOTIFY_STATUSES],userId]
+      );
+    }
 
-    const recovery = await recoverNoSenderNotifications(pointId);
+    const recovery = await recoverNoSenderNotificationsForUser(userId);
     const user = await loadUser(userId);
     if (user) {
       await audit(
         { user, clientType:'DESKTOP' },
         'GMAIL_CONNECTED_AT_LOGIN',
-        'point',
-        pointId,
-        pointId,
+        'user',
+        userId,
+        pointId || null,
         {
           senderEmail: operationalIdentityEmail(profile.email, role),
           identitySource:'PRIMARY_GOOGLE_OAUTH',
-          credentialLocation:'SERVER',
+          credentialLocation:'SERVER_USER',
           recoveredNotifications:recovery.recovered,
           recoveredSent:recovery.sent
         }
@@ -1419,20 +1573,53 @@ const autoConnectGmailFromPrimaryLogin = async (loginPayload, profile, tokens) =
     return {
       connected:true,
       skipped:false,
-      pointId,
+      pointId:pointId || null,
       email:operationalIdentityEmail(profile.email, role),
       status:'ACTIVE',
       recoveredNotifications:recovery.recovered,
       recoveredSent:recovery.sent
     };
-  } catch (error) {
-    console.error('[gmail auto-connect at login]', error);
+  } catch {
+    console.warn('[gmail auto-connect at login] connection failed');
     return {
       connected:false,
       skipped:false,
-      pointId,
+      pointId:pointId || null,
       reason:'GMAIL_AUTO_CONNECT_FAILED'
     };
+  }
+};
+
+const autoConnectMeetingGmailFromOwner = async (loginPayload, profile, tokens) => {
+  const role=cleanText(loginPayload?.user?.role,40).toUpperCase();
+  const userId=cleanText(loginPayload?.user?.id,120);
+  const status=cleanText(loginPayload?.user?.status,40).toUpperCase();
+  if(role!=='OWNER'||status!=='ACTIVE'||!userId)return {connected:false,skipped:true,reason:'NOT_OWNER'};
+  const scopes=String(tokens?.scope||'').split(/\s+/).filter(Boolean);
+  if(!scopes.includes('https://www.googleapis.com/auth/gmail.send'))return {connected:false,skipped:false,reason:'GMAIL_SCOPE_NOT_GRANTED'};
+  const refreshToken=cleanText(tokens?.refresh_token,4096);
+  if(!refreshToken){
+    const existing=(await q("SELECT sender_email,refresh_token_ciphertext,status FROM meeting_email_sender WHERE id='default' LIMIT 1")).rows[0];
+    if(existing?.status==='ACTIVE'&&existing.refresh_token_ciphertext){
+      try{
+        await refreshGmailAccess(decryptSecret(existing.refresh_token_ciphertext),'');
+        return {connected:true,skipped:false,email:existing.sender_email,status:'ACTIVE',reason:'EXISTING_MEETING_SENDER_REUSED'};
+      }catch{
+        console.warn('[meeting gmail credential reuse] stored credential could not be refreshed');
+      }
+    }
+    return {connected:false,skipped:false,reason:'REFRESH_TOKEN_MISSING'};
+  }
+  try{
+    await refreshGmailAccess(refreshToken,'');
+    await q(
+      "INSERT INTO meeting_email_sender(id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES('default',$1,$2,$3,NULL,'ACTIVE',NULL,now(),now()) ON CONFLICT(id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
+      [userId,profile.email,encryptSecret(refreshToken)]
+    );
+    return {connected:true,skipped:false,email:profile.email,status:'ACTIVE'};
+  }catch{
+    console.warn('[meeting gmail auto-connect] connection failed');
+    return {connected:false,skipped:false,reason:'MEETING_GMAIL_AUTO_CONNECT_FAILED'};
   }
 };
 
@@ -2134,18 +2321,30 @@ const requireCustomerAccountAccess = async (user, customerId, accessMode = 'SUPP
   const ids=await visiblePointIds(user);
   if (!ids.length) throw Object.assign(new Error('Brak dostępu do tego klienta.'),{status:403,code:'CUSTOMER_FORBIDDEN'});
   const visible=(await q(
-    "SELECT 1 WHERE EXISTS(SELECT 1 FROM service_orders s WHERE s.customer_id=$1 AND COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[])) OR EXISTS(SELECT 1 FROM customer_quote_requests r WHERE r.customer_id=$1 AND (r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) LIMIT 1",
+    accessMode==='SERVICE'
+      ? "SELECT 1 WHERE EXISTS(SELECT 1 FROM service_orders s WHERE s.customer_id=$1 AND (COALESCE(s.home_point_id,s.point_id)=ANY($2::text[]) OR COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[]))) LIMIT 1"
+      : "SELECT 1 WHERE EXISTS(SELECT 1 FROM service_orders s WHERE s.customer_id=$1 AND (COALESCE(s.home_point_id,s.point_id)=ANY($2::text[]) OR COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[]))) OR EXISTS(SELECT 1 FROM customer_quote_requests r WHERE r.customer_id=$1 AND (r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) LIMIT 1",
     [customerId,ids]
   )).rows[0];
   if (!visible) throw Object.assign(new Error('Brak dostępu do tego klienta.'),{status:403,code:'CUSTOMER_FORBIDDEN'});
   return customer;
 };
 
-const customerAccountManagementOverview = async (user, search = '') => {
-  requireSupportAccess(user);
+const customerAccountManagementOverview = async (user, search = '', accessMode = 'SUPPORT') => {
+  const serviceView=accessMode==='SERVICE';
+  if(serviceView){
+    if(user?.role_code!=='USER'){
+      throw Object.assign(new Error('Ten uproszczony widok klientów jest dostępny dla pracownika punktu.'),{status:403,code:'SERVICE_CUSTOMER_FORBIDDEN'});
+    }
+  }else{
+    requireSupportAccess(user);
+  }
+  const supportView=hasSupportAccess(user);
   const ids=GLOBAL_ROLES.has(user.role_code) ? [] : await visiblePointIds(user);
   const params=[GLOBAL_ROLES.has(user.role_code),ids];
-  let filter=" WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[])) OR EXISTS(SELECT 1 FROM customer_quote_requests r0 WHERE r0.customer_id=c.id AND (r0.requested_point_id=ANY($2::text[]) OR r0.routed_point_id=ANY($2::text[]))))";
+  let filter=serviceView
+    ? " WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND (COALESCE(s0.home_point_id,s0.point_id)=ANY($2::text[]) OR COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[]))))"
+    : " WHERE ($1::boolean OR EXISTS(SELECT 1 FROM service_orders s0 WHERE s0.customer_id=c.id AND (COALESCE(s0.home_point_id,s0.point_id)=ANY($2::text[]) OR COALESCE(s0.current_point_id,s0.home_point_id,s0.point_id)=ANY($2::text[]))) OR EXISTS(SELECT 1 FROM customer_quote_requests r0 WHERE r0.customer_id=c.id AND (r0.requested_point_id=ANY($2::text[]) OR r0.routed_point_id=ANY($2::text[]))))";
   const term=cleanText(search,120);
   if (term) {
     params.push('%'+term+'%');
@@ -2157,10 +2356,10 @@ const customerAccountManagementOverview = async (user, search = '') => {
     "a.notify_service_updates,a.notify_ready_for_pickup,a.notify_quote_updates,a.notify_messages,"+
     "(SELECT count(*)::int FROM customer_portal_sessions ps WHERE ps.customer_id=c.id AND ps.expires_at>now()) AS active_sessions,"+
     "(SELECT max(ps.last_seen_at) FROM customer_portal_sessions ps WHERE ps.customer_id=c.id AND ps.expires_at>now()) AS last_seen_at,"+
-    "(SELECT count(*)::int FROM service_orders s WHERE s.customer_id=c.id) AS order_count,"+
-    "(SELECT count(*)::int FROM customer_quote_requests r WHERE r.customer_id=c.id AND r.status IN ('OPEN','QUOTED')) AS open_quote_count "+
+    "(SELECT count(*)::int FROM service_orders s WHERE s.customer_id=c.id AND ($1::boolean OR COALESCE(s.home_point_id,s.point_id)=ANY($2::text[]) OR COALESCE(s.current_point_id,s.home_point_id,s.point_id)=ANY($2::text[]))) AS order_count,"+
+    "(SELECT count(*)::int FROM customer_quote_requests r WHERE r.customer_id=c.id AND r.status IN ('OPEN','QUOTED') AND ($1::boolean OR r.requested_point_id=ANY($2::text[]) OR r.routed_point_id=ANY($2::text[]))) AS open_quote_count "+
     "FROM customers c LEFT JOIN customer_portal_accounts a ON a.customer_id=c.id"+filter+
-    " ORDER BY COALESCE(a.last_login_at,c.updated_at) DESC,c.last_name,c.first_name LIMIT 250",
+    " ORDER BY c.updated_at DESC,c.last_name,c.first_name LIMIT 250",
     params
   )).rows;
   const customers=rows.map(row=>({
@@ -2168,20 +2367,20 @@ const customerAccountManagementOverview = async (user, search = '') => {
     name:[row.first_name,row.last_name].filter(Boolean).join(' '),
     email:row.email||null,
     phone:row.phone||null,
-    codeCreatedAt:row.portal_code_created_at||null,
-    googleLinked:Boolean(row.google_sub),
-    googleEmail:row.google_email||null,
-    googleName:row.google_name||null,
-    googlePicture:row.google_picture_url||null,
-    linkedAt:row.linked_at||null,
-    lastLoginAt:row.last_login_at||null,
-    blocked:Boolean(row.blocked_at),
-    blockedAt:row.blocked_at||null,
-    blockedReason:row.blocked_reason||null,
-    activeSessions:Number(row.active_sessions||0),
-    lastSeenAt:row.last_seen_at||null,
+    codeCreatedAt:supportView?(row.portal_code_created_at||null):null,
+    googleLinked:supportView?Boolean(row.google_sub):false,
+    googleEmail:supportView?(row.google_email||null):null,
+    googleName:supportView?(row.google_name||null):null,
+    googlePicture:supportView?(row.google_picture_url||null):null,
+    linkedAt:supportView?(row.linked_at||null):null,
+    lastLoginAt:supportView?(row.last_login_at||null):null,
+    blocked:supportView?Boolean(row.blocked_at):false,
+    blockedAt:supportView?(row.blocked_at||null):null,
+    blockedReason:supportView?(row.blocked_reason||null):null,
+    activeSessions:supportView?Number(row.active_sessions||0):0,
+    lastSeenAt:supportView?(row.last_seen_at||null):null,
     orders:Number(row.order_count||0),
-    openQuotes:Number(row.open_quote_count||0),
+    openQuotes:supportView?Number(row.open_quote_count||0):0,
     notificationPreferences:{
       serviceUpdates:row.notify_service_updates!==false,
       readyForPickup:row.notify_ready_for_pickup!==false,
@@ -2192,9 +2391,9 @@ const customerAccountManagementOverview = async (user, search = '') => {
   return {
     stats:{
       customers:customers.length,
-      googleAccounts:customers.filter(item=>item.googleLinked).length,
-      activeSessions:customers.reduce((sum,item)=>sum+item.activeSessions,0),
-      blocked:customers.filter(item=>item.blocked).length
+      googleAccounts:supportView?customers.filter(item=>item.googleLinked).length:0,
+      activeSessions:supportView?customers.reduce((sum,item)=>sum+item.activeSessions,0):0,
+      blocked:supportView?customers.filter(item=>item.blocked).length:0
     },
     customers
   };
@@ -2416,9 +2615,102 @@ const sendGmail = async (sender, recipient, subject, textBody, htmlBody, display
   return { id: String(payload.id), threadId: payload.threadId ? String(payload.threadId) : null };
 };
 
+const loadMeetingMailSender = async () => {
+  const sender=(await q("SELECT sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error FROM meeting_email_sender WHERE id='default' AND status='ACTIVE' AND refresh_token_ciphertext IS NOT NULL LIMIT 1")).rows[0]||null;
+  if(!sender)return null;
+  if(!GOOGLE_DESKTOP_CLIENT_SECRET&&!sender.oauth_client_secret_ciphertext)return null;
+  return sender;
+};
+
+const meetingEmailRecipients = async (meetingId) => {
+  const {rows}=await q(
+    "SELECT DISTINCT u.id,u.email FROM users u WHERE u.status='ACTIVE' AND u.blocked_at IS NULL AND u.role_code IS NOT NULL AND ("+
+    "EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=$1 AND a.audience_type='ALL') OR "+
+    "EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=$1 AND a.audience_type='USER' AND a.user_id=u.id) OR "+
+    "EXISTS(SELECT 1 FROM meeting_audience a JOIN user_point_access upa ON upa.point_id=a.point_id AND upa.user_id=u.id WHERE a.meeting_id=$1 AND a.audience_type='POINT'))",
+    [meetingId]
+  );
+  return rows.filter((row)=>normalizeEmail(row.email));
+};
+
+const queueMeetingEmailEvent = async (meetingId,eventKey) => {
+  const recipients=await meetingEmailRecipients(meetingId);
+  let queued=0;
+  for(const recipient of recipients){
+    const result=await q(
+      "INSERT INTO meeting_email_outbox(id,meeting_id,recipient_user_id,recipient_email,event_key,status) VALUES($1,$2,$3,$4,$5,'PENDING') ON CONFLICT(meeting_id,recipient_user_id,event_key) DO NOTHING RETURNING id",
+      [makeId('mml'),meetingId,recipient.id,recipient.email,eventKey]
+    );
+    queued+=Number(result.rowCount||0);
+  }
+  return {eligible:recipients.length,queued};
+};
+
+const meetingEmailContent = (meeting,eventKey) => {
+  const starts=new Intl.DateTimeFormat('pl-PL',{dateStyle:'long',timeStyle:'short',timeZone:'Europe/Warsaw'}).format(new Date(meeting.starts_at));
+  const cancelled=String(eventKey).startsWith('CANCELLED');
+  const changed=String(eventKey).startsWith('RESCHEDULED');
+  const subject=cancelled
+    ? 'LockOn ServiceOS — spotkanie zostało anulowane'
+    : changed
+      ? 'LockOn ServiceOS — termin spotkania został zmieniony'
+      : 'LockOn ServiceOS — zaproszenie na spotkanie';
+  const title=cleanText(meeting.title,120);
+  const description=cleanText(meeting.description||'',1800);
+  const intro=cancelled
+    ? 'Zaplanowane spotkanie zostało anulowane.'
+    : changed
+      ? 'Termin spotkania został zmieniony.'
+      : 'Zapraszamy na wewnętrzne spotkanie zespołu w LockOn ServiceOS.';
+  const action=cancelled?'Nie musisz nic robić.':'Otwórz ServiceOS i zapisz się na spotkanie na ekranie Start.';
+  const text=[intro,'','Spotkanie: '+title,'Termin: '+starts,description?('Opis: '+description):'', '',action].filter((line)=>line!==null).join('\n');
+  const html='<!doctype html><html lang="pl"><body style="margin:0;background:#0b0e12;color:#edf1f4;font-family:Arial,sans-serif">'+
+    '<div style="max-width:600px;margin:auto;padding:30px 16px"><div style="font-size:13px;font-weight:850">LockOn <span style="color:#7e8994">ServiceOS</span></div>'+
+    '<div style="margin-top:18px;padding:24px;border:1px solid #293039;border-radius:18px;background:#12171d">'+
+    '<div style="font-size:11px;color:#ff8f69;text-transform:uppercase;letter-spacing:.08em;font-weight:850">'+escapeHtml(cancelled?'Spotkanie anulowane':changed?'Zmiana terminu':'Zaproszenie na spotkanie')+'</div>'+
+    '<h1 style="font-size:22px;margin:9px 0 12px">'+escapeHtml(title)+'</h1>'+
+    '<p style="font-size:14px;color:#d9dfe5"><strong>'+escapeHtml(starts)+'</strong></p>'+
+    (description?'<p style="font-size:13px;color:#aeb8c1;line-height:1.55">'+escapeHtml(description)+'</p>':'')+
+    '<p style="margin-top:20px;font-size:13px;color:#d9dfe5">'+escapeHtml(action)+'</p>'+
+    '</div><p style="font-size:10px;color:#66717b;text-align:center">Wiadomość organizacyjna LockOn ServiceOS.</p></div></body></html>';
+  return {subject,text,html};
+};
+
+const processMeetingEmail = async (outboxId) => {
+  const item=(await q(
+    "SELECT o.*,m.title,m.description,m.starts_at,m.status AS meeting_status FROM meeting_email_outbox o JOIN meetings m ON m.id=o.meeting_id WHERE o.id=$1 LIMIT 1",
+    [outboxId]
+  )).rows[0];
+  if(!item)return {sent:false,reason:'NOT_FOUND'};
+  const attempt=Number(item.attempts||0)+1;
+  const retryMinutes=Math.min(240,5*Math.pow(2,Math.max(0,attempt-1)));
+  const nextAttemptAt=new Date(Date.now()+retryMinutes*60_000);
+  const sender=await loadMeetingMailSender();
+  if(!sender){
+    const error='Brak aktywnego adminowskiego Gmail dla zaproszeń na spotkania.';
+    await q("UPDATE meeting_email_outbox SET status='FAILED',attempts=$2,last_error=$3,available_at=$4,updated_at=now() WHERE id=$1",[outboxId,attempt,error,nextAttemptAt]);
+    return {sent:false,reason:'MEETING_SENDER_NOT_CONFIGURED',attempts:attempt};
+  }
+  const content=meetingEmailContent(item,item.event_key);
+  try{
+    await q("UPDATE meeting_email_outbox SET status='PROCESSING',attempts=$2,last_error=NULL,updated_at=now() WHERE id=$1",[outboxId,attempt]);
+    const sent=await sendGmail(sender,item.recipient_email,content.subject,content.text,content.html,'LockOn ServiceOS');
+    await q("UPDATE meeting_email_outbox SET status='SENT',sent_at=now(),provider_message_id=$2,last_error=NULL,updated_at=now() WHERE id=$1",[outboxId,sent.id]);
+    await q("UPDATE meeting_email_sender SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE id='default'");
+    return {sent:true,messageId:sent.id,attempts:attempt};
+  }catch(error){
+    const message=cleanText(error instanceof Error?error.message:error,500);
+    await q("UPDATE meeting_email_outbox SET status='FAILED',last_error=$2,available_at=$3,updated_at=now() WHERE id=$1",[outboxId,message,nextAttemptAt]);
+    if(isGmailReauthError(error))await q("UPDATE meeting_email_sender SET status='REVOKED',last_error=$1,updated_at=now() WHERE id='default'",[message]);
+    else await q("UPDATE meeting_email_sender SET last_error=$1,updated_at=now() WHERE id='default'",[message]);
+    return {sent:false,reason:isGmailReauthError(error)?'MEETING_GMAIL_REAUTH_REQUIRED':'SEND_FAILED',attempts:attempt};
+  }
+};
+
 const sendCustomerPortalEventEmail = async ({
   customerId,
   pointId,
+  senderUserId,
   preference,
   subject,
   title,
@@ -2429,8 +2721,8 @@ const sendCustomerPortalEventEmail = async ({
   const prefs=await customerNotificationPreferences(customerId);
   if(preference==='quoteUpdates'&&prefs.quoteUpdates===false)return {sent:false,reason:'CUSTOMER_PREF_DISABLED'};
   if(preference==='messages'&&prefs.messages===false)return {sent:false,reason:'CUSTOMER_PREF_DISABLED'};
-  const sender=await loadActiveMailSender(pointId);
-  if(!sender)return {sent:false,reason:'NO_SENDER'};
+  const sender=await loadUserMailSender(senderUserId);
+  if(!sender)return {sent:false,reason:'NO_USER_SENDER'};
   const settings=await mailSettingsForPoint(pointId);
   const account=await customerPortalAccount(customerId);
   const portalUrl=PUBLIC_PORTAL_URL+'/klient.html'+(account?.google_sub?'?google=1':'');
@@ -2454,7 +2746,7 @@ const sendCustomerPortalEventEmail = async ({
 
 const processNotification = async (notificationId) => {
   const { rows } = await q(
-    "SELECT n.id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,s.customer_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,ca.google_sub AS customer_google_sub,d.brand,d.model,e.sender_point_id,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts ca ON ca.customer_id=c.id JOIN devices d ON d.id=s.device_id LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id,pe.sender_email,pe.refresh_token_ciphertext,pe.oauth_client_secret_ciphertext,pe.status AS sender_status FROM point_email_senders pe WHERE pe.status='ACTIVE' AND pe.refresh_token_ciphertext IS NOT NULL ORDER BY CASE WHEN pe.point_id=s.point_id THEN 0 ELSE 1 END,pe.connected_at DESC NULLS LAST,pe.updated_at DESC LIMIT 1) e ON true LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
+    "SELECT n.id,n.user_id AS sender_user_id,n.recipient,n.service_order_id,n.template_key,n.payload,n.attempts,n.subject,n.body_text,n.body_html,s.order_number,s.status,s.point_id,s.customer_id,p.name AS point_name,cp.name AS current_point_name,c.first_name,ca.google_sub AS customer_google_sub,d.brand,d.model,e.sender_email,e.refresh_token_ciphertext,e.oauth_client_secret_ciphertext,e.status AS sender_status,coalesce(ns.sender_display_name,'LockOn ServiceOS') AS sender_display_name,ns.footer_text FROM notification_outbox n JOIN service_orders s ON s.id=n.service_order_id JOIN points p ON p.id=s.point_id LEFT JOIN points cp ON cp.id=s.current_point_id JOIN customers c ON c.id=s.customer_id LEFT JOIN customer_portal_accounts ca ON ca.customer_id=c.id JOIN devices d ON d.id=s.device_id LEFT JOIN user_gmail_credentials e ON e.user_id=n.user_id LEFT JOIN point_notification_settings ns ON ns.point_id=s.point_id WHERE n.id=$1 LIMIT 1",
     [notificationId]
   );
   const item = rows[0];
@@ -2465,12 +2757,12 @@ const processNotification = async (notificationId) => {
   const nextAttemptAt = new Date(Date.now() + retryMinutes * 60_000);
 
   if (!item.sender_email || item.sender_status !== 'ACTIVE' || !item.refresh_token_ciphertext || (!GOOGLE_DESKTOP_CLIENT_SECRET && !item.oauth_client_secret_ciphertext)) {
-    const error = 'Brak aktywnego, kompletnego nadawcy Gmail dla punktu.';
+    const error = 'Brak aktywnego Gmail zalogowanego pracownika.';
     await q(
       "UPDATE notification_outbox SET status='FAILED',attempts=$2,last_error=$3,available_at=$4,updated_at=now() WHERE id=$1",
       [notificationId, attempt, error, nextAttemptAt]
     );
-    return { sent: false, reason: 'NO_SENDER', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
+    return { sent: false, reason: 'NO_SENDER', senderUserId:item.sender_user_id||null, attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
   }
 
   try{
@@ -2516,8 +2808,8 @@ const processNotification = async (notificationId) => {
     if(item.template_key==='SERVICE_INTAKE_CARD'){
       await q("UPDATE service_order_cards SET customer_email_sent_at=now(),customer_email_last_error=NULL,updated_at=now() WHERE service_order_id=$1",[item.service_order_id]);
     }
-    if(item.sender_point_id) await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1", [item.sender_point_id]);
-    return { sent: true, status: 'SENT', messageId: sent.id, attempts: attempt };
+    if(item.sender_user_id) await q("UPDATE user_gmail_credentials SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE user_id=$1", [item.sender_user_id]);
+    return { sent: true, status: 'SENT', messageId: sent.id, senderUserId:item.sender_user_id||null, attempts: attempt };
   } catch (error) {
     const message = cleanText(error instanceof Error ? error.message : error, 500);
     await q(
@@ -2528,11 +2820,11 @@ const processNotification = async (notificationId) => {
       await q("UPDATE service_order_cards SET customer_email_last_error=$2,updated_at=now() WHERE service_order_id=$1",[item.service_order_id,message]).catch(()=>undefined);
     }
     if(isGmailReauthError(error)){
-      if(item.sender_point_id) await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1", [item.sender_point_id, message]);
+      if(item.sender_user_id) await q("UPDATE user_gmail_credentials SET status='REVOKED',last_error=$2,updated_at=now() WHERE user_id=$1", [item.sender_user_id, message]);
     }else{
-      if(item.sender_point_id) await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1", [item.sender_point_id, message]);
+      if(item.sender_user_id) await q("UPDATE user_gmail_credentials SET last_error=$2,updated_at=now() WHERE user_id=$1", [item.sender_user_id, message]);
     }
-    return { sent: false, status: 'FAILED', reason: isGmailReauthError(error) ? 'GMAIL_REAUTH_REQUIRED' : 'SEND_FAILED', attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
+    return { sent: false, status: 'FAILED', reason: isGmailReauthError(error) ? 'GMAIL_REAUTH_REQUIRED' : 'SEND_FAILED', senderUserId:item.sender_user_id||null, attempts: attempt, nextAttemptAt: nextAttemptAt.toISOString() };
   }
 };
 
@@ -2985,10 +3277,12 @@ const route = async (request) => {
     if(!triggerId)return json(request,{error:'TRIGGER_REQUIRED'},403);
     const triggerBody=await readJson(request).catch(()=>({}));
     const {rows}=await q("SELECT id FROM notification_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY available_at ASC,created_at ASC LIMIT 25");
-    const results=[];
+    const meetingRows=(await q("SELECT id FROM meeting_email_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY available_at ASC,created_at ASC LIMIT 25")).rows;
+    const results=[],meetingResults=[];
     for(const row of rows)results.push({id:row.id,...(await processNotification(row.id))});
-    console.log('[notification worker]',{triggerId,scheduledAt:triggerBody?.data?.scheduled_at||null,processed:results.length});
-    return json(request,{ok:true,processed:results.length,results});
+    for(const row of meetingRows)meetingResults.push({id:row.id,...(await processMeetingEmail(row.id))});
+    console.log('[notification worker]',{triggerId,scheduledAt:triggerBody?.data?.scheduled_at||null,processed:results.length,meetingProcessed:meetingResults.length});
+    return json(request,{ok:true,processed:results.length,meetingProcessed:meetingResults.length,results,meetingResults});
   }
 
   if (method === 'OPTIONS') return new Response(null, { status: 204, headers: secureHeaders(request) });
@@ -3248,8 +3542,9 @@ const route = async (request) => {
       if (!tokens?.id_token) return json(request, { error:'GOOGLE_ID_TOKEN', message:'Google nie zwrócił tokena tożsamości.' }, 400);
       const profile = await verifyGoogle(String(tokens.id_token), GOOGLE_DESKTOP_CLIENT_ID);
       const login = await loginProfile(profile, 'DESKTOP', true);
+      const meetingGmail = await autoConnectMeetingGmailFromOwner(login, profile, tokens);
       const gmail = await autoConnectGmailFromPrimaryLogin(login, profile, tokens);
-      return json(request, { ...login, gmail });
+      return json(request, { ...login, gmail, meetingGmail });
     } catch (error) {
       if (error?.status) throw error;
       throw Object.assign(new Error('Google nie zakończył logowania.'), { status:401, code:'GOOGLE_AUTH_FAILED' });
@@ -3401,8 +3696,11 @@ const route = async (request) => {
 
   if (method === 'GET' && url.pathname === '/customer-accounts') {
     const session=await requireActive(request);
-    requireSupportAccess(session.user);
-    return json(request,await customerAccountManagementOverview(session.user,url.searchParams.get('q')||''));
+    const serviceView=session.user.role_code==='USER';
+    if(!serviceView&&!hasSupportAccess(session.user)){
+      throw Object.assign(new Error('Brak uprawnień do klientów tego punktu.'),{status:403,code:'SERVICE_CUSTOMER_FORBIDDEN'});
+    }
+    return json(request,await customerAccountManagementOverview(session.user,url.searchParams.get('q')||'',serviceView?'SERVICE':'SUPPORT'));
   }
 
   const customerAccountCodeMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/code$/);
@@ -3431,8 +3729,8 @@ const route = async (request) => {
     )).rows[0];
     if(!point?.point_id)return json(request,{error:'CUSTOMER_POINT_REQUIRED',message:'Nie znaleziono punktu powiązanego z tym klientem.'},409);
     await requirePoint(u,point.point_id);
-    const sender=await loadActiveMailSender(point.point_id);
-    if(!sender)return json(request,{error:'NO_SENDER',message:'Brak aktywnego nadawcy Gmail dla punktu klienta.'},409);
+    const sender=await loadUserMailSender(u.id);
+    if(!sender)return json(request,{error:'NO_USER_SENDER',message:'Twoje konto Google nie ma aktywnej zgody Gmail. Zaloguj się ponownie przez Google.'},409);
     const settings=await mailSettingsForPoint(point.point_id);
     const portalUrl=PUBLIC_PORTAL_URL+'/klient.html';
     const googleUrl=portalUrl+'?google=1';
@@ -3481,7 +3779,7 @@ const route = async (request) => {
   const customerAccountProfileMatch=url.pathname.match(/^\/customer-accounts\/([^/]+)\/profile$/);
   if(method==='POST'&&customerAccountProfileMatch){
     const session=await requireActive(request),u=session.user;
-    const customer=await requireCustomerAccountAccess(u,customerAccountProfileMatch[1]);
+    const customer=await requireCustomerAccountAccess(u,customerAccountProfileMatch[1],u.role_code==='USER'?'SERVICE':'SUPPORT');
     const body=await readJson(request);
     const firstName=cleanText(body.firstName,100);
     const lastName=cleanText(body.lastName,100);
@@ -3856,7 +4154,8 @@ const route = async (request) => {
       "'devices',(SELECT count(*) FROM devices)," +
       "'revenues',(SELECT count(*) FROM revenue_entries)," +
       "'sessions',(SELECT count(*) FROM auth_sessions)," +
-      "'notifications',(SELECT count(*) FROM notification_outbox)" +
+      "'notifications',(SELECT count(*) FROM notification_outbox)," +
+      "'meetings',(SELECT count(*) FROM meetings)" +
       ") AS counts"
     )).rows[0]?.counts||{};
     return json(request,{ok:true,counts});
@@ -3890,6 +4189,14 @@ const route = async (request) => {
         const result=await client.query('DELETE FROM '+table);
         deleted[table]=Number(result.rowCount||0);
       };
+      await remove('meeting_email_outbox');
+      await remove('meeting_email_sender');
+      await remove('meeting_events');
+      await remove('meeting_attendance');
+      await remove('meeting_participant_controls');
+      await remove('meeting_registrations');
+      await remove('meeting_audience');
+      await remove('meetings');
       await remove('notification_outbox');
       await remove('revenue_entries');
       await remove('service_order_notes');
@@ -3899,6 +4206,7 @@ const route = async (request) => {
       await remove('devices');
       await remove('customers');
       await remove('settlements');
+      await remove('user_gmail_credentials');
       await remove('point_email_senders');
       await remove('point_notification_settings');
       await remove('support_messages');
@@ -3915,6 +4223,14 @@ const route = async (request) => {
         "SELECT jsonb_build_object(" +
         "'points',(SELECT count(*) FROM points)," +
         "'users',(SELECT count(*) FROM users)," +
+        "'meetings',(SELECT count(*) FROM meetings)," +
+        "'meeting_audience',(SELECT count(*) FROM meeting_audience)," +
+        "'meeting_registrations',(SELECT count(*) FROM meeting_registrations)," +
+        "'meeting_attendance',(SELECT count(*) FROM meeting_attendance)," +
+        "'meeting_participant_controls',(SELECT count(*) FROM meeting_participant_controls)," +
+        "'meeting_events',(SELECT count(*) FROM meeting_events)," +
+        "'meeting_email_outbox',(SELECT count(*) FROM meeting_email_outbox)," +
+        "'meeting_email_sender',(SELECT count(*) FROM meeting_email_sender)," +
         "'service_orders',(SELECT count(*) FROM service_orders)," +
         "'service_order_transfers',(SELECT count(*) FROM service_order_transfers)," +
         "'service_order_notes',(SELECT count(*) FROM service_order_notes)," +
@@ -3923,6 +4239,7 @@ const route = async (request) => {
         "'devices',(SELECT count(*) FROM devices)," +
         "'revenue_entries',(SELECT count(*) FROM revenue_entries)," +
         "'settlements',(SELECT count(*) FROM settlements)," +
+        "'user_gmail_credentials',(SELECT count(*) FROM user_gmail_credentials)," +
         "'point_email_senders',(SELECT count(*) FROM point_email_senders)," +
         "'point_notification_settings',(SELECT count(*) FROM point_notification_settings)," +
         "'support_conversations',(SELECT count(*) FROM support_conversations)," +
@@ -4061,6 +4378,328 @@ const route = async (request) => {
     const r=result.rows[0],amount=Number(r.amount),approved=r.status==='APPROVED';const split=splitRevenueAmount(amount,r.technician_percent);
     await audit(session,'REVENUE_REVIEWED','revenue',r.id,r.point_id,{after:r.status,amount,technicianPercent:split.technicianPercent,settlementStatus:r.status});
     return json(request,{id:r.id,userId:r.user_id,pointId:r.point_id,serviceOrderId:r.service_order_id||null,amount,workDate:String(r.occurred_at).slice(0,10),note:r.note||'',status:r.status,splitTechnicianPercent:split.technicianPercent,splitBossPercent:split.bossPercent,technicianShare:approved?split.technicianShare:0,bossShare:approved?split.bossShare:0,submittedAt:r.created_at,reviewedAt:r.approved_at});
+  }
+
+  if(method==='GET'&&url.pathname==='/meetings'){
+    const session=await requireActive(request);
+    return json(request,{meetings:await listMeetingsForUser(session.user),serverTime:nowIso()});
+  }
+
+  if(method==='GET'&&url.pathname==='/meetings/options'){
+    const session=await requireActive(request),u=session.user;
+    if(!MEETING_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do planowania spotkań.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    const [pointsResult,usersResult]=await Promise.all([
+      q("SELECT id,name,city FROM points WHERE active=true ORDER BY name"),
+      q("SELECT id,name,email,role_code FROM users WHERE status='ACTIVE' AND blocked_at IS NULL AND role_code IS NOT NULL ORDER BY lower(name),lower(email)")
+    ]);
+    return json(request,{
+      points:pointsResult.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
+      users:usersResult.rows.map((row)=>({id:row.id,name:operationalIdentityName(row.name,row.email,row.role_code),email:operationalIdentityEmail(row.email,row.role_code),role:row.role_code}))
+    });
+  }
+
+  if(method==='POST'&&url.pathname==='/meetings'){
+    const session=await requireActive(request),u=session.user;
+    if(!MEETING_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Spotkania może planować OWNER lub BOSS.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    const body=await readJson(request);
+    const title=cleanText(body.title,120),description=cleanText(body.description,2000);
+    const startsAtRaw=cleanText(body.startsAt,80),startsAt=new Date(startsAtRaw);
+    const plannedMinutes=Math.max(10,Math.min(480,Math.trunc(Number(body.plannedMinutes)||60)));
+    const maxParticipants=Math.max(2,Math.min(500,Math.trunc(Number(body.maxParticipants)||50)));
+    if(title.length<3)return json(request,{error:'MEETING_TITLE',message:'Tytuł spotkania musi mieć co najmniej 3 znaki.'},400);
+    if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy termin spotkania.'},400);
+    if(startsAt.getTime()<Date.now()-10*60_000)return json(request,{error:'MEETING_DATE',message:'Nie można zaplanować spotkania w przeszłości.'},400);
+
+    let hostUserId=cleanText(body.hostUserId,120)||u.id;
+    const host=(await q("SELECT id,status,blocked_at FROM users WHERE id=$1 LIMIT 1",[hostUserId])).rows[0];
+    if(!host||host.status!=='ACTIVE'||host.blocked_at)return json(request,{error:'MEETING_HOST',message:'Wybrany prowadzący nie ma aktywnego konta.'},409);
+
+    const sourceAudience=Array.isArray(body.audience)&&body.audience.length?body.audience:[{type:'ALL'}];
+    const audience=[];
+    const seen=new Set();
+    for(const raw of sourceAudience.slice(0,100)){
+      const type=String(raw?.type||'').toUpperCase();
+      if(type==='ALL'){
+        if(!seen.has('ALL')){seen.add('ALL');audience.push({type:'ALL',pointId:null,userId:null});}
+      }else if(type==='POINT'){
+        const pointId=cleanText(raw?.pointId,80);if(!pointId)continue;
+        const key='POINT:'+pointId;if(!seen.has(key)){seen.add(key);audience.push({type:'POINT',pointId,userId:null});}
+      }else if(type==='USER'){
+        const userId=cleanText(raw?.userId,120);if(!userId)continue;
+        const key='USER:'+userId;if(!seen.has(key)){seen.add(key);audience.push({type:'USER',pointId:null,userId});}
+      }
+    }
+    if(!audience.length)audience.push({type:'ALL',pointId:null,userId:null});
+    if(audience.some((item)=>item.type==='ALL'))audience.splice(0,audience.length,{type:'ALL',pointId:null,userId:null});
+
+    const meetingId=makeId('mtg');
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      await client.query(
+        "INSERT INTO meetings(id,created_by_user_id,host_user_id,title,description,starts_at,planned_minutes,max_participants,allow_participant_audio,allow_participant_screen_share) VALUES($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8,$9,$10)",
+        [meetingId,u.id,hostUserId,title,description,startsAt.toISOString(),plannedMinutes,maxParticipants,body.allowParticipantAudio!==false,body.allowParticipantScreenShare===true]
+      );
+      for(const item of audience){
+        if(item.type==='POINT'){
+          const exists=(await client.query("SELECT id FROM points WHERE id=$1 AND active=true LIMIT 1",[item.pointId])).rows[0];
+          if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego punktu dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_POINT'});
+        }
+        if(item.type==='USER'){
+          const exists=(await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0];
+          if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_USER'});
+        }
+        await client.query(
+          "INSERT INTO meeting_audience(id,meeting_id,audience_type,point_id,user_id) VALUES($1,$2,$3,$4,$5)",
+          [makeId('mau'),meetingId,item.type,item.pointId,item.userId]
+        );
+      }
+      await client.query(
+        "INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,'CREATED',$4::jsonb)",
+        [makeId('mte'),meetingId,u.id,JSON.stringify({audienceCount:audience.length})]
+      );
+      await client.query('COMMIT');
+    }catch(error){
+      try{await client.query('ROLLBACK');}catch{}
+      throw error;
+    }finally{client.release();}
+    await audit(session,'MEETING_CREATED','meeting',meetingId,null,{startsAt:startsAt.toISOString(),plannedMinutes,maxParticipants,audience});
+    const invitationQueue=await queueMeetingEmailEvent(meetingId,'CREATED');
+    await meetingEvent(meetingId,u.id,'EMAIL_INVITATIONS_QUEUED',invitationQueue);
+    const meetings=await listMeetingsForUser(u);
+    return json(request,{ok:true,meeting:meetings.find((item)=>item.id===meetingId)||null},201);
+  }
+
+  const meetingUpdate=url.pathname.match(/^\/meetings\/([^/]+)$/);
+  if(method==='PATCH'&&meetingUpdate){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingUpdate[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zmieniać tego spotkania.'},403);
+    if(meeting.status!=='SCHEDULED')return json(request,{error:'MEETING_STATE',message:'Termin można zmienić tylko przed rozpoczęciem spotkania.'},409);
+    const body=await readJson(request);
+    const startsAtRaw=cleanText(body.startsAt,80),startsAt=new Date(startsAtRaw);
+    if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy nowy termin spotkania.'},400);
+    if(startsAt.getTime()<Date.now()-10*60_000)return json(request,{error:'MEETING_DATE',message:'Nie można ustawić spotkania w przeszłości.'},400);
+    const oldStartsAt=new Date(meeting.starts_at).toISOString();
+    const newStartsAt=startsAt.toISOString();
+    if(oldStartsAt===newStartsAt){
+      const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
+      return json(request,{ok:true,meeting:view,email:{eligible:0,queued:0,unchanged:true}});
+    }
+    const updated=(await q(
+      "UPDATE meetings SET starts_at=$2,updated_at=now() WHERE id=$1 AND status='SCHEDULED' RETURNING id",
+      [meetingId,newStartsAt]
+    )).rows[0];
+    if(!updated)return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
+    await meetingEvent(meetingId,u.id,'RESCHEDULED',{from:oldStartsAt,to:newStartsAt});
+    await audit(session,'MEETING_RESCHEDULED','meeting',meetingId,null,{from:oldStartsAt,to:newStartsAt});
+    const email=await queueMeetingEmailEvent(meetingId,'RESCHEDULED:'+Date.now()+':'+crypto.randomBytes(4).toString('hex'));
+    await meetingEvent(meetingId,u.id,'EMAIL_RESCHEDULE_QUEUED',email);
+    const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
+    return json(request,{ok:true,meeting:view,email});
+  }
+
+  const meetingJoinToken=url.pathname.match(/^\/meetings\/([^/]+)\/join-token$/);
+  if(method==='POST'&&meetingJoinToken){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingJoinToken[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(meeting.status!=='LIVE')return json(request,{error:'MEETING_NOT_LIVE',message:'Do pokoju można dołączyć dopiero po rozpoczęciu spotkania.'},409);
+    if(!await meetingEligible(u,meetingId)&&!meetingCanManage(u,meeting))return json(request,{error:'MEETING_NOT_ELIGIBLE',message:'To spotkanie nie jest przeznaczone dla Twojego konta.'},403);
+    if(!meetingCanManage(u,meeting)){
+      const registration=(await q("SELECT status FROM meeting_registrations WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meetingId,u.id])).rows[0];
+      if(registration?.status!=='REGISTERED')return json(request,{error:'MEETING_REGISTRATION_REQUIRED',message:'Najpierw zapisz się na spotkanie.'},409);
+    }
+    const payload=await createMeetingJoinToken(meeting,u);
+    await meetingEvent(meetingId,u.id,'JOIN_TOKEN_ISSUED',{identity:payload.identity});
+    return json(request,payload);
+  }
+
+  const meetingAttendanceAction=url.pathname.match(/^\/meetings\/([^/]+)\/attendance$/);
+  if(meetingAttendanceAction&&method==='POST'){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingAttendanceAction[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!await meetingEligible(u,meetingId)&&!meetingCanManage(u,meeting))return json(request,{error:'MEETING_NOT_ELIGIBLE'},403);
+    const body=await readJson(request),action=String(body.action||'').toUpperCase();
+    if(action==='JOIN'){
+      await q(
+        "INSERT INTO meeting_attendance(meeting_id,user_id,first_joined_at,last_joined_at,join_count,updated_at) VALUES($1,$2,now(),now(),1,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET first_joined_at=COALESCE(meeting_attendance.first_joined_at,now()),last_joined_at=now(),join_count=meeting_attendance.join_count+1,updated_at=now()",
+        [meetingId,u.id]
+      );
+      await meetingEvent(meetingId,u.id,'ATTENDANCE_JOIN',{});
+    }else if(action==='LEAVE'){
+      await q(
+        "UPDATE meeting_attendance SET total_seconds=total_seconds+GREATEST(0,LEAST(43200,EXTRACT(EPOCH FROM (now()-last_joined_at))::int)),last_left_at=now(),updated_at=now() WHERE meeting_id=$1 AND user_id=$2 AND last_joined_at IS NOT NULL AND (last_left_at IS NULL OR last_left_at<last_joined_at)",
+        [meetingId,u.id]
+      );
+      await meetingEvent(meetingId,u.id,'ATTENDANCE_LEAVE',{});
+    }else return json(request,{error:'MEETING_ATTENDANCE_ACTION'},400);
+    return json(request,{ok:true});
+  }
+
+  const meetingAttendanceList=url.pathname.match(/^\/meetings\/([^/]+)\/attendance$/);
+  if(meetingAttendanceList&&method==='GET'){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingAttendanceList[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN'},403);
+    const {rows}=await q(
+      "SELECT usr.id AS user_id,usr.name,usr.email,usr.role_code,r.status AS registration_status,r.registered_at,a.first_joined_at,a.last_joined_at,a.last_left_at,a.total_seconds,a.join_count FROM (SELECT user_id FROM meeting_registrations WHERE meeting_id=$1 UNION SELECT user_id FROM meeting_attendance WHERE meeting_id=$1) x JOIN users usr ON usr.id=x.user_id LEFT JOIN meeting_registrations r ON r.meeting_id=$1 AND r.user_id=x.user_id LEFT JOIN meeting_attendance a ON a.meeting_id=$1 AND a.user_id=x.user_id ORDER BY COALESCE(r.registered_at,a.first_joined_at) ASC",
+      [meetingId]
+    );
+    return json(request,{meetingId,attendance:rows.map((row)=>({
+      userId:row.user_id,
+      name:operationalIdentityName(row.name,row.email,row.role_code)||'Użytkownik',
+      registrationStatus:row.registration_status||'NOT_REGISTERED',
+      registeredAt:row.registered_at,
+      joined:Boolean(row.first_joined_at),
+      firstJoinedAt:row.first_joined_at||null,
+      lastJoinedAt:row.last_joined_at||null,
+      lastLeftAt:row.last_left_at||null,
+      totalSeconds:Number(row.total_seconds||0),
+      joinCount:Number(row.join_count||0)
+    }))});
+  }
+
+  const meetingParticipants=url.pathname.match(/^\/meetings\/([^/]+)\/participants$/);
+  if(method==='GET'&&meetingParticipants){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingParticipants[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN'},403);
+    if(!livekitConfigured())return json(request,{participants:[],configured:false});
+    const participants=await livekitRooms().listParticipants(meetingRoomName(meetingId));
+    return json(request,{
+      configured:true,
+      participants:participants.map((item)=>({
+        identity:item.identity,
+        name:item.name||'Uczestnik',
+        metadata:item.metadata||'',
+        joinedAt:item.joinedAt?String(item.joinedAt):null,
+        tracks:(item.tracks||[]).map((track)=>({sid:track.sid,source:track.source,muted:track.muted===true}))
+      }))
+    });
+  }
+
+  const meetingModerate=url.pathname.match(/^\/meetings\/([^/]+)\/moderate$/);
+  if(method==='POST'&&meetingModerate){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingModerate[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN'},403);
+    const body=await readJson(request),identity=cleanText(body.identity,120),action=String(body.action||'').toUpperCase();
+    if(!identity||!['MUTE','REMOVE','ALLOW_MIC','BLOCK_MIC'].includes(action))return json(request,{error:'MEETING_MODERATION_ACTION'},400);
+    const room=meetingRoomName(meetingId),client=livekitRooms();
+    const participant=await client.getParticipant(room,identity);
+    let participantUserId='';
+    try{
+      const metadata=JSON.parse(participant.metadata||'{}');
+      participantUserId=cleanText(metadata?.serviceOsUserId,120);
+    }catch{}
+    if(!participantUserId)return json(request,{error:'MEETING_PARTICIPANT_IDENTITY',message:'Nie udało się powiązać uczestnika z kontem ServiceOS.'},409);
+    if(action==='REMOVE'){
+      await q(
+        "INSERT INTO meeting_participant_controls(meeting_id,user_id,removed_at,updated_by_user_id,updated_at) VALUES($1,$2,now(),$3,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET removed_at=now(),updated_by_user_id=$3,updated_at=now()",
+        [meetingId,participantUserId,u.id]
+      );
+      await client.removeParticipant(room,identity);
+    }else if(action==='MUTE'){
+      const mic=(participant.tracks||[]).find((track)=>track.source===TrackSource.MICROPHONE);
+      if(mic)await client.mutePublishedTrack(room,identity,mic.sid,true);
+    }else{
+      const allowMic=action==='ALLOW_MIC';
+      await q(
+        "INSERT INTO meeting_participant_controls(meeting_id,user_id,microphone_allowed,updated_by_user_id,updated_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET microphone_allowed=$3,updated_by_user_id=$4,updated_at=now()",
+        [meetingId,participantUserId,allowMic,u.id]
+      );
+      const sources=[];
+      if(allowMic)sources.push(TrackSource.MICROPHONE);
+      if(meeting.allow_participant_screen_share===true)sources.push(TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO);
+      await client.updateParticipant(room,identity,{
+        permission:{canSubscribe:true,canPublish:sources.length>0,canPublishData:false,canPublishSources:sources}
+      });
+      if(!allowMic){
+        const mic=(participant.tracks||[]).find((track)=>track.source===TrackSource.MICROPHONE);
+        if(mic)await client.mutePublishedTrack(room,identity,mic.sid,true).catch(()=>undefined);
+      }
+    }
+    await meetingEvent(meetingId,u.id,'MODERATION',{identity,participantUserId,action});
+    await audit(session,'MEETING_MODERATION','meeting',meetingId,null,{identity,action});
+    return json(request,{ok:true});
+  }
+
+  const meetingAction=url.pathname.match(/^\/meetings\/([^/]+)\/(register|unregister|start|end|cancel)$/);
+  if(meetingAction&&method==='POST'){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingAction[1],120),action=meetingAction[2];
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+
+    if(action==='register'||action==='unregister'){
+      if(!await meetingEligible(u,meetingId))return json(request,{error:'MEETING_NOT_ELIGIBLE',message:'To spotkanie nie jest przeznaczone dla Twojego konta.'},403);
+      if(action==='register'&&!['SCHEDULED','LIVE'].includes(meeting.status))return json(request,{error:'MEETING_CLOSED',message:'Zapisy na to spotkanie są zamknięte.'},409);
+      const client=await pool.connect();
+      try{
+        await client.query('BEGIN');
+        const locked=(await client.query("SELECT id,status,max_participants FROM meetings WHERE id=$1 FOR UPDATE",[meetingId])).rows[0];
+        if(!locked)throw Object.assign(new Error('Spotkanie już nie istnieje.'),{status:404});
+        if(action==='register'){
+          const existing=(await client.query("SELECT status FROM meeting_registrations WHERE meeting_id=$1 AND user_id=$2",[meetingId,u.id])).rows[0];
+          if(existing?.status!=='REGISTERED'){
+            const count=Number((await client.query("SELECT count(*)::int AS count FROM meeting_registrations WHERE meeting_id=$1 AND status='REGISTERED'",[meetingId])).rows[0]?.count||0);
+            if(count>=Number(locked.max_participants))throw Object.assign(new Error('Limit miejsc na to spotkanie został osiągnięty.'),{status:409,code:'MEETING_FULL'});
+            await client.query(
+              "INSERT INTO meeting_registrations(meeting_id,user_id,status,registered_at,updated_at) VALUES($1,$2,'REGISTERED',now(),now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET status='REGISTERED',registered_at=now(),updated_at=now()",
+              [meetingId,u.id]
+            );
+          }
+        }else{
+          await client.query("UPDATE meeting_registrations SET status='CANCELLED',updated_at=now() WHERE meeting_id=$1 AND user_id=$2",[meetingId,u.id]);
+        }
+        await client.query(
+          "INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,$4,'{}'::jsonb)",
+          [makeId('mte'),meetingId,u.id,action==='register'?'REGISTERED':'UNREGISTERED']
+        );
+        await client.query('COMMIT');
+      }catch(error){
+        try{await client.query('ROLLBACK');}catch{}
+        throw error;
+      }finally{client.release();}
+      await audit(session,action==='register'?'MEETING_REGISTERED':'MEETING_UNREGISTERED','meeting',meetingId,null,{});
+      const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
+      return json(request,{ok:true,meeting:view});
+    }
+
+    if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zarządzać tym spotkaniem.'},403);
+    const target=action==='start'?'LIVE':action==='end'?'ENDED':'CANCELLED';
+    const allowed=action==='start'?['SCHEDULED']:action==='end'?['LIVE']:['SCHEDULED','LIVE'];
+    if(!allowed.includes(meeting.status))return json(request,{error:'MEETING_STATE',message:'Ta zmiana etapu spotkania nie jest teraz dostępna.'},409);
+    if(action==='start'){
+      const client=livekitRooms();
+      const room=meetingRoomName(meetingId);
+      const existing=await client.listRooms([room]);
+      if(!existing.length)await client.createRoom({name:room,maxParticipants:Number(meeting.max_participants||50),emptyTimeout:15*60,departureTimeout:5*60,metadata:JSON.stringify({meetingId})});
+    }
+    const result=await q(
+      "UPDATE meetings SET status=$2,started_at=CASE WHEN $2='LIVE' THEN COALESCE(started_at,now()) ELSE started_at END,ended_at=CASE WHEN $2='ENDED' THEN now() ELSE ended_at END,cancelled_at=CASE WHEN $2='CANCELLED' THEN now() ELSE cancelled_at END,updated_at=now() WHERE id=$1 AND status=$3 RETURNING *",
+      [meetingId,target,meeting.status]
+    );
+    if(!result.rows[0])return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
+    if((target==='ENDED'||target==='CANCELLED')&&livekitConfigured()){
+      await livekitRooms().deleteRoom(meetingRoomName(meetingId)).catch(()=>undefined);
+    }
+    await meetingEvent(meetingId,u.id,target,{});
+    if(target==='ENDED'||target==='CANCELLED'){
+      await q("UPDATE meeting_attendance SET total_seconds=total_seconds+GREATEST(0,LEAST(43200,EXTRACT(EPOCH FROM (now()-last_joined_at))::int)),last_left_at=now(),updated_at=now() WHERE meeting_id=$1 AND last_joined_at IS NOT NULL AND (last_left_at IS NULL OR last_left_at<last_joined_at)",[meetingId]);
+    }
+    if(target==='CANCELLED'){
+      const cancellationQueue=await queueMeetingEmailEvent(meetingId,'CANCELLED');
+      await meetingEvent(meetingId,u.id,'EMAIL_CANCELLATION_QUEUED',cancellationQueue);
+    }
+    await audit(session,'MEETING_'+target,'meeting',meetingId,null,{});
+    const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
+    return json(request,{ok:true,meeting:view});
   }
 
   if(method==='GET'&&url.pathname==='/dashboard'){
@@ -4340,7 +4979,7 @@ const route = async (request) => {
     if(!SERVICE_READ_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do historii zlecenia.'),{status:403});
     const order=(await q('SELECT id,point_id FROM service_orders WHERE id=$1 LIMIT 1',[historyMatch[1]])).rows[0];
     if(!order)return json(request,{error:'NOT_FOUND'},404);
-    await requireOrder(u,order.id);
+    await requireReadableOrder(u,order.id);
     const {rows}=await q(
       "SELECT h.id,h.from_status,h.to_status,h.note,h.created_at,h.changed_by_user_id,usr.name AS changed_by_name,usr.email AS changed_by_email,usr.role_code AS changed_by_role FROM service_order_status_history h LEFT JOIN users usr ON usr.id=h.changed_by_user_id WHERE h.service_order_id=$1 ORDER BY h.created_at ASC,h.id ASC",
       [order.id]
@@ -5196,6 +5835,7 @@ const route = async (request) => {
     const emailResult=await sendCustomerPortalEventEmail({
       customerId:quote.customer_id,
       pointId:quote.routed_point_id,
+      senderUserId:u.id,
       preference:'messages',
       subject:'LockOn ServiceOS · nowa wiadomość z serwisu',
       title:'Masz nową wiadomość z serwisu',
@@ -5226,6 +5866,7 @@ const route = async (request) => {
     const emailResult=await sendCustomerPortalEventEmail({
       customerId:quote.customer_id,
       pointId:quote.routed_point_id,
+      senderUserId:u.id,
       preference:'quoteUpdates',
       subject:'LockOn ServiceOS · wycena jest gotowa',
       title:'Wycena jest gotowa',
@@ -5397,56 +6038,26 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/integrations/gmail'){
     const session=await requireActive(request),u=session.user,pointId=cleanText(url.searchParams.get('pointId'),80);
-    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do konfiguracji Gmail.'),{status:403,code:'GMAIL_FORBIDDEN'});
-    await requirePoint(u,pointId);
-    const {rows}=await q("SELECT point_id,sender_email,status,last_error,connected_at,updated_at,refresh_token_ciphertext,oauth_client_secret_ciphertext,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM point_email_senders WHERE point_id=$1 LIMIT 1",[pointId]);
-    let row=rows[0]||null;
-    let inherited=false;
+    if(u.role_code==='OWNER')return json(request,{connected:false,pointId:pointId||null,needsReconnect:false,connectionState:'NOT_CONNECTED',reason:'OWNER_PRIVACY',checkedAt:nowIso()});
+    if(pointId)await requirePoint(u,pointId);
+    const row=(await q(
+      "SELECT user_id,sender_email,status,last_error,connected_at,updated_at,refresh_token_ciphertext,oauth_client_secret_ciphertext,(refresh_token_ciphertext IS NOT NULL) AS refresh_complete,(oauth_client_secret_ciphertext IS NOT NULL) AS legacy_secret_complete FROM user_gmail_credentials WHERE user_id=$1 LIMIT 1",
+      [u.id]
+    )).rows[0]||null;
     const checkedAt=nowIso();
-    if(!row){
-      const fallback=await loadActiveMailSender(pointId);
-      if(!fallback)return json(request,{connected:false,pointId,needsReconnect:false,connectionState:'NOT_CONNECTED',checkedAt});
-      row={
-        point_id:fallback.sender_point_id,
-        sender_email:fallback.sender_email,
-        status:fallback.status,
-        last_error:null,
-        connected_at:fallback.connected_at,
-        refresh_token_ciphertext:fallback.refresh_token_ciphertext,
-        oauth_client_secret_ciphertext:fallback.oauth_client_secret_ciphertext,
-        refresh_complete:Boolean(fallback.refresh_token_ciphertext),
-        legacy_secret_complete:Boolean(fallback.oauth_client_secret_ciphertext)
-      };
-      inherited=true;
-    }
+    if(!row)return json(request,{connected:false,pointId:pointId||null,needsReconnect:false,connectionState:'NOT_CONNECTED',reason:'NOT_CONNECTED',checkedAt});
 
     const credentialsComplete=row.refresh_complete===true&&Boolean(GOOGLE_DESKTOP_CLIENT_SECRET||row.legacy_secret_complete);
-    if(!credentialsComplete){
+    if(!credentialsComplete||row.status==='REVOKED'){
       return json(request,{
         connected:false,
         needsReconnect:true,
         connectionState:'REAUTH_REQUIRED',
-        pointId,
-        senderPointId:row.point_id,
-        inherited,
-        email:operationalIdentityEmail(row.sender_email),
+        pointId:pointId||null,
+        inherited:false,
+        email:operationalIdentityEmail(row.sender_email,u.role_code),
         status:row.status,
-        lastError:'Połączenie Gmail jest niekompletne i wymaga ponownej autoryzacji.',
-        connectedAt:row.connected_at,
-        checkedAt
-      });
-    }
-    if(row.status==='REVOKED'){
-      return json(request,{
-        connected:false,
-        needsReconnect:true,
-        connectionState:'REAUTH_REQUIRED',
-        pointId,
-        senderPointId:row.point_id,
-        inherited,
-        email:operationalIdentityEmail(row.sender_email),
-        status:row.status,
-        lastError:row.last_error||'Zgoda Google dla Gmail wygasła albo została cofnięta.',
+        lastError:row.last_error||'Połączenie Gmail wymaga ponownej autoryzacji.',
         connectedAt:row.connected_at,
         checkedAt
       });
@@ -5457,16 +6068,15 @@ const route = async (request) => {
       const legacyClientSecret=row.oauth_client_secret_ciphertext?decryptSecret(row.oauth_client_secret_ciphertext):'';
       await refreshGmailAccess(refreshToken,legacyClientSecret);
       if(row.status!=='ACTIVE'||row.last_error){
-        await q("UPDATE point_email_senders SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE point_id=$1",[row.point_id]);
+        await q("UPDATE user_gmail_credentials SET status='ACTIVE',last_error=NULL,updated_at=now() WHERE user_id=$1",[u.id]);
       }
       return json(request,{
         connected:true,
         needsReconnect:false,
         connectionState:'CONNECTED',
-        pointId,
-        senderPointId:row.point_id,
-        inherited,
-        email:operationalIdentityEmail(row.sender_email),
+        pointId:pointId||null,
+        inherited:false,
+        email:operationalIdentityEmail(row.sender_email,u.role_code),
         status:'ACTIVE',
         lastError:null,
         connectedAt:row.connected_at,
@@ -5476,31 +6086,19 @@ const route = async (request) => {
       const reauth=isGmailReauthError(error);
       const message=cleanText(error instanceof Error?error.message:error,500);
       if(reauth){
-        await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1",[pointId,message]);
-        return json(request,{
-          connected:false,
-          needsReconnect:true,
-          connectionState:'REAUTH_REQUIRED',
-          pointId,
-        senderPointId:row.point_id,
-        inherited,
-          email:operationalIdentityEmail(row.sender_email),
-          status:'REVOKED',
-          lastError:message,
-          connectedAt:row.connected_at,
-          checkedAt
-        });
+        await q("UPDATE user_gmail_credentials SET status='REVOKED',last_error=$2,updated_at=now() WHERE user_id=$1",[u.id,message]);
+      }else{
+        await q("UPDATE user_gmail_credentials SET last_error=$2,updated_at=now() WHERE user_id=$1",[u.id,message]);
       }
       return json(request,{
         connected:false,
-        needsReconnect:false,
-        connectionState:'TEMPORARY_ERROR',
-        pointId,
-        senderPointId:row.point_id,
-        inherited,
-        email:operationalIdentityEmail(row.sender_email),
-        status:row.status,
-        lastError:'Nie udało się teraz potwierdzić połączenia Gmail. ServiceOS spróbuje ponownie automatycznie.',
+        needsReconnect:reauth,
+        connectionState:reauth?'REAUTH_REQUIRED':'TEMPORARY_ERROR',
+        pointId:pointId||null,
+        inherited:false,
+        email:operationalIdentityEmail(row.sender_email,u.role_code),
+        status:reauth?'REVOKED':row.status,
+        lastError:reauth?message:'Nie udało się teraz potwierdzić połączenia Gmail. ServiceOS spróbuje ponownie automatycznie.',
         connectedAt:row.connected_at,
         checkedAt
       });
@@ -5509,52 +6107,59 @@ const route = async (request) => {
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/connect-code'){
     const session=await requireActive(request),u=session.user;
-    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do połączenia Gmail.'),{status:403});
+    if(u.role_code==='OWNER')throw Object.assign(new Error('Konto OWNER nie jest używane jako nadawca operacyjny.'),{status:403,code:'OWNER_PRIVACY'});
     const body=await readJson(request),pointId=cleanText(body.pointId,80);
-    await requirePoint(u,pointId);
+    if(pointId)await requirePoint(u,pointId);
 
     const tokens=await exchangeDesktopAuthorizationCode(body,'/gmail/callback');
-    if(!tokens?.refresh_token) return json(request,{error:'REFRESH_TOKEN',message:'Google nie zwrócił refresh tokena. Odłącz wcześniejszy dostęp ServiceOS w koncie Google i spróbuj ponownie.'},400);
-    if(!tokens?.id_token) return json(request,{error:'GOOGLE_ID_TOKEN',message:'Google nie zwrócił tokena tożsamości.'},400);
-
+    if(!tokens?.refresh_token)return json(request,{error:'REFRESH_TOKEN',message:'Google nie zwrócił refresh tokena. Odłącz wcześniejszy dostęp ServiceOS w koncie Google i spróbuj ponownie.'},400);
+    if(!tokens?.id_token)return json(request,{error:'GOOGLE_ID_TOKEN',message:'Google nie zwrócił tokena tożsamości.'},400);
     const profile=await verifyGoogle(String(tokens.id_token),GOOGLE_DESKTOP_CLIENT_ID);
+    if(!googleIdentityMatchesUser(profile,u))return json(request,{error:'GMAIL_IDENTITY_MISMATCH',message:'Połącz Gmail tego samego konta Google, którym jesteś zalogowany w ServiceOS.'},409);
     await refreshGmailAccess(String(tokens.refresh_token),'');
+    const scopes=String(tokens.scope||'').split(/\s+/).filter(Boolean);
     await q(
-      "INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
-      [pointId,u.id,profile.email,encryptSecret(String(tokens.refresh_token))]
+      "INSERT INTO user_gmail_credentials(user_id,google_sub,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,granted_scopes,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,$5::text[],'ACTIVE',NULL,now(),now()) ON CONFLICT(user_id) DO UPDATE SET google_sub=EXCLUDED.google_sub,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,granted_scopes=EXCLUDED.granted_scopes,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
+      [u.id,profile.sub,profile.email,encryptSecret(String(tokens.refresh_token)),scopes]
     );
-    await q(
+    if(pointId)await q(
       "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,updated_by_user_id,updated_at) VALUES($1,true,$2::text[],'LockOn ServiceOS',$3,now()) ON CONFLICT(point_id) DO NOTHING",
       [pointId,[...DEFAULT_NOTIFY_STATUSES],u.id]
     );
-    const recovery=await recoverNoSenderNotifications(pointId);
-    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
-    return json(request,{connected:true,needsReconnect:false,pointId,email:operationalIdentityEmail(profile.email),status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    const recovery=await recoverNoSenderNotificationsForUser(u.id);
+    await audit(session,'GMAIL_CONNECTED','user',u.id,pointId||null,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER_USER',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    return json(request,{connected:true,needsReconnect:false,pointId:pointId||null,email:operationalIdentityEmail(profile.email,u.role_code),status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
   }
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/connect'){
-    const session=await requireActive(request),u=session.user;if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do połączenia Gmail.'),{status:403});
+    const session=await requireActive(request),u=session.user;
+    if(u.role_code==='OWNER')throw Object.assign(new Error('Konto OWNER nie jest używane jako nadawca operacyjny.'),{status:403,code:'OWNER_PRIVACY'});
     const body=await readJson(request),pointId=cleanText(body.pointId,80),refreshToken=cleanText(body.refreshToken,4096),idToken=cleanText(body.idToken,8192),clientSecret=cleanText(body.clientSecret,4096);
-    await requirePoint(u,pointId);
+    if(pointId)await requirePoint(u,pointId);
     if(!refreshToken||!idToken||!clientSecret)return json(request,{error:'TOKEN',message:'Brak kompletnych danych autoryzacji Google.'},400);
 
     const profile=await verifyGoogle(idToken,GOOGLE_DESKTOP_CLIENT_ID);
+    if(!googleIdentityMatchesUser(profile,u))return json(request,{error:'GMAIL_IDENTITY_MISMATCH',message:'Połącz Gmail tego samego konta Google, którym jesteś zalogowany w ServiceOS.'},409);
     await refreshGmailAccess(refreshToken,clientSecret);
-
-    await q("INSERT INTO point_email_senders(point_id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,'ACTIVE',NULL,now(),now()) ON CONFLICT(point_id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",[pointId,u.id,profile.email,encryptSecret(refreshToken),encryptSecret(clientSecret)]);
     await q(
+      "INSERT INTO user_gmail_credentials(user_id,google_sub,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,granted_scopes,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,$5,$6::text[],'ACTIVE',NULL,now(),now()) ON CONFLICT(user_id) DO UPDATE SET google_sub=EXCLUDED.google_sub,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=EXCLUDED.oauth_client_secret_ciphertext,granted_scopes=EXCLUDED.granted_scopes,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
+      [u.id,profile.sub,profile.email,encryptSecret(refreshToken),encryptSecret(clientSecret),['https://www.googleapis.com/auth/gmail.send']]
+    );
+    if(pointId)await q(
       "INSERT INTO point_notification_settings(point_id,automatic_email_enabled,notify_statuses,sender_display_name,updated_by_user_id,updated_at) VALUES($1,true,$2::text[],'LockOn ServiceOS',$3,now()) ON CONFLICT(point_id) DO NOTHING",
       [pointId,[...DEFAULT_NOTIFY_STATUSES],u.id]
     );
-    const recovery=await recoverNoSenderNotifications(pointId);
-
-    await audit(session,'GMAIL_CONNECTED','point',pointId,pointId,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
-    return json(request,{connected:true,needsReconnect:false,pointId,email:operationalIdentityEmail(profile.email),status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    const recovery=await recoverNoSenderNotificationsForUser(u.id);
+    await audit(session,'GMAIL_CONNECTED','user',u.id,pointId||null,{senderEmail:profile.email,identitySource:'GOOGLE_ID_TOKEN',credentialLocation:'SERVER_USER',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
+    return json(request,{connected:true,needsReconnect:false,pointId:pointId||null,email:operationalIdentityEmail(profile.email,u.role_code),status:'ACTIVE',recoveredNotifications:recovery.recovered,recoveredSent:recovery.sent});
   }
 
   if(method==='DELETE'&&url.pathname==='/integrations/gmail'){
-    const session=await requireActive(request),u=session.user;if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień.'),{status:403});
-    const pointId=cleanText(url.searchParams.get('pointId'),80);await requirePoint(u,pointId);await q('DELETE FROM point_email_senders WHERE point_id=$1',[pointId]);await audit(session,'GMAIL_DISCONNECTED','point',pointId,pointId,{});
+    const session=await requireActive(request),u=session.user;
+    const pointId=cleanText(url.searchParams.get('pointId'),80);
+    if(pointId)await requirePoint(u,pointId);
+    await q('DELETE FROM user_gmail_credentials WHERE user_id=$1',[u.id]);
+    await audit(session,'GMAIL_DISCONNECTED','user',u.id,pointId||null,{});
     return json(request,{ok:true});
   }
 
@@ -5624,11 +6229,11 @@ const route = async (request) => {
 
   if(method==='POST'&&url.pathname==='/integrations/gmail/test'){
     const session=await requireActive(request),u=session.user;
-    if(!GMAIL_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do testowania Gmail.'),{status:403});
+    if(u.role_code==='OWNER')throw Object.assign(new Error('Konto OWNER nie jest używane jako nadawca operacyjny.'),{status:403,code:'OWNER_PRIVACY'});
     const body=await readJson(request),pointId=cleanText(body.pointId,80);
-    await requirePoint(u,pointId);
-    const senderBase=await loadActiveMailSender(pointId);
-    if(!senderBase)return json(request,{error:'NO_SENDER',message:'Brak aktywnego firmowego nadawcy Gmail.'},409);
+    if(pointId)await requirePoint(u,pointId);
+    const senderBase=await loadUserMailSender(u.id);
+    if(!senderBase)return json(request,{error:'NO_USER_SENDER',message:'Twoje konto Google nie ma aktywnej zgody Gmail.'},409);
     const point=(await q("SELECT name FROM points WHERE id=$1 LIMIT 1",[pointId])).rows[0];
     const settings=await mailSettingsForPoint(pointId);
     const sender={
@@ -5642,15 +6247,15 @@ const route = async (request) => {
     const htmlBody='<!doctype html><html lang="pl"><body style="background:#111318;color:#eceff3;font-family:Arial,sans-serif;padding:28px"><div style="max-width:600px;margin:auto;border:1px solid #2a2f37;border-radius:16px;background:#171a20;padding:22px"><div style="color:#ff7b45;font-size:12px;font-weight:700">LOCKON SERVICEOS</div><h2 style="margin:8px 0 12px">Test powiadomień Gmail</h2><p>Integracja dla punktu <strong>'+escapeHtml(sender.point_name)+'</strong> działa poprawnie.</p><p style="color:#89939e">Nadawca: '+escapeHtml(sender.sender_email)+'</p></div></body></html>';
     try{
       const sent=await sendGmail(sender,recipient,subject,textBody,htmlBody,sender.sender_display_name);
-      await q("UPDATE point_email_senders SET last_error=NULL,status='ACTIVE',updated_at=now() WHERE point_id=$1",[sender.sender_point_id]);
-      await audit(session,'GMAIL_TEST_SENT','point',pointId,pointId,{recipient,messageId:sent.id,senderPointId:sender.sender_point_id,inherited:sender.sender_point_id!==pointId});
+      await q("UPDATE user_gmail_credentials SET last_error=NULL,status='ACTIVE',updated_at=now() WHERE user_id=$1",[u.id]);
+      await audit(session,'GMAIL_TEST_SENT','user',u.id,pointId||null,{recipient,messageId:sent.id,senderEmail:sender.sender_email});
       return json(request,{ok:true,recipient,messageId:sent.id});
     }catch(error){
       const message=cleanText(error instanceof Error?error.message:error,500);
       if(isGmailReauthError(error)){
-        await q("UPDATE point_email_senders SET status='REVOKED',last_error=$2,updated_at=now() WHERE point_id=$1",[sender.sender_point_id,message]);
+        await q("UPDATE user_gmail_credentials SET status='REVOKED',last_error=$2,updated_at=now() WHERE user_id=$1",[u.id,message]);
       }else{
-        await q("UPDATE point_email_senders SET last_error=$2,updated_at=now() WHERE point_id=$1",[sender.sender_point_id,message]);
+        await q("UPDATE user_gmail_credentials SET last_error=$2,updated_at=now() WHERE user_id=$1",[u.id,message]);
       }
       throw Object.assign(new Error(message),{status:502,code:isGmailReauthError(error)?'GMAIL_REAUTH_REQUIRED':'GMAIL_TEST_FAILED'});
     }

@@ -89,6 +89,26 @@ export function SettingsPage({ auth, effectiveRole, previewRole, onPreviewRoleCh
         )}
       </section>
 
+      <section className="panel-card gmail-identity-card">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">GOOGLE I GMAIL</span>
+            <h2>Nadawca wiadomości serwisowych</h2>
+            {actualRole === 'OWNER' ? (
+              <p>Konto właściciela nie jest używane jako nadawca zwykłych wiadomości serwisowych do klientów.</p>
+            ) : auth.gmailConnected && auth.gmailEmail ? (
+              <p><strong>Wiadomości będą wysyłane jako: {auth.gmailEmail}</strong></p>
+            ) : (
+              <p>Gmail tego konta wymaga ponownego połączenia. Wyloguj się i zaloguj ponownie przez Google, aby nadać zgodę na wysyłanie.</p>
+            )}
+          </div>
+        </div>
+        {actualRole !== 'OWNER' && <div className={'gmail-identity-status '+(auth.gmailConnected?'connected':'reconnect')}>
+          <span>{auth.gmailConnected?'Połączenie aktywne':'Wymaga połączenia'}</span>
+          {auth.gmailStatus && <small>{auth.gmailStatus}</small>}
+        </div>}
+      </section>
+
       <section className="panel-card appearance-card">
         <div className="panel-heading">
           <div>

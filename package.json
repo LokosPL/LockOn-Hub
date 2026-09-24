@@ -20,6 +20,7 @@
     "release": "npm run build && electron-builder --win --publish always",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "verify:fast": "npm run typecheck && npm run build:web && npm run build:electron && node --check functions/lockon-api.mjs",
     "dev:server": "cross-env LOCKON_ALLOW_DEV_LOGIN=1 node server/index.mjs",
     "server": "node server/index.mjs",
     "build:server": "esbuild server/index.mjs --bundle --platform=node --format=cjs --target=node22 --outfile=dist-server/index.cjs"
@@ -30,7 +31,9 @@
     "lucide-react": "^0.468.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "google-auth-library": "^11.1.0"
+    "google-auth-library": "^11.1.0",
+    "livekit-client": "2.22.3",
+    "livekit-server-sdk": "2.19.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

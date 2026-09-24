@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   dialog,
   ipcMain,
   Menu,
@@ -449,7 +450,7 @@ const secureHandle = (channel: string, listener: SecureHandler) => {
   });
 };
 
-const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf' | 'sup' | 'cqr' | 'inv' | 'tnn') => {
+const safeId = (value: unknown, prefix: 'usr' | 'rev' | 'srv' | 'ntf' | 'cst' | 'trf' | 'sup' | 'cqr' | 'inv' | 'tnn' | 'mtg') => {
   const text = String(value ?? '');
   const pattern = new RegExp('^' + prefix + '_[a-f0-9]{20}' + '$');
   if (!pattern.test(text)) throw new Error('Nieprawidłowy identyfikator.');
@@ -991,6 +992,64 @@ const registerIpc = () => {
   secureHandle('data:getWeather', async (city: string) => {
     requireSessionToken();
     return fetchStartWeather(city);
+  });
+
+  secureHandle('meetings:list', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/meetings', {}, token);
+  });
+  secureHandle('meetings:options', async () => {
+    const token = requireSessionToken();
+    return backendRequest('/meetings/options', {}, token);
+  });
+  secureHandle('meetings:create', async (payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest('/meetings', { method:'POST', body:JSON.stringify(payload ?? {}) }, token);
+  });
+  secureHandle('meetings:update', async (meetingId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}`, { method:'PATCH', body:JSON.stringify(payload ?? {}) }, token);
+  });
+  secureHandle('meetings:action', async (meetingId: string, action: 'register'|'unregister'|'start'|'end'|'cancel') => {
+    const token = requireSessionToken();
+    const safeMeetingId = safeId(meetingId, 'mtg');
+    if (!['register','unregister','start','end','cancel'].includes(action)) throw new Error('Nieprawidłowa akcja spotkania.');
+    return backendRequest(`/meetings/${encodeURIComponent(safeMeetingId)}/${action}`, { method:'POST', body:'{}' }, token);
+  });
+  secureHandle('meetings:joinToken', async (meetingId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/join-token`, {method:'POST',body:'{}'}, token);
+  });
+  secureHandle('meetings:participants', async (meetingId: string) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/participants`, {}, token);
+  });
+  secureHandle('meetings:moderate', async (meetingId: string, payload: unknown) => {
+    const token = requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/moderate`, {method:'POST',body:JSON.stringify(payload ?? {})}, token);
+  });
+  secureHandle('meetings:screenSources', async () => {
+    requireSessionToken();
+    const sources = await desktopCapturer.getSources({
+      types:['screen','window'],
+      thumbnailSize:{width:320,height:180},
+      fetchWindowIcons:true
+    });
+    return sources.slice(0,40).map((source)=>({
+      id:source.id,
+      name:String(source.name||'Ekran').slice(0,180),
+      thumbnail:source.thumbnail.isEmpty() ? null : source.thumbnail.toDataURL(),
+      appIcon:source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null
+    }));
+  });
+  secureHandle('meetings:attendanceAction', async (meetingId: string, action:'JOIN'|'LEAVE') => {
+    const token=requireSessionToken();
+    if(!['JOIN','LEAVE'].includes(action))throw new Error('Nieprawidłowa akcja obecności.');
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/attendance`,{method:'POST',body:JSON.stringify({action})},token);
+  });
+  secureHandle('meetings:attendance', async (meetingId: string) => {
+    const token=requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/attendance`,{},token);
   });
 
 

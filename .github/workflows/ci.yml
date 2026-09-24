@@ -2,6 +2,7 @@ name: Verify LockOn ServiceOS
 
 on:
   push:
+    branches: ["main", "release/**"]
     paths:
       - "src/**"
       - "electron/**"
@@ -10,6 +11,7 @@ on:
       - "database/migrations/**"
       - "RELEASE_VERSION"
       - "BUILD_VERSION"
+      - "RELEASE_READY"
       - "package.json"
       - "package-lock.json"
       - "index.html"
@@ -21,6 +23,7 @@ on:
       - ".github/workflows/temp-neon-smoke.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/prod-smoke.yml"
+      - ".github/workflows/prod-neon-deploy.yml"
   pull_request:
     branches: ["main"]
     paths:
@@ -31,6 +34,7 @@ on:
       - "database/migrations/**"
       - "RELEASE_VERSION"
       - "BUILD_VERSION"
+      - "RELEASE_READY"
       - "package.json"
       - "package-lock.json"
       - "index.html"
@@ -42,13 +46,14 @@ on:
       - ".github/workflows/temp-neon-smoke.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/prod-smoke.yml"
+      - ".github/workflows/prod-neon-deploy.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: lockon-ci-${{ github.workflow }}-${{ github.ref }}
+  group: lockon-ci-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -142,6 +147,40 @@ jobs:
           if ($central.Contains("if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))")) {
             throw "Legacy service-scan guard still blocks USER from receiving transferred devices."
           }
+
+          @(
+            "FRONTDESK_STEPS = ['Przyjęto','Wyślij do serwisu','W serwisie','Naprawa','Wraca do punktu','Do odbioru','Wydany']",
+            "CO TERAZ",
+            "Gdzie jest telefon i co dalej?",
+            "Historia serwisu",
+            "relativeTimePl",
+            "open={effectiveRole==='USER'?true:undefined}"
+          ) | ForEach-Object {
+            if (-not $service.Contains($_)) { throw "Missing simple USER service journey contract: $_" }
+          }
+
+          $roles = Get-Content src/config/roles.ts -Raw
+          if (-not $roles.Contains("navigation: ['dashboard', 'service', 'customers', 'browser', 'settings']")) {
+            throw "USER must have the point-scoped customer workspace in navigation."
+          }
+
+          @(
+            "const frontDesk=effectiveRole==='USER'",
+            "KLIENCI TWOJEGO PUNKTU",
+            "Klienci i ich naprawy",
+            "relativeTimePl"
+          ) | ForEach-Object {
+            if (-not $customer.Contains($_)) { throw "Missing USER customer workspace contract: $_" }
+          }
+
+          @(
+            "const requireReadableOrder",
+            "const serviceView=session.user.role_code==='USER'",
+            "COALESCE(s.home_point_id,s.point_id)"
+          ) | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing home-point read/customer scope contract: $_" }
+          }
+
           $browser = Get-Content src/pages/BrowserPage.tsx -Raw
           @("actionBusy","browser-action-error") | ForEach-Object {
             if (-not $browser.Contains($_)) { throw "Missing browser action guard: $_" }
@@ -242,11 +281,15 @@ jobs:
             "OWNER_PRIVACY",
             "GMAIL_SCOPE_NOT_GRANTED",
             "REFRESH_TOKEN_MISSING",
-            "GMAIL_REUSED_AT_LOGIN",
-            "EXISTING_SERVER_REFRESH_TOKEN",
-            "EXISTING_SENDER_REUSED"
+            "EXISTING_USER_SENDER_REUSED",
+            "user_gmail_credentials",
+            "credentialLocation:'SERVER_USER'",
+            "GMAIL_IDENTITY_MISMATCH"
           ) | ForEach-Object {
-            if (-not $central.Contains($_)) { throw "Missing central unified Gmail contract: $_" }
+            if (-not $central.Contains($_)) { throw "Missing per-user unified Gmail contract: $_" }
+          }
+          if ($central.Contains("const loadActiveMailSender = async")) {
+            throw "Customer mail must not fall back to a point/global Gmail sender."
           }
 
           $gmail = Get-Content electron/gmailAuth.ts -Raw
@@ -259,6 +302,56 @@ jobs:
             "gmailConnectInFlight"
           ) | ForEach-Object {
             if (-not $gmail.Contains($_)) { throw "Missing manual Gmail recovery contract: $_" }
+          }
+
+      - name: Verify 1.0.0.20 meetings and LiveKit contracts
+        shell: pwsh
+        run: |
+          $central = Get-Content functions/lockon-api.mjs -Raw
+          @(
+            "MEETING_MANAGE_ROLES",
+            "url.pathname==='/meetings'",
+            "/join-token",
+            "canPublishSources",
+            "meeting_participant_controls",
+            "/moderate",
+            "meeting_attendance",
+            "meeting_email_sender",
+            "meeting_email_outbox",
+            "queueMeetingEmailEvent",
+            "LIVEKIT_URL",
+            "LIVEKIT_API_KEY",
+            "LIVEKIT_API_SECRET"
+          ) | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing meeting backend contract: $_" }
+          }
+
+          $room = Get-Content src/components/MeetingRoom.tsx -Raw
+          @(
+            "setMicrophoneEnabled",
+            "screenSources",
+            "Track.Source.ScreenShare",
+            "meetings.moderate",
+            "attendanceAction",
+            "Mikrofon zablokowany",
+            "Udostępnij ekran"
+          ) | ForEach-Object {
+            if (-not $room.Contains($_)) { throw "Missing live meeting UI contract: $_" }
+          }
+
+          $meetings = Get-Content src/components/MeetingsCard.tsx -Raw
+          @(
+            "Zaplanuj spotkanie",
+            "Jesteś zapisany ✓",
+            "meetingCountdown",
+            "Frekwencja"
+          ) | ForEach-Object {
+            if (-not $meetings.Contains($_)) { throw "Missing meeting scheduling UX contract: $_" }
+          }
+
+          $settings = Get-Content src/pages/SettingsPage.tsx -Raw
+          if (-not $settings.Contains("Wiadomości będą wysyłane jako:")) {
+            throw "Exact per-user Gmail sender status is missing from Settings."
           }
 
       - name: Verify service finance UI contracts

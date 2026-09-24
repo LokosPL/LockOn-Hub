@@ -2,8 +2,11 @@ name: Verify Neon API bundle
 
 on:
   push:
+    branches: ["main", "release/**"]
     paths:
       - "functions/lockon-api.mjs"
+      - "package.json"
+      - "package-lock.json"
       - "database/migrations/**"
       - "database/schema.sql"
       - ".github/workflows/neon-api-verify.yml"
@@ -12,6 +15,8 @@ on:
   pull_request:
     paths:
       - "functions/lockon-api.mjs"
+      - "package.json"
+      - "package-lock.json"
       - "database/migrations/**"
       - "database/schema.sql"
       - ".github/workflows/neon-api-verify.yml"
@@ -34,7 +39,7 @@ jobs:
         with:
           node-version: 24
       - name: Install function build dependencies
-        run: npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 pdfmake@0.2.20 esbuild@0.25.12
+        run: npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 pdfmake@0.2.20 livekit-server-sdk@2.19.1 esbuild@0.25.12
       - name: Check source syntax
         run: node --check functions/lockon-api.mjs
       - name: Verify v0.20 support and customer contracts
@@ -50,8 +55,34 @@ jobs:
           grep -q 'SUPPORT_ALREADY_ASSIGNED' functions/lockon-api.mjs
           grep -q 'ORDER_STATUS_CHANGED' functions/lockon-api.mjs
           grep -q 'TRANSFER_STATUS_CHANGED' functions/lockon-api.mjs
-          grep -q 'GMAIL_FORBIDDEN' functions/lockon-api.mjs
           grep -q 'NOTIFICATIONS_FORBIDDEN' functions/lockon-api.mjs
+          grep -q 'user_gmail_credentials' functions/lockon-api.mjs
+          grep -q 'user_gmail_credentials' database/migrations/2026-09-24-v100020-user-gmail-credentials.sql
+          grep -Fq 'LEFT JOIN user_gmail_credentials e ON e.user_id=n.user_id' functions/lockon-api.mjs
+          grep -Fq 'const loadUserMailSender = async (userId)' functions/lockon-api.mjs
+          grep -Fq 'senderUserId:u.id' functions/lockon-api.mjs
+          grep -q 'GMAIL_IDENTITY_MISMATCH' functions/lockon-api.mjs
+          grep -q 'googleIdentityMatchesUser' functions/lockon-api.mjs
+          ! grep -Fq 'const loadActiveMailSender = async' functions/lockon-api.mjs
+          ! grep -Fq 'LEFT JOIN LATERAL (SELECT pe.point_id AS sender_point_id' functions/lockon-api.mjs
+          grep -q 'MEETING_MANAGE_ROLES' functions/lockon-api.mjs
+          grep -q "url.pathname==='/meetings'" functions/lockon-api.mjs
+          grep -q 'meeting_audience' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'meeting_registrations' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'meeting_attendance' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'meeting_email_outbox' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'meeting_participant_controls' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'meeting_email_sender' database/migrations/2026-09-24-v100020-meetings.sql
+          grep -q 'LIVEKIT_URL' functions/lockon-api.mjs
+          grep -q 'LIVEKIT_API_KEY' functions/lockon-api.mjs
+          grep -q 'LIVEKIT_API_SECRET' functions/lockon-api.mjs
+          grep -q '/join-token' functions/lockon-api.mjs
+          grep -q 'canPublishSources' functions/lockon-api.mjs
+          grep -q '/moderate' functions/lockon-api.mjs
+          grep -q 'queueMeetingEmailEvent' functions/lockon-api.mjs
+          grep -q 'MEETING_RESCHEDULED' functions/lockon-api.mjs
+          grep -q "method==='PATCH'&&meetingUpdate" functions/lockon-api.mjs
+          grep -q "'RESCHEDULED:'" functions/lockon-api.mjs
           grep -q "value === null || value === undefined || value === ''" functions/lockon-api.mjs
           grep -q 'consultant_requested_at' functions/lockon-api.mjs
           grep -q 'customer_portal_code' functions/lockon-api.mjs

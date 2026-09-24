@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
   id-token: write
   attestations: write
 
@@ -19,11 +20,121 @@ concurrency:
 jobs:
   release-windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for exact-SHA verification gates
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @('Verify LockOn ServiceOS', 'CodeQL security scan')
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:GITHUB_SHA&per_page=100"
+
+          for ($attempt = 1; $attempt -le 90; $attempt++) {
+            $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get
+            $states = @{}
+            foreach ($name in $required) {
+              $run = $response.workflow_runs |
+                Where-Object { $_.name -eq $name -and $_.head_sha -eq $env:GITHUB_SHA } |
+                Sort-Object created_at -Descending |
+                Select-Object -First 1
+              if ($null -ne $run) {
+                $states[$name] = "$($run.status)/$($run.conclusion)"
+                if ($run.status -eq 'completed' -and $run.conclusion -notin @('success','neutral','skipped')) {
+                  Write-Error "Required gate '$name' failed for $env:GITHUB_SHA: $($run.conclusion)"
+                  exit 1
+                }
+              } else {
+                $states[$name] = 'missing'
+              }
+            }
+
+            $ready = $true
+            foreach ($name in $required) {
+              if ($states[$name] -ne 'completed/success') { $ready = $false }
+            }
+            Write-Host ("Verification gates: " + (($required | ForEach-Object { "$_=$($states[$_])" }) -join ', '))
+            if ($ready) {
+              Write-Host "Exact-SHA Verify and CodeQL gates are green."
+              exit 0
+            }
+            Start-Sleep -Seconds 10
+          }
+
+          Write-Error "Timed out waiting for Verify LockOn ServiceOS and CodeQL security scan on $env:GITHUB_SHA."
+          exit 1
+
+      - name: Verify successful production deployment gate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&event=workflow_dispatch&status=success&per_page=100"
+          $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get
+          $prod = $response.workflow_runs |
+            Where-Object { $_.name -eq 'Production Neon exact deploy' -and $_.conclusion -eq 'success' } |
+            Sort-Object created_at -Descending |
+            Select-Object -First 1
+
+          if ($null -eq $prod) {
+            Write-Error "No successful Production Neon exact deploy was found on main."
+            exit 1
+          }
+
+          $prodSha = [string]$prod.head_sha
+
+          $smokeUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&event=workflow_run&status=success&per_page=100"
+          $smokeResponse = Invoke-RestMethod -Uri $smokeUrl -Headers $headers -Method Get
+          $expectedSmokeTitle = "Production API smoke · $prodSha"
+          $smoke = $smokeResponse.workflow_runs |
+            Where-Object { $_.name -eq 'Production API smoke' -and $_.conclusion -eq 'success' -and $_.display_title -eq $expectedSmokeTitle } |
+            Sort-Object created_at -Descending |
+            Select-Object -First 1
+          if ($null -eq $smoke) {
+            Write-Error "No successful Production API smoke was found for PROD deployment SHA $prodSha."
+            exit 1
+          }
+
+          git merge-base --is-ancestor $prodSha $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "The successful PROD deployment SHA $prodSha is not an ancestor of release SHA $env:GITHUB_SHA."
+            exit 1
+          }
+
+          $allowed = @(
+            'RELEASE_READY',
+            'RELEASE_VERSION',
+            'BUILD_VERSION',
+            'package.json',
+            'package-lock.json',
+            'electron/appConfig.ts'
+          )
+          $changed = @(git diff --name-only $prodSha $env:GITHUB_SHA)
+          $unexpected = @($changed | Where-Object { $_ -and $_ -notin $allowed })
+          if ($unexpected.Count -gt 0) {
+            Write-Error ("Code changed after the last successful PROD deployment. Re-run TEMP and PROD before release. Unexpected files: " + ($unexpected -join ', '))
+            exit 1
+          }
+
+          Write-Host "Production deploy + smoke gates verified from $prodSha. Release-only changes: $($changed -join ', ')."
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -122,10 +233,23 @@ jobs:
           VERSION: ${{ steps.version.outputs.product_version }}
           BUILD_VERSION: ${{ steps.version.outputs.build_version }}
         run: |
+          $highlights = ""
+          if ($env:VERSION -eq "1.0.0.20") {
+            $highlights = @"
+
+          Najważniejsze zmiany:
+          - Gmail nadawcy jest przypisany do zalogowanego pracownika; ServiceOS nie przełącza wiadomości na konto innej osoby ani innego punktu.
+          - Spotkania i szkolenia w Dashboardzie: zapisy, audio, udostępnianie ekranu, moderacja prowadzącego i frekwencja.
+          - Zaproszenia na spotkania używają odseparowanego sendera administracyjnego i nie mieszają się z wiadomościami serwisowymi.
+          - Usprawniony front-desk USER, obsługa klientów i przepływy serwisowe.
+          "@
+          }
+
           $notes = @"
           Oficjalne wydanie LockOn ServiceOS v$env:VERSION.
 
           Techniczny build aktualizatora: $env:BUILD_VERSION.
+          $highlights
 
           Pobierz **LockOn-ServiceOS-Setup.exe**.
           Instalator i pliki aktualizatora powstały w tym workflow i mają poświadczenie pochodzenia buildu w GitHub Artifact Attestations.

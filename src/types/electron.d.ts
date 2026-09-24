@@ -18,7 +18,8 @@ export interface RequestedPoint { pointName: string; city: string; requestedRole
 export interface AuthState {
   configured: boolean; authenticated: boolean; development: boolean; localStarterLoginAllowed: boolean;
   user: AuthUser | null; point: AuthPoint | null; points: AuthPoint[]; role: UserRole | null; status: AccountStatus | null;
-  technicianSplitPercent?:number|null; supportEnabled?:boolean; requestedPoint?: RequestedPoint | null; message?: string;
+  technicianSplitPercent?:number|null; supportEnabled?:boolean; requestedPoint?: RequestedPoint | null;
+  gmailConnected?:boolean; gmailStatus?:string|null; gmailEmail?:string|null; message?: string;
 }
 export interface BrowserState { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean; }
 export interface BrowserBounds { x: number; y: number; width: number; height: number; }
@@ -53,6 +54,30 @@ export interface FinancePointBreakdown { pointId:string; pointName:string; point
 export interface FinancePayload { entries: RevenueEntry[]; points: FinancePointBreakdown[]; summary: { approvedRevenue:number; technicianShare:number; bossShare:number; pendingRevenue:number; }; }
 export interface TechnicianSettlementSettings { configured:boolean; technicianPercent:number|null; bossPercent:number|null; }
 export interface DashboardData { pointCount:number; activeUsers:number; pendingUsers:number; approvedRevenue:number; pendingRevenue:number; bossShare:number; technicianShare:number; }
+export type MeetingStatus = 'SCHEDULED'|'LIVE'|'ENDED'|'CANCELLED';
+export interface MeetingAudienceItem { type:'ALL'|'POINT'|'USER'; pointId?:string|null; pointName?:string|null; userId?:string|null; userName?:string|null; }
+export interface MeetingSummary {
+  id:string; title:string; description:string; startsAt:string; plannedMinutes:number; status:MeetingStatus; maxParticipants:number;
+  allowParticipantAudio:boolean; allowParticipantScreenShare:boolean; registeredCount:number; registeredByMe:boolean; canManage:boolean;
+  createdByUserId:string; createdByName:string; hostUserId:string; hostName:string; audience:MeetingAudienceItem[];
+  startedAt?:string|null; endedAt?:string|null; cancelledAt?:string|null; createdAt:string; updatedAt:string;
+}
+export interface MeetingListPayload { meetings:MeetingSummary[]; serverTime:string; }
+export interface MeetingOptions {
+  points:Array<{id:string;name:string;city:string}>;
+  users:Array<{id:string;name:string;email?:string|null;role:UserRole}>;
+}
+export interface MeetingMutationResult { ok:true; meeting:MeetingSummary|null; }
+export interface MeetingJoinToken { serverUrl:string; token:string; roomName:string; identity:string; canManage:boolean; permissions:{microphone:boolean;screenShare:boolean}; }
+export interface MeetingLiveParticipantTrack { sid:string; source:number; muted:boolean; }
+export interface MeetingLiveParticipant { identity:string; name:string; metadata:string; joinedAt?:string|null; tracks:MeetingLiveParticipantTrack[]; }
+export interface MeetingParticipantsPayload { configured:boolean; participants:MeetingLiveParticipant[]; }
+export interface MeetingScreenSource { id:string; name:string; thumbnail?:string|null; appIcon?:string|null; }
+export interface MeetingAttendanceItem {
+  userId:string; name:string; registrationStatus:'REGISTERED'|'CANCELLED'|'NOT_REGISTERED'; registeredAt?:string|null; joined:boolean;
+  firstJoinedAt?:string|null; lastJoinedAt?:string|null; lastLeftAt?:string|null; totalSeconds:number; joinCount:number;
+}
+export interface MeetingAttendancePayload { meetingId:string; attendance:MeetingAttendanceItem[]; }
 export interface WeatherData { city:string; region?:string|null; country?:string|null; temperature:number; apparentTemperature:number; minTemperature:number; maxTemperature:number; windSpeed:number; weatherCode:number; condition:string; fetchedAt:string; }
 export interface ServiceCustomer { id:string; firstName:string; lastName:string; email?:string|null; phone?:string|null; }
 export interface ServiceOrder { id:string; orderNumber?:number; pointId:string; homePointId?:string; currentPointId?:string|null; customerId:string; deviceId:string; orderType:'REPAIR'|'COMPLAINT'; originalOrderId?:string|null; handlingMode:'STANDARD'|'COMPLAINT_FLOW'|'TRANSFER_ONLY'; issueDescription:string; status:string; receivedAt:string; }
@@ -75,14 +100,14 @@ export interface ServiceOrderSummary extends ServiceOrder {
   workflow?:ServiceWorkflow;
   latestTransfer?:ServiceTransfer|null; transfers?:ServiceTransfer[];
 }
-export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; reusedDevice?:boolean; notification?:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string}; serviceCard?:{required:boolean;printMode?:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY'|null;customerEmailRequired?:boolean}; }
+export interface ServiceCreateOrderResult { customer:ServiceCustomer; order:ServiceOrder; reusedCustomer:boolean; reusedDevice?:boolean; notification?:{queued:boolean;sent:boolean;reason?:string;status?:string;senderUserId?:string|null;attempts?:number;nextAttemptAt?:string;messageId?:string}; serviceCard?:{required:boolean;printMode?:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY'|null;customerEmailRequired?:boolean}; }
 export interface ServiceCardOpenResult { opened:boolean; filePath:string; fileName:string; printMode:'PHYSICAL_AND_ONLINE'|'ONLINE_ONLY'; staffScanCode?:string; }
 export interface ServiceWarrantyUpdateResult { ok:true; warranty:{months:number;startedAt:string;expiresAt:string;cardPrintedAt?:string|null;cardPrintCount:number;repairSummary?:string|null;warrantyCardNumber?:string|null}; order:ServiceOrderSummary|null; }
 export interface ServiceWarrantyCardOpenResult { opened:boolean; filePath:string; fileName:string; order?:ServiceOrderSummary|null; }
 export interface ServiceScanResult { ok:true; scanAction:string; readyChanged:boolean; order:ServiceOrderSummary|null; notification?:NotificationRetryResult; }
 export interface ServiceStatusResult {
   order:ServiceOrderSummary;
-  notification:{queued:boolean;sent:boolean;reason?:string;status?:string;attempts?:number;nextAttemptAt?:string;messageId?:string};
+  notification:{queued:boolean;sent:boolean;reason?:string;status?:string;senderUserId?:string|null;attempts?:number;nextAttemptAt?:string;messageId?:string};
   settlement?:{id:string;amount:number;currency:string;status:string;serviceOrderId:string;userId:string;pointId:string;technicianPercent?:number;bossPercent?:number;technicianShare?:number;bossShare?:number;approvedAt?:string|null}|null;
 }
 export interface ServiceStatusHistoryItem { id:string; fromStatus?:string|null; fromLabel?:string|null; toStatus:string; toLabel:string; note?:string|null; changedAt:string; changedByUserId?:string|null; changedByName:string; }
@@ -125,7 +150,7 @@ export interface GmailConnectionStatus { connected:boolean; needsReconnect?:bool
 export interface NotificationSettings { pointId:string; automaticEmailEnabled:boolean; notifyStatuses:string[]; senderDisplayName:string; footerText:string; updatedAt?:string; }
 export interface NotificationHistoryItem { id:string; orderId?:string|null; orderNumber?:number|null; recipient:string; status:'PENDING'|'PROCESSING'|'SENT'|'FAILED'|'CANCELLED'; attempts:number; subject?:string|null; providerMessageId?:string|null; lastError?:string|null; availableAt:string; sentAt?:string|null; createdAt:string; updatedAt:string; customerName?:string|null; device?:string|null; }
 export interface GmailTestResult { ok:true; recipient:string; messageId:string; }
-export interface NotificationRetryResult { id?:string; queued?:boolean; sent:boolean; status?:string; reason?:string; attempts?:number; nextAttemptAt?:string; messageId?:string; }
+export interface NotificationRetryResult { id?:string; queued?:boolean; sent:boolean; status?:string; reason?:string; senderUserId?:string|null; attempts?:number; nextAttemptAt?:string; messageId?:string; }
 export interface HelpAction {
   type:'WEBSITE_CODE'|'NAVIGATE'|'OPEN_ORDER'|'OPEN_USER'|'SPEED_TEST'|'CONNECTIVITY_TEST'|'BROWSER_SEARCH'|string;
   label?:string; target?:string; code?:string; expiresAt?:string;
@@ -211,6 +236,19 @@ declare global {
         review: (revenueId:string, action:'APPROVE'|'REJECT') => Promise<RevenueEntry>;
       };
       data: { getDashboard: () => Promise<DashboardData>; getWeather: (city:string) => Promise<WeatherData>; };
+      meetings: {
+        list: () => Promise<MeetingListPayload>;
+        options: () => Promise<MeetingOptions>;
+        create: (payload:{title:string;description?:string;startsAt:string;plannedMinutes:number;maxParticipants:number;allowParticipantAudio:boolean;allowParticipantScreenShare:boolean;hostUserId?:string;audience:Array<{type:'ALL'|'POINT'|'USER';pointId?:string;userId?:string}>}) => Promise<MeetingMutationResult>;
+        update: (meetingId:string,payload:{startsAt:string}) => Promise<MeetingMutationResult & {email?:{eligible:number;queued:number;unchanged?:boolean}}>;
+        action: (meetingId:string,action:'register'|'unregister'|'start'|'end'|'cancel') => Promise<MeetingMutationResult>;
+        joinToken: (meetingId:string) => Promise<MeetingJoinToken>;
+        participants: (meetingId:string) => Promise<MeetingParticipantsPayload>;
+        moderate: (meetingId:string,payload:{identity:string;action:'MUTE'|'REMOVE'|'ALLOW_MIC'|'BLOCK_MIC'}) => Promise<{ok:true}>;
+        screenSources: () => Promise<MeetingScreenSource[]>;
+        attendanceAction: (meetingId:string,action:'JOIN'|'LEAVE') => Promise<{ok:true}>;
+        attendance: (meetingId:string) => Promise<MeetingAttendancePayload>;
+      };
       service: {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
         searchOrders: (query:string) => Promise<ServiceOrderSummary[]>;
