@@ -922,7 +922,6 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
             {screenEnabled?<RefreshCw size={18}/>:<MonitorUp size={18}/>} {canShare?(screenEnabled?'Zmień ekran / okno':'Udostępnij ekran'):'Udostępnianie zablokowane'}
           </button>
           <button className={'meeting-control '+(handRaised?'active':'')} disabled={!connected||Boolean(busy)} onClick={()=>void toggleHand()}><Hand size={18}/> {handRaised?'Opuść rękę':'Podnieś rękę'}</button>
-          {screenEnabled&&<button className="meeting-control" disabled={Boolean(busy)} onClick={()=>void stopScreenShare()}><MonitorX size={18}/> Zatrzymaj</button>}
           <button className={'meeting-control '+(sideTab==='chat'?'active':'')} onClick={()=>{setSideTab('chat');setMobileView('chat');}}><MessageSquare size={18}/> Czat {chatMessages.length>0&&<b className="meeting-control-badge">{chatMessages.length}</b>}</button>
           <button className={'meeting-control '+(sideTab==='participants'?'active':'')} onClick={()=>{setSideTab('participants');setMobileView('participants');}}><UsersRound size={18}/> Uczestnicy <b className="meeting-control-badge">{participants.length}</b></button>
           {canManage && <button className="meeting-control danger" disabled={Boolean(busy)} onClick={()=>void endForEveryone()}><PhoneOff size={18}/> Zakończ dla wszystkich</button>}
