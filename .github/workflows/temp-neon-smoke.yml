@@ -17,3 +17,1525 @@ permissions:
 concurrency:
   group: temp-neon-smoke-${{ github.ref }}
   cancel-in-progress: true
+
+jobs:
+  deploy-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: wandering-field-13057181
+      NEON_BRANCH_ID: br-spring-pond-b1hqe48m
+      NEON_FUNCTION_SLUG: lockonapi
+      TEMP_API_URL: https://br-spring-pond-b1hqe48m-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+      GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.LOCKON_GOOGLE_CLIENT_SECRET }}
+      LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+      LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+      LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Detect temp Neon credential
+        id: neon_credential
+        shell: bash
+        run: |
+          if [ -n "$NEON_API_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Brak repo secret NEON_API_KEY. Bundle zostanie zbudowany i zachowany jako artefakt; deploy wykona podłączony Neon connector, a HTTP smoke może zweryfikować aktywną rewizję."
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Validate runtime integration secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const env={
+            LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET:process.env.GOOGLE_DESKTOP_CLIENT_SECRET||'',
+            LIVEKIT_URL:process.env.LIVEKIT_URL||'',
+            LIVEKIT_API_KEY:process.env.LIVEKIT_API_KEY||'',
+            LIVEKIT_API_SECRET:process.env.LIVEKIT_API_SECRET||''
+          };
+          const missing=Object.entries(env).filter(([,v])=>!String(v).trim()).map(([k])=>k);
+          if(missing.length)throw new Error('Missing GitHub runtime secrets for Neon Function: '+missing.join(', '));
+          fs.writeFileSync('runtime-environment.json',JSON.stringify(env),{mode:0o600});
+          console.log('Runtime integration secrets are present.');
+          NODE
+
+      - name: Build exact Neon bundle
+        shell: bash
+        run: |
+          npm install --no-save --package-lock=false pg@8.16.3 google-auth-library@11.1.0 @aws-sdk/client-s3@3 @aws-sdk/s3-request-presigner@3 pdfmake@0.2.20 livekit-server-sdk@2.19.1 esbuild@0.25.12
+          node --check functions/lockon-api.mjs
+          mkdir -p central-api-dist
+          npx esbuild functions/lockon-api.mjs \
+            --bundle \
+            --platform=node \
+            --target=node24 \
+            --format=esm \
+            --banner:js="import{createRequire as ___cr}from'module';import{fileURLToPath as ___f}from'url';import{dirname as ___d}from'path';const require=___cr(import.meta.url);const __filename=___f(import.meta.url);const __dirname=___d(__filename);" \
+            --outfile=central-api-dist/index.mjs
+          zip -j temp-neon-lockonapi.zip central-api-dist/index.mjs
+          sha256sum temp-neon-lockonapi.zip central-api-dist/index.mjs
+
+      - name: Upload exact temp Neon bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: temp-neon-lockonapi
+          path: temp-neon-lockonapi.zip
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Publish exact bundle to temp GitHub branch for connector deploy
+        if: steps.neon_credential.outputs.available != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target_branch="tmp/v021-service-finance-smoke"
+          base64 -w0 temp-neon-lockonapi.zip > bundle-full.b64
+          split -b 180000 -d -a 2 bundle-full.b64 bundle-part-
+          part_count=0
+          for part_file in bundle-part-*; do
+            suffix="$(printf '%02d' "$part_count")"
+            target_path=".temp/temp-neon-lockonapi.part${suffix}"
+            current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
+            TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" PART_FILE="$part_file" node - <<'NODE'
+          const fs=require('fs');
+          const payload={
+            message:'ci: stage exact temp Neon bundle part',
+            content:fs.readFileSync(process.env.PART_FILE).toString('base64'),
+            branch:process.env.TARGET_BRANCH
+          };
+          if(process.env.CURRENT_SHA) payload.sha=process.env.CURRENT_SHA;
+          fs.writeFileSync('bundle-upload.json',JSON.stringify(payload));
+          NODE
+            gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${target_path}" --input bundle-upload.json >/dev/null
+            part_count=$((part_count + 1))
+          done
+
+          bundle_sha="$(sha256sum temp-neon-lockonapi.zip | awk '{print $1}')"
+          printf '{"partCount":%d,"chunkSize":180000,"sha256":"%s"}\n' "$part_count" "$bundle_sha" > bundle-manifest.json
+          target_path=".temp/temp-neon-lockonapi.manifest.json"
+          current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${target_path}?ref=${target_branch}" --jq '.sha' 2>/dev/null || true)"
+          TARGET_BRANCH="$target_branch" TARGET_PATH="$target_path" CURRENT_SHA="$current_sha" node - <<'NODE'
+          const fs=require('fs');
+          const payload={
+            message:'ci: stage exact temp Neon bundle manifest',
+            content:fs.readFileSync('bundle-manifest.json').toString('base64'),
+            branch:process.env.TARGET_BRANCH
+          };
+          if(process.env.CURRENT_SHA) payload.sha=process.env.CURRENT_SHA;
+          fs.writeFileSync('bundle-upload.json',JSON.stringify(payload));
+          NODE
+          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/${target_path}" --input bundle-upload.json >/dev/null
+
+      - name: Block stale TEMP smoke without exact deployment
+        if: steps.neon_credential.outputs.available != 'true'
+        shell: bash
+        run: |
+          echo "::error::TEMP gate requires an exact candidate deployment. Repository secret NEON_API_KEY is not configured, so migrations/deploy cannot run and HTTP smoke would only test the stale TEMP revision."
+          echo "::error::The exact bundle artifact and connector staging files were produced successfully. Configure NEON_API_KEY (or restore an equivalent exact-deploy path) and rerun this workflow."
+          exit 1
+
+      - name: Apply additive ServiceOS migrations to temp Neon
+        if: steps.neon_credential.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID"
+          auth_header="Authorization: Bearer $NEON_API_KEY"
+
+          curl --silent --show-error --fail "$api/branches/$NEON_BRANCH_ID/databases" --header "$auth_header" > neon-databases.json
+          curl --silent --show-error --fail "$api/branches/$NEON_BRANCH_ID/roles" --header "$auth_header" > neon-roles.json
+
+          database_name="$(node - <<'NODE'
+          const fs=require('fs');
+          const rows=JSON.parse(fs.readFileSync('neon-databases.json','utf8')).databases||[];
+          const selected=rows.find((x)=>x.name==='neondb')||rows[0];
+          if(!selected?.name)throw new Error('Temp Neon branch has no database');
+          process.stdout.write(selected.name);
+          NODE
+          )"
+          role_name="$(node - <<'NODE'
+          const fs=require('fs');
+          const rows=JSON.parse(fs.readFileSync('neon-roles.json','utf8')).roles||[];
+          const selected=rows.find((x)=>x.name==='neondb_owner')||rows.find((x)=>x.protected!==true)||rows[0];
+          if(!selected?.name)throw new Error('Temp Neon branch has no usable Postgres role');
+          process.stdout.write(selected.name);
+          NODE
+          )"
+
+          curl --silent --show-error --fail --get "$api/connection_uri" \
+            --header "$auth_header" \
+            --data-urlencode "branch_id=$NEON_BRANCH_ID" \
+            --data-urlencode "database_name=$database_name" \
+            --data-urlencode "role_name=$role_name" > neon-connection.json
+          database_url="$(node - <<'NODE'
+          const fs=require('fs');
+          const payload=JSON.parse(fs.readFileSync('neon-connection.json','utf8'));
+          if(!payload.uri)throw new Error('Neon connection_uri response has no uri');
+          process.stdout.write(payload.uri);
+          NODE
+          )"
+          echo "::add-mask::$database_url"
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+          for migration in \
+            database/migrations/2026-09-24-v100020-user-gmail-credentials.sql \
+            database/migrations/2026-09-24-v100020-meetings.sql \
+            database/migrations/2026-09-24-v100022-meeting-collaboration.sql
+          do
+            echo "Applying additive TEMP migration: $migration"
+            psql "$database_url" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+          done
+
+          tables="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT concat_ws(',',to_regclass('public.user_gmail_credentials'),to_regclass('public.meetings'),to_regclass('public.meeting_email_outbox'),to_regclass('public.meeting_chat_messages'),to_regclass('public.meeting_hand_raises'));")"
+          email_column="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='meetings' AND column_name='email_notifications_enabled';")"
+          if [[ "$tables" != *"user_gmail_credentials"* || "$tables" != *"meetings"* || "$tables" != *"meeting_email_outbox"* || "$tables" != *"meeting_chat_messages"* || "$tables" != *"meeting_hand_raises"* || "$email_column" != "1" ]]; then
+            echo "::error::TEMP migration verification failed: tables=$tables email_notifications_enabled=$email_column"
+            exit 1
+          fi
+          echo "TEMP additive migrations verified."
+
+      - name: Deploy bundle to temp Neon only
+        if: steps.neon_credential.outputs.available == 'true'
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$NEON_BRANCH_ID/functions/$NEON_FUNCTION_SLUG/deployments"
+          http="$(curl --silent --show-error --output deploy.json --write-out '%{http_code}' \
+            --request POST "$endpoint" \
+            --header "Authorization: Bearer $NEON_API_KEY" \
+            --form "zip=@temp-neon-lockonapi.zip" \
+            --form-string "environment=$(cat runtime-environment.json)")"
+          if [[ "$http" -lt 200 || "$http" -ge 300 ]]; then
+            echo "::error::Temp Neon deploy HTTP $http"
+            cat deploy.json
+            exit 1
+          fi
+          node - <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs=require('fs');
+          const d=JSON.parse(fs.readFileSync('deploy.json','utf8'));
+          const id=d.id ?? d.deployment?.id ?? d.deployment_id;
+          if(id===undefined || id===null) throw new Error('Neon deploy response has no deployment id');
+          console.log('deployment_id='+id);
+          NODE
+
+      - name: Remove runtime secret staging file
+        if: always()
+        shell: bash
+        run: rm -f runtime-environment.json
+
+      - name: Wait for deployed revision
+        if: steps.neon_credential.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$NEON_BRANCH_ID/functions/$NEON_FUNCTION_SLUG"
+          expected="${{ steps.deploy.outputs.deployment_id }}"
+          ready=0
+          for attempt in $(seq 1 60); do
+            curl --silent --show-error --fail "$endpoint" --header "Authorization: Bearer $NEON_API_KEY" > function.json
+            state="$(node - <<'NODE'
+          const fs=require('fs');
+          const payload=JSON.parse(fs.readFileSync('function.json','utf8'));
+          const f=payload.function ?? payload;
+          const d=f.current_deployment ?? f.active_deployment ?? f.deployment ?? {};
+          process.stdout.write(String(d.status ?? 'unknown'));
+          NODE
+          )"
+            id="$(node - <<'NODE'
+          const fs=require('fs');
+          const payload=JSON.parse(fs.readFileSync('function.json','utf8'));
+          const f=payload.function ?? payload;
+          const d=f.current_deployment ?? f.active_deployment ?? f.deployment ?? {};
+          process.stdout.write(String(d.id ?? ''));
+          NODE
+          )"
+            echo "TEMP Neon deployment check: expected=$expected current=$id status=$state"
+            if [[ "$id" == "$expected" && "$state" == "completed" ]]; then
+              ready=1
+              break
+            fi
+            if [[ "$id" == "$expected" && "$state" == "failed" ]]; then
+              echo "::error::Temp Neon deployment $expected failed."
+              exit 1
+            fi
+            sleep 5
+          done
+          if [[ "$ready" != "1" ]]; then
+            echo "::error::Temp Neon deployment did not become active."
+            exit 1
+          fi
+
+      - name: Verify temp runtime integration environment
+        if: steps.neon_credential.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$NEON_BRANCH_ID/functions/$NEON_FUNCTION_SLUG"
+          curl --silent --show-error --fail "$endpoint" --header "Authorization: Bearer $NEON_API_KEY" > function-environment.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const root=JSON.parse(fs.readFileSync('function-environment.json','utf8'));
+          const names=new Set();
+          const visit=(value,key='')=>{
+            if(!value)return;
+            if(key==='environment'){
+              if(Array.isArray(value)){
+                for(const item of value){
+                  if(typeof item==='string')names.add(item);
+                  else if(item&&typeof item==='object'){
+                    if(typeof item.name==='string')names.add(item.name);
+                    for(const k of Object.keys(item))names.add(k);
+                  }
+                }
+              }else if(typeof value==='object'){
+                for(const k of Object.keys(value))names.add(k);
+              }
+            }
+            if(value&&typeof value==='object'){
+              for(const [k,v] of Object.entries(value))visit(v,k);
+            }
+          };
+          visit(root);
+          const required=[
+            'LOCKON_OWNER_EMAIL',
+            'LOCKON_GOOGLE_DESKTOP_CLIENT_ID',
+            'LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET',
+            'LOCKON_GMAIL_TOKEN_KEY',
+            'LIVEKIT_URL',
+            'LIVEKIT_API_KEY',
+            'LIVEKIT_API_SECRET'
+          ];
+          const missing=required.filter((name)=>!names.has(name));
+          if(missing.length)throw new Error('TEMP function is missing required environment names: '+missing.join(', '));
+          console.log('TEMP integration environment names verified: '+required.join(', '));
+          NODE
+
+      - name: Temp health, CORS and authenticated smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --fail "$TEMP_API_URL/health" > health.json
+          node -e "const d=require('./health.json'); if(!d.ok) process.exit(1)"
+
+          curl --silent --show-error --fail \
+            --request OPTIONS "$TEMP_API_URL/service/orders" \
+            --header "Origin: https://app.serviceos.pl" \
+            --header "Access-Control-Request-Method: GET" \
+            --header "Access-Control-Request-Headers: authorization,content-type" \
+            --dump-header cors.headers --output /dev/null
+          grep -iq '^access-control-allow-origin: https://app.serviceos.pl' cors.headers
+          grep -iq '^access-control-allow-headers:.*authorization' cors.headers
+
+          curl --silent --show-error --fail --request POST "$TEMP_API_URL/auth/dev-owner" > auth.json
+          token="$(node -e "const d=require('./auth.json'); if(!d.token) process.exit(1); process.stdout.write(d.token)")"
+          curl --silent --show-error --fail "$TEMP_API_URL/me" --header "Authorization: Bearer $token" > me.json
+          node - <<'NODE'
+          const d=require('./me.json');
+          if(d.user?.role!=='OWNER') throw new Error('Temp dev login did not return OWNER');
+          if(d.user?.name!=='System LockOn' || d.user?.email!==null || d.user?.picture!==null) throw new Error('OWNER private identity leaked from /me');
+          if(!Array.isArray(d.points) || d.points.length<2) throw new Error('Temp owner needs at least two active points for logistics smoke');
+          if(!d.activePointId || !d.points.some((p)=>p.id===d.activePointId)) throw new Error('Temp session has no server-bound active point');
+          NODE
+
+      - name: Temp Google login recovery contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq "GMAIL_UPSTREAM_TIMEOUT_MS = 8_000" functions/lockon-api.mjs
+          grep -Fq "requeueNoSenderNotificationsForUser" functions/lockon-api.mjs
+          grep -Fq "const [meetingGmail,gmail] = await Promise.all" functions/lockon-api.mjs
+          grep -Fq "AUTH_SESSION_RESTORE_TIMEOUT_MS = 12_000" electron/googleAuth.ts
+          grep -Fq "GOOGLE_SESSION_RECOVERY_INTERVAL_MS = 1_500" src/pages/LoginScreen.tsx
+          grep -Fq "auth:state-changed" electron/main.ts
+          grep -Fq "auth:state-changed" electron/preload.ts
+
+          owner_token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/me" --header "Authorization: Bearer $owner_token" > auth-recovery-me.json
+          node -e "const d=require('./auth-recovery-me.json');if(!d.user?.id||d.user?.status!=='ACTIVE')throw new Error('Persisted session /me recovery failed')"
+
+      - name: Temp role and authorization matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expect_code() {
+            local token="$1" path="$2" expected="$3" label="$4"
+            local code
+            code="$(curl --silent --show-error --output role-response.json --write-out '%{http_code}'               "$TEMP_API_URL$path"               --header "Authorization: Bearer $token")"
+            if [[ "$code" != "$expected" ]]; then
+              echo "::error::$label expected HTTP $expected, got $code"
+              cat role-response.json || true
+              exit 1
+            fi
+          }
+
+          for role in OWNER BOSS COORDINATOR TECHNICIAN USER SUPPORT; do
+            curl --silent --show-error --fail-with-body               --request POST "$TEMP_API_URL/auth/dev-role"               --header "Content-Type: application/json"               --data "$(node -e "process.stdout.write(JSON.stringify({role:process.argv[1]}))" "$role")" > "role-$role.json"
+            token="$(node -e "const d=require('./role-'+process.argv[1]+'.json');if(!d.token||d.user?.role!==process.argv[1])throw new Error('Bad dev role login '+process.argv[1]);process.stdout.write(d.token)" "$role")"
+
+            expect_code "$token" "/service/orders" "200" "$role service read"
+
+            admin_expected="403"
+            [[ "$role" == "OWNER" ]] && admin_expected="200"
+            expect_code "$token" "/admin/overview" "$admin_expected" "$role admin"
+
+            finance_expected="403"
+            case "$role" in OWNER|BOSS|COORDINATOR|TECHNICIAN) finance_expected="200";; esac
+            expect_code "$token" "/finance/revenues" "$finance_expected" "$role finance"
+
+            workspace_expected="403"
+            [[ "$role" == "TECHNICIAN" ]] && workspace_expected="200"
+            expect_code "$token" "/service/technician-workspace" "$workspace_expected" "$role technician workspace"
+
+            support_expected="403"
+            case "$role" in OWNER|SUPPORT) support_expected="200";; esac
+            expect_code "$token" "/support/tickets" "$support_expected" "$role support queue"
+
+            customers_expected="403"
+            case "$role" in OWNER|SUPPORT|USER) customers_expected="200";; esac
+            expect_code "$token" "/customer-accounts" "$customers_expected" "$role customer workspace"
+          done
+
+          echo "Role matrix passed: OWNER, BOSS, COORDINATOR, TECHNICIAN, USER, SUPPORT."
+
+      - name: Temp meetings permissions, signup and room gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          owner_token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
+          user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
+          boss_token="$(node -e "const d=require('./role-BOSS.json');process.stdout.write(d.token)")"
+          coordinator_token="$(node -e "const d=require('./role-COORDINATOR.json');process.stdout.write(d.token)")"
+          user_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.user.id)")"
+
+          api_code() {
+            local token="$1" method="$2" path="$3" body="${4-}"
+            if [ -z "$body" ]; then body='{}'; fi
+            curl --silent --show-error --output meeting-response.json --write-out '%{http_code}'               --request "$method" "$TEMP_API_URL$path"               --header "Authorization: Bearer $token"               --header "Content-Type: application/json"               --data "$body"
+          }
+
+          # OWNER/BOSS/COORDINATOR can access planning options; USER cannot.
+          [ "$(api_code "$owner_token" GET /meetings/options '{}')" = "200" ] || { cat meeting-response.json; exit 1; }
+          [ "$(api_code "$boss_token" GET /meetings/options '{}')" = "200" ] || { cat meeting-response.json; exit 1; }
+          [ "$(api_code "$coordinator_token" GET /meetings/options '{}')" = "200" ] || { echo "::error::COORDINATOR cannot access meeting planning options"; cat meeting-response.json; exit 1; }
+          [ "$(api_code "$user_token" GET /meetings/options '{}')" = "403" ] || { echo "::error::USER gained meeting planning options"; cat meeting-response.json; exit 1; }
+
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings/options" --header "Authorization: Bearer $coordinator_token" > coordinator-meeting-options.json
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings/options" --header "Authorization: Bearer $owner_token" > owner-meeting-options.json
+          node - <<'NODE'
+          const auth=require('./role-COORDINATOR.json');
+          const options=require('./coordinator-meeting-options.json');
+          const allowed=new Set((auth.points||[]).map((point)=>point.id));
+          for(const point of options.points||[]){
+            if(!allowed.has(point.id))throw new Error('COORDINATOR meeting options leaked a point outside assigned scope: '+point.id);
+          }
+          NODE
+
+          starts_at="$(node -e "process.stdout.write(new Date(Date.now()+3600000).toISOString())")"
+          foreign_point="$(node - <<'NODE'
+          const auth=require('./role-COORDINATOR.json'),options=require('./owner-meeting-options.json');
+          const allowed=new Set((auth.points||[]).map((point)=>point.id));
+          process.stdout.write(String((options.points||[]).find((point)=>!allowed.has(point.id))?.id||''));
+          NODE
+          )"
+          if [ -n "$foreign_point" ]; then
+            foreign_body="$(node - <<'NODE' "$starts_at" "$foreign_point"
+          const [startsAt,pointId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({title:'CI scope denied',description:'scope guard',startsAt,plannedMinutes:20,maxParticipants:4,allowParticipantAudio:false,allowParticipantScreenShare:false,audience:[{type:'POINT',pointId}]}));
+          NODE
+            )"
+            foreign_http="$(api_code "$coordinator_token" POST /meetings "$foreign_body")"
+            [ "$foreign_http" = "403" ] || { echo "::error::COORDINATOR targeted foreign point: HTTP $foreign_http"; cat meeting-response.json; exit 1; }
+          fi
+          meeting_body="$(node - <<'NODE' "$starts_at" "$user_id"
+          const [startsAt,userId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            title:'CI szkolenie 1.0.0.22',
+            description:'TEMP E2E spotkań ServiceOS',
+            startsAt,
+            plannedMinutes:30,
+            maxParticipants:4,
+            allowParticipantAudio:false,
+            allowParticipantScreenShare:false,
+            emailNotificationsEnabled:true,
+            audience:[{type:'USER',userId}]
+          }));
+          NODE
+          )"
+
+          # Ordinary USER must never create a meeting.
+          user_create_http="$(api_code "$user_token" POST /meetings "$meeting_body")"
+          [ "$user_create_http" = "403" ] || { echo "::error::USER created a meeting: HTTP $user_create_http"; cat meeting-response.json; exit 1; }
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data "$meeting_body" > meeting-created.json
+          meeting_id="$(node -e "const d=require('./meeting-created.json');if(!d.meeting?.id)throw new Error('Meeting create failed');if(d.meeting.emailNotificationsEnabled!==true)throw new Error('Explicit e-mail opt-in was not persisted');process.stdout.write(d.meeting.id)")"
+
+          rescheduled_at="$(node -e "process.stdout.write(new Date(Date.now()+7200000).toISOString())")"
+          reschedule_body="$(node -e "process.stdout.write(JSON.stringify({startsAt:process.argv[1]}))" "$rescheduled_at")"
+          user_reschedule_http="$(api_code "$user_token" PATCH "/meetings/$meeting_id" "$reschedule_body")"
+          [ "$user_reschedule_http" = "403" ] || { echo "::error::USER could reschedule meeting: HTTP $user_reschedule_http"; cat meeting-response.json; exit 1; }
+          curl --silent --show-error --fail-with-body --request PATCH "$TEMP_API_URL/meetings/$meeting_id" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data "$reschedule_body" > meeting-rescheduled.json
+          node - <<'NODE' "$rescheduled_at"
+          const d=require('./meeting-rescheduled.json'), expected=process.argv[2];
+          if(d.meeting?.startsAt!==expected)throw new Error('Meeting reschedule did not persist exact startsAt');
+          if(d.meeting?.status!=='SCHEDULED')throw new Error('Reschedule changed backend status away from SCHEDULED');
+          if(!d.email||Number(d.email.eligible)<1||Number(d.email.queued)<1)throw new Error('Meeting reschedule did not queue a fresh invitation event');
+          NODE
+
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings" --header "Authorization: Bearer $user_token" > user-meetings.json
+          node - <<'NODE' "$meeting_id"
+          const d=require('./user-meetings.json'), id=process.argv[2];
+          const m=d.meetings?.find((item)=>item.id===id);
+          if(!m)throw new Error('Eligible USER cannot see scheduled meeting');
+          if(m.registeredByMe)throw new Error('USER unexpectedly registered before signup');
+          NODE
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/register" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{}' > meeting-register.json
+          node -e "const d=require('./meeting-register.json');if(!d.meeting?.registeredByMe)throw new Error('Meeting registration failed')"
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/unregister" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{}' > meeting-unregister.json
+          node -e "const d=require('./meeting-unregister.json');if(d.meeting?.registeredByMe)throw new Error('Meeting unregister failed')"
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/register" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{}' > /dev/null
+
+          prestart_join_http="$(api_code "$user_token" POST "/meetings/$meeting_id/join-token" '{}')"
+          [ "$prestart_join_http" = "409" ] || { echo "::error::join-token was available before LIVE: HTTP $prestart_join_http"; cat meeting-response.json; exit 1; }
+          node -e "const d=require('./meeting-response.json');if(d.error!=='MEETING_NOT_LIVE')throw new Error('Pre-start join did not fail as MEETING_NOT_LIVE')"
+
+          prestart_attendance_http="$(api_code "$user_token" POST "/meetings/$meeting_id/attendance" '{"action":"JOIN"}')"
+          [ "$prestart_attendance_http" = "409" ] || { echo "::error::attendance JOIN was available before LIVE: HTTP $prestart_attendance_http"; cat meeting-response.json; exit 1; }
+
+          edit_body="$(node - <<'NODE' "$rescheduled_at" "$user_id"
+          const [startsAt,userId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            title:'CI szkolenie lifecycle',
+            description:'TEMP E2E pełnej edycji spotkania',
+            startsAt,
+            plannedMinutes:45,
+            maxParticipants:6,
+            allowParticipantAudio:false,
+            allowParticipantScreenShare:false,
+            audience:[{type:'USER',userId}]
+          }));
+          NODE
+          )"
+          curl --silent --show-error --fail-with-body --request PATCH "$TEMP_API_URL/meetings/$meeting_id" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data "$edit_body" > meeting-edited.json
+          node - <<'NODE'
+          const d=require('./meeting-edited.json'),m=d.meeting;
+          if(m?.status!=='SCHEDULED'||m?.title!=='CI szkolenie lifecycle'||m?.plannedMinutes!==45||m?.maxParticipants!==6)throw new Error('Full scheduled meeting edit failed or changed lifecycle status');
+          NODE
+
+          # Regressja: sam upływ startsAt nie może uruchomić spotkania.
+          past_starts_at="$(node -e "process.stdout.write(new Date(Date.now()-5*60000).toISOString())")"
+          past_body="$(node - <<'NODE' "$past_starts_at" "$user_id"
+          const [startsAt,userId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            title:'CI spotkanie po terminie',
+            description:'Musi pozostać SCHEDULED do jawnego startu hosta',
+            startsAt,
+            plannedMinutes:20,
+            maxParticipants:4,
+            allowParticipantAudio:false,
+            allowParticipantScreenShare:false,
+            audience:[{type:'USER',userId}]
+          }));
+          NODE
+          )"
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data "$past_body" > meeting-past-created.json
+          past_meeting_id="$(node -e "const d=require('./meeting-past-created.json');if(d.meeting?.status!=='SCHEDULED')throw new Error('Past startsAt auto-promoted meeting');process.stdout.write(d.meeting.id)")"
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings" --header "Authorization: Bearer $owner_token" > owner-meetings-after-past.json
+          node - <<'NODE' "$past_meeting_id"
+          const d=require('./owner-meetings-after-past.json'),id=process.argv[2],m=d.meetings?.find(x=>x.id===id);
+          if(!m||m.status!=='SCHEDULED')throw new Error('SCHEDULED + startsAt <= now did not remain SCHEDULED');
+          NODE
+          past_join_http="$(api_code "$user_token" POST "/meetings/$past_meeting_id/join-token" '{}')"
+          [ "$past_join_http" = "409" ] || { echo "::error::Past SCHEDULED meeting exposed join-token: HTTP $past_join_http"; cat meeting-response.json; exit 1; }
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$past_meeting_id/cancel" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > meeting-past-cancelled.json
+          node -e "const d=require('./meeting-past-cancelled.json');if(d.meeting?.status!=='CANCELLED')throw new Error('Meeting cancellation failed')"
+          cancelled_start_http="$(api_code "$owner_token" POST "/meetings/$past_meeting_id/start" '{}')"
+          [ "$cancelled_start_http" = "409" ] || { echo "::error::Cancelled meeting could start: HTTP $cancelled_start_http"; cat meeting-response.json; exit 1; }
+
+          # BOSS i COORDINATOR zachowują prawo tworzenia i zarządzania spotkaniami.
+          boss_starts_at="$(node -e "process.stdout.write(new Date(Date.now()+10800000).toISOString())")"
+          boss_body="$(node - <<'NODE' "$boss_starts_at" "$user_id"
+          const [startsAt,userId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({title:'CI BOSS meeting',description:'role smoke',startsAt,plannedMinutes:20,maxParticipants:4,allowParticipantAudio:false,allowParticipantScreenShare:false,audience:[{type:'USER',userId}]}));
+          NODE
+          )"
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings" --header "Authorization: Bearer $boss_token" --header "Content-Type: application/json" --data "$boss_body" > meeting-boss-created.json
+          boss_meeting_id="$(node -e "const d=require('./meeting-boss-created.json');if(d.meeting?.status!=='SCHEDULED')throw new Error('BOSS could not create scheduled meeting');process.stdout.write(d.meeting.id)")"
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$boss_meeting_id/cancel" --header "Authorization: Bearer $boss_token" --header "Content-Type: application/json" --data '{}' > /dev/null
+
+          coordinator_starts_at="$(node -e "process.stdout.write(new Date(Date.now()+12600000).toISOString())")"
+          coordinator_body="$(node - <<'NODE' "$coordinator_starts_at"
+          const [startsAt]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({title:'CI COORDINATOR meeting',description:'role smoke',startsAt,plannedMinutes:20,maxParticipants:4,allowParticipantAudio:true,allowParticipantScreenShare:false,audience:[{type:'ALL'}]}));
+          NODE
+          )"
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings" --header "Authorization: Bearer $coordinator_token" --header "Content-Type: application/json" --data "$coordinator_body" > meeting-coordinator-created.json
+          coordinator_meeting_id="$(node -e "const d=require('./meeting-coordinator-created.json'),auth=require('./role-COORDINATOR.json');const allowed=new Set((auth.points||[]).map(p=>p.id));if(d.meeting?.status!=='SCHEDULED'||d.meeting?.canManage!==true)throw new Error('COORDINATOR could not create/manage scheduled meeting');if(!d.meeting.audience?.length||d.meeting.audience.some(a=>a.type!=='POINT'||!allowed.has(a.pointId)))throw new Error('COORDINATOR ALL audience escaped assigned points');process.stdout.write(d.meeting.id)")"
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$coordinator_meeting_id/cancel" --header "Authorization: Bearer $coordinator_token" --header "Content-Type: application/json" --data '{}' > meeting-coordinator-cancelled.json
+          node -e "const d=require('./meeting-coordinator-cancelled.json');if(d.meeting?.status!=='CANCELLED')throw new Error('COORDINATOR could not cancel own meeting')"
+
+          user_start_http="$(api_code "$user_token" POST "/meetings/$meeting_id/start" '{}')"
+          [ "$user_start_http" = "403" ] || { echo "::error::USER could start meeting: HTTP $user_start_http"; cat meeting-response.json; exit 1; }
+
+          # This is an intentional production-readiness gate. It cannot pass until TEMP
+          # has LIVEKIT_URL/API_KEY/API_SECRET configured on the exact deployed backend.
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/start" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > meeting-start.json
+          node -e "const d=require('./meeting-start.json');if(d.meeting?.status!=='LIVE')throw new Error('Meeting did not enter LIVE')"
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/join-token" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{}' > user-join-token.json
+          node - <<'NODE'
+          const d=require('./user-join-token.json');
+          if(!d.token||!d.serverUrl)throw new Error('Participant join token missing');
+          if(!/^wss:\/\/[^/]+\.livekit\.cloud$/i.test(d.serverUrl))throw new Error('LiveKit serverUrl is not canonical wss://*.livekit.cloud');
+          if(d.canManage!==false)throw new Error('USER got host privileges');
+          if(d.permissions?.microphone!==false||d.permissions?.screenShare!==false)throw new Error('Meeting publish restrictions were not enforced');
+          const payload=JSON.parse(Buffer.from(d.token.split('.')[1],'base64url').toString('utf8'));
+          if(payload.sub!==d.identity)throw new Error('LiveKit token identity mismatch');
+          if(payload.video?.room!==d.roomName||payload.video?.roomJoin!==true||payload.video?.canSubscribe!==true)throw new Error('LiveKit room grant mismatch');
+          if(!payload.exp||payload.exp*1000<=Date.now())throw new Error('LiveKit token is already expired');
+          NODE
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/join-token" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > host-join-token.json
+          node - <<'NODE'
+          const d=require('./host-join-token.json');
+          if(!d.token||d.canManage!==true)throw new Error('Host join token/privileges missing');
+          if(d.permissions?.microphone!==true||d.permissions?.screenShare!==true)throw new Error('Host publish permissions missing');
+          NODE
+
+          user_moderate_http="$(api_code "$user_token" POST "/meetings/$meeting_id/moderate" '{"identity":"forbidden","action":"MUTE"}')"
+          [ "$user_moderate_http" = "403" ] || { echo "::error::USER gained moderation: HTTP $user_moderate_http"; cat meeting-response.json; exit 1; }
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/attendance" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{"action":"JOIN"}' > /dev/null
+          sleep 1
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/attendance" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{"action":"LEAVE"}' > /dev/null
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings/$meeting_id/attendance" --header "Authorization: Bearer $owner_token" > meeting-attendance.json
+          node - <<'NODE' "$user_id"
+          const d=require('./meeting-attendance.json'), userId=process.argv[2];
+          const item=d.attendance?.find((x)=>x.userId===userId);
+          if(!item||!item.joined||!item.firstJoinedAt||!item.lastLeftAt||item.joinCount<1)throw new Error('Meeting attendance did not record join/leave');
+          NODE
+
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/end" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > meeting-end.json
+          node -e "const d=require('./meeting-end.json');if(d.meeting?.status!=='ENDED')throw new Error('Meeting did not enter ENDED')"
+          ended_join_http="$(api_code "$user_token" POST "/meetings/$meeting_id/join-token" '{}')"
+          [ "$ended_join_http" = "409" ] || { echo "::error::ENDED meeting exposed join-token: HTTP $ended_join_http"; cat meeting-response.json; exit 1; }
+
+          echo "Meetings TEMP E2E passed: lifecycle source-of-truth, scoped OWNER/BOSS/COORDINATOR/USER permissions, full edit/reschedule, pre/post-live join gates, LiveKit grants, attendance, cancellation and end."
+
+      - name: Temp USER front-desk service E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
+          user_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.user.id)")"
+          user_point="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.activePointId||d.points?.[0]?.id||'')")"
+          owner_token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
+          [ -n "$user_point" ]
+
+          api_checked() {
+            local actor="$1" token="$2" method="$3" path="$4" body="${5:-}" tmp code
+            tmp="$(mktemp)"
+            if [ -n "$body" ]; then
+              code="$(curl --silent --show-error --output "$tmp" --write-out '%{http_code}' --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $token" --header "Content-Type: application/json" --data "$body")"
+            else
+              code="$(curl --silent --show-error --output "$tmp" --write-out '%{http_code}' --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $token")"
+            fi
+            if [[ "$code" -lt 200 || "$code" -ge 300 ]]; then
+              echo "::error::$actor $method $path returned HTTP $code" >&2
+              cat "$tmp" >&2
+              rm -f "$tmp"
+              return 22
+            fi
+            cat "$tmp"
+            rm -f "$tmp"
+          }
+
+          user_api() {
+            api_checked USER "$user_token" "$1" "$2" "${3:-}"
+          }
+
+          owner_api() {
+            api_checked OWNER "$owner_token" "$1" "$2" "${3:-}"
+          }
+
+          user_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$user_point")" > user-active-point.json
+          user_api GET /service/service-points > user-service-points.json
+          destination="$(node - <<'NODE' "$user_point"
+          const points=require('./user-service-points.json'), current=process.argv[2];
+          const destination=points.find((p)=>p.id!==current && (p.effectiveAcceptsExternalRepairs||p.acceptsExternalRepairs||p.effectiveServiceEnabled||p.serviceEnabled));
+          if(!destination) throw new Error('USER front-desk E2E needs a second service point');
+          process.stdout.write(destination.id);
+          NODE
+          )"
+
+          suffix="user-frontdesk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          node - <<'NODE' "$suffix" > user-intake-body.json
+          const suffix=process.argv[2];
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'USER '+suffix,
+            email:suffix+'@invalid.test',
+            phone:'+48123123123',
+            brand:'LockOn',
+            model:'USER FrontDesk',
+            deviceNotes:'USER front-desk TEMP E2E',
+            issueDescription:'Test przyjęcia telefonu przez rolę USER.',
+            orderType:'REPAIR',
+            estimatedCost:199.99
+          }));
+          NODE
+          user_api POST /service/orders "$(cat user-intake-body.json)" > user-intake.json
+          user_order_id="$(node -e "const d=require('./user-intake.json');if(!d.order?.id)throw new Error('USER intake failed');process.stdout.write(d.order.id)")"
+          user_customer_id="$(node -e "const d=require('./user-intake.json');if(!d.customer?.id)throw new Error('USER intake customer missing');process.stdout.write(d.customer.id)")"
+          node - <<'NODE' "$user_id"
+          const d=require('./user-intake.json'), userId=process.argv[2];
+          if(!d.notification?.queued)throw new Error('USER intake did not create the mandatory service notification');
+          if(d.notification?.senderUserId!==userId){
+            throw new Error('Service notification sender identity is not the employee who performed intake');
+          }
+          NODE
+
+          user_api POST "/customer-accounts/$user_customer_id/notification-preferences" '{"serviceUpdates":false,"readyForPickup":true,"quoteUpdates":false,"messages":true}' > user-notification-prefs.json
+          node - <<'NODE'
+          const d=require('./user-notification-prefs.json');
+          if(d.preferences?.serviceUpdates!==false||d.preferences?.readyForPickup!==true||d.preferences?.quoteUpdates!==false||d.preferences?.messages!==true){
+            throw new Error('USER could not persist customer notification preferences');
+          }
+          NODE
+
+          user_api POST "/service/orders/$user_order_id/transfer" "$(node -e "process.stdout.write(JSON.stringify({kind:'OUTBOUND_SERVICE',toPointId:process.argv[1],note:'USER outbound TEMP E2E'}))" "$destination")" > user-outbound.json
+          node - <<'NODE' "$user_point" "$destination"
+          const d=require('./user-outbound.json'), from=process.argv[2], to=process.argv[3];
+          if(d.transfer?.status!=='IN_TRANSIT'||d.transfer?.fromPointId!==from||d.transfer?.toPointId!==to)throw new Error('USER could not send device to another point');
+          NODE
+          user_outbound_transfer_id="$(node -e "const d=require('./user-outbound.json');if(!d.transfer?.id)throw new Error('Missing USER outbound transfer id');process.stdout.write(d.transfer.id)")"
+
+          # Destination accepts the phone. The home-point USER must still retain READ access
+          # to their customer/order/history, but must not gain technical write access away from home.
+          owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$destination")" > owner-user-destination.json
+          owner_api POST "/service/transfers/$user_outbound_transfer_id/status" '{"status":"DELIVERED","note":"Telefon dotarł do serwisu"}' > user-outbound-delivered.json
+          owner_api POST "/service/transfers/$user_outbound_transfer_id/status" '{"status":"ACCEPTED","note":"Serwis przyjął telefon"}' > user-outbound-accepted.json
+          node -e "const d=require('./user-outbound-accepted.json');if(d.transfer?.status!=='ACCEPTED')throw new Error('Destination did not accept USER outbound phone')"
+
+          user_api GET /service/orders > user-orders-away.json
+          node - <<'NODE' "$user_order_id" "$destination"
+          const rows=require('./user-orders-away.json'), orderId=process.argv[2], destination=process.argv[3];
+          const order=rows.find((item)=>item.id===orderId);
+          if(!order)throw new Error('Home-point USER lost order visibility after service accepted the phone');
+          if(order.currentPointId!==destination)throw new Error('USER order current location was not updated to service point');
+          if(!order.latestTransfer||order.latestTransfer.status!=='ACCEPTED')throw new Error('USER cannot see latest accepted transfer timing');
+          NODE
+
+          user_api GET "/service/orders/$user_order_id/history" > user-away-history.json
+          node -e "const h=require('./user-away-history.json');if(!Array.isArray(h)||!h.length)throw new Error('Home-point USER lost service history while phone is away')"
+
+          user_api GET /customer-accounts > user-customers.json
+          node - <<'NODE' "$user_customer_id"
+          const d=require('./user-customers.json'), customerId=process.argv[2];
+          const customer=d.customers?.find((item)=>item.id===customerId);
+          if(!customer)throw new Error('Home-point USER lost their customer while phone is away');
+          if(customer.activeSessions!==0||customer.googleLinked!==false||customer.googleEmail!==null||customer.blocked!==false)throw new Error('Front-desk customer API leaked portal administration metadata');
+          NODE
+
+          user_api GET "/service/customers/$user_customer_id" > user-customer-detail.json
+          node - <<'NODE' "$user_order_id"
+          const d=require('./user-customer-detail.json'), orderId=process.argv[2];
+          if(!d.orders?.some((item)=>item.id===orderId))throw new Error('Front-desk customer card does not include away service order');
+          NODE
+
+          user_api POST "/customer-accounts/$user_customer_id/profile" "$(node -e "process.stdout.write(JSON.stringify({firstName:'CI',lastName:process.argv[1],email:process.argv[2]+'@invalid.test',phone:'+48999111222'}))" "USER $suffix" "$suffix")" > user-customer-profile.json
+          node -e "const d=require('./user-customer-profile.json');if(d.customer?.phone!=='+48999111222')throw new Error('USER could not update customer contact data')"
+
+          set +e
+          away_edit_http="$(curl --silent --show-error --output user-away-edit.json --write-out '%{http_code}' --request POST "$TEMP_API_URL/service/orders/$user_order_id/details" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{"deviceNotes":"Nie wolno edytować telefonu w obcym punkcie"}')"
+          set -e
+          [ "$away_edit_http" = "403" ] || { echo "::error::Home-point USER gained technical write access to away phone: HTTP $away_edit_http"; cat user-away-edit.json; exit 1; }
+
+          # Continue the original incoming-transfer USER scenarios.
+          owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$destination")" > owner-user-destination.json
+          node - <<'NODE' "$suffix" > user-incoming-body.json
+          const suffix=process.argv[2];
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'INCOMING '+suffix,
+            email:'incoming-'+suffix+'@invalid.test',
+            phone:'+48123123124',
+            brand:'LockOn',
+            model:'Incoming USER',
+            deviceNotes:'Incoming transfer for USER TEMP E2E',
+            issueDescription:'Test ręcznego przyjęcia przekazania przez USER.',
+            orderType:'REPAIR',
+            estimatedCost:179.99
+          }));
+          NODE
+          owner_api POST /service/orders "$(cat user-incoming-body.json)" > user-incoming-order.json
+          incoming_order_id="$(node -e "const d=require('./user-incoming-order.json');process.stdout.write(d.order.id)")"
+          owner_api POST "/service/orders/$incoming_order_id/transfer" "$(node -e "process.stdout.write(JSON.stringify({kind:'OUTBOUND_SERVICE',toPointId:process.argv[1],note:'Incoming to USER point'}))" "$user_point")" > user-incoming-transfer.json
+          incoming_transfer_id="$(node -e "const d=require('./user-incoming-transfer.json');process.stdout.write(d.transfer.id)")"
+
+          user_api POST "/service/transfers/$incoming_transfer_id/status" '{"status":"DELIVERED","note":"USER potwierdza dostarczenie"}' > user-delivered.json
+          user_api POST "/service/transfers/$incoming_transfer_id/status" '{"status":"ACCEPTED","note":"USER przyjął telefon"}' > user-accepted.json
+          node -e "const d=require('./user-accepted.json');if(d.transfer?.status!=='ACCEPTED')throw new Error('USER manual transfer acceptance failed')"
+
+          owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$destination")" > /dev/null
+          node - <<'NODE' "$suffix" > user-scan-body.json
+          const suffix=process.argv[2];
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'SCAN '+suffix,
+            email:'scan-'+suffix+'@invalid.test',
+            phone:'+48123123125',
+            brand:'LockOn',
+            model:'Scan USER',
+            deviceNotes:'Scan acceptance for USER TEMP E2E',
+            issueDescription:'Test przyjęcia skanem przez USER.',
+            orderType:'REPAIR',
+            estimatedCost:189.99
+          }));
+          NODE
+          owner_api POST /service/orders "$(cat user-scan-body.json)" > user-scan-order.json
+          scan_order_id="$(node -e "const d=require('./user-scan-order.json');process.stdout.write(d.order.id)")"
+          owner_api POST "/service/orders/$scan_order_id/service-card" '{"printMode":"ONLINE_ONLY"}' > user-scan-card.json
+          scan_code="$(node -e "const d=require('./user-scan-card.json');if(!d.staffScanCode)throw new Error('Missing scan code');process.stdout.write(d.staffScanCode)")"
+          owner_api POST "/service/orders/$scan_order_id/transfer" "$(node -e "process.stdout.write(JSON.stringify({kind:'OUTBOUND_SERVICE',toPointId:process.argv[1],note:'Scan incoming to USER'}))" "$user_point")" > user-scan-transfer.json
+          user_api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$scan_code")" > user-scan-accepted.json
+          node -e "const d=require('./user-scan-accepted.json');if(d.scanAction!=='SERVICE_ACCEPTED')throw new Error('USER scan acceptance failed')"
+
+          owner_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$user_point")" > /dev/null
+          node - <<'NODE' "$suffix" > user-pickup-body.json
+          const suffix=process.argv[2];
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'PICKUP '+suffix,
+            email:'pickup-'+suffix+'@invalid.test',
+            phone:'+48123123126',
+            brand:'LockOn',
+            model:'Pickup USER',
+            deviceNotes:'Pickup by USER TEMP E2E',
+            issueDescription:'Test wydania telefonu klientowi przez USER.',
+            orderType:'REPAIR',
+            estimatedCost:209.99
+          }));
+          NODE
+          owner_api POST /service/orders "$(cat user-pickup-body.json)" > user-pickup-order.json
+          pickup_order_id="$(node -e "const d=require('./user-pickup-order.json');process.stdout.write(d.order.id)")"
+          ci_technician_id="$(node -e "const d=require('./role-TECHNICIAN.json');if(!d.user?.id)throw new Error('CI TECHNICIAN fixture missing');process.stdout.write(d.user.id)")"
+          owner_api POST "/service/orders/$pickup_order_id/details" "$(node -e "process.stdout.write(JSON.stringify({assignedTechnicianId:process.argv[1]}))" "$ci_technician_id")" > user-pickup-assigned.json
+          node -e "const d=require('./user-pickup-assigned.json');if(d.assignedTechnicianId!==process.argv[1])throw new Error('Pickup fixture did not assign CI TECHNICIAN')" "$ci_technician_id"
+          owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"DIAGNOSIS","note":"CI USER pickup"}' > /dev/null
+          owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"IN_REPAIR","note":"CI USER pickup"}' > /dev/null
+          owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"REPAIR_DONE","note":"CI USER pickup"}' > /dev/null
+          owner_api POST "/service/orders/$pickup_order_id/warranty" '{"months":3,"repairSummary":"Naprawa testowa USER front-desk"}' > /dev/null
+          owner_api POST "/service/orders/$pickup_order_id/warranty-card" '{}' > /dev/null
+          owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"READY","note":"Gotowe do wydania przez USER"}' > user-pickup-ready.json
+          user_api POST "/service/orders/$pickup_order_id/status" '{"status":"COMPLETED","note":"Wydano klientowi przez USER"}' > user-pickup-completed.json
+          node -e "const d=require('./user-pickup-completed.json');if(d.order?.status!=='COMPLETED')throw new Error('USER pickup completion failed')"
+
+          echo "USER front-desk E2E passed: intake, customer view/update, home-point tracking, outbound, manual accept, scan accept, pickup."
+
+      - name: Temp service intake, PDF and logistics E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          token="$(node -e "const d=require('./auth.json'); process.stdout.write(d.token)")"
+          node - <<'NODE' > e2e-env.sh
+          const d=require('./me.json');
+          const home=d.points.find((p)=>p.id===d.activePointId);
+          const other=d.points.find((p)=>p.id!==d.activePointId);
+          if(!home||!other)throw new Error('Need two points');
+          const q=(v)=>"'" + String(v).replace(/'/g,"'\\''") + "'";
+          console.log('ORIGINAL_POINT='+q(home.id));
+          console.log('OTHER_POINT='+q(other.id));
+          NODE
+          . ./e2e-env.sh
+
+          api() {
+            local method="$1" path="$2" body="${3:-}"
+            if [ -n "$body" ]; then
+              curl --silent --show-error --fail-with-body                 --request "$method" "$TEMP_API_URL$path"                 --header "Authorization: Bearer $token"                 --header "Content-Type: application/json"                 --data "$body"
+            else
+              curl --silent --show-error --fail-with-body                 --request "$method" "$TEMP_API_URL$path"                 --header "Authorization: Bearer $token"
+            fi
+          }
+
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > active-other.json
+          node -e "const d=require('./active-other.json');if(d.activePointId!==process.argv[1])throw new Error('Active point switch failed')" "$OTHER_POINT"
+
+          run_suffix="${GITHUB_RUN_ID:-0}${GITHUB_RUN_ATTEMPT:-0}"
+          intake="$(node - <<'NODE' "$ORIGINAL_POINT" "$run_suffix"
+          const [wrongPoint,suffix]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            pointId:wrongPoint,
+            firstName:'CI',
+            lastName:'Smoke '+suffix,
+            email:'serviceos-ci-'+suffix+'@invalid.test',
+            phone:'+48123456789',
+            issueDescription:'Automatyczny test intake bez marki, modelu, uwag, IMEI i numeru seryjnego.',
+            orderType:'REPAIR'
+          }));
+          NODE
+          )"
+          api POST /service/orders "$intake" > intake.json
+          node - <<'NODE' "$OTHER_POINT"
+          const d=require('./intake.json');
+          const expected=process.argv[2];
+          if(!d.order?.id)throw new Error('Order was not created');
+          if(d.order.pointId!==expected)throw new Error('Backend trusted spoofed pointId instead of session active point');
+          if(d.order.handlingMode!=='STANDARD')throw new Error('Repair did not derive STANDARD handling mode');
+          if(d.order.assignedTechnicianId!==null)throw new Error('OWNER intake unexpectedly assigned a technician');
+          if(d.serviceCard?.required!==true)throw new Error('Service card choice is not required');
+          if(d.notification?.queued!==true)throw new Error('Mandatory intake email was not queued');
+          NODE
+
+          order_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.id)")"
+          api GET /service/orders > orders-after-intake.json
+          node - <<'NODE' "$order_id"
+          const orders=require('./orders-after-intake.json');
+          const order=orders.find((item)=>item.id===process.argv[2]);
+          if(!order)throw new Error('Created order missing from list');
+          if(order.brand!=='Nie podano'||order.model!=='Nie podano')throw new Error('Optional brand/model fallback is missing');
+          if(order.deviceNotes!=='Brak uwag')throw new Error('Automatic no-notes fallback is missing');
+          if(!order.estimatedCompletionAt)throw new Error('Automatic +3 day ETA is missing');
+          const delta=new Date(order.estimatedCompletionAt).getTime()-Date.now();
+          if(delta<2.5*24*60*60*1000||delta>3.1*24*60*60*1000)throw new Error('Automatic ETA is not approximately 3 days');
+          NODE
+          owner_id="$(node -e "const d=require('./me.json');process.stdout.write(d.user.id)")"
+
+          note_marker="OWNER-NOTE-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          api POST "/service/orders/$order_id/notes" "$(node -e "process.stdout.write(JSON.stringify({body:process.argv[1]}))" "$note_marker")" > owner-note-create.json
+          node - <<'NODE' "$owner_id" "$note_marker"
+          const d=require('./owner-note-create.json');
+          const [ownerId,marker]=process.argv.slice(2);
+          if(d.authorUserId!==ownerId || d.authorName!=='System LockOn' || d.body!==marker) throw new Error('OWNER note create response leaked identity');
+          NODE
+
+          api GET "/service/orders/$order_id/notes" > owner-notes.json
+          node - <<'NODE' "$owner_id" "$note_marker"
+          const notes=require('./owner-notes.json');
+          const [ownerId,marker]=process.argv.slice(2);
+          const note=notes.find(x=>x.authorUserId===ownerId&&x.body===marker);
+          if(!note || note.authorName!=='System LockOn') throw new Error('OWNER note history is not anonymized');
+          NODE
+
+          api GET "/service/orders/$order_id/history" > owner-history.json
+          node - <<'NODE' "$owner_id"
+          const history=require('./owner-history.json'), ownerId=process.argv[2];
+          const own=history.filter(x=>x.changedByUserId===ownerId);
+          if(!own.length) throw new Error('OWNER status history fixture missing');
+          if(own.some(x=>x.changedByName!=='System LockOn')) throw new Error('OWNER status history leaked identity');
+          NODE
+
+          api GET "/service/technicians?pointId=$OTHER_POINT" > owner-technicians.json
+          node - <<'NODE' "$owner_id" "$OTHER_POINT"
+          const technicians=require('./owner-technicians.json'), me=require('./me.json');
+          const [ownerId,pointId]=process.argv.slice(2);
+          if(technicians.some(x=>x.id===ownerId)) throw new Error('OWNER appeared in technician selector');
+          const point=me.points.find(x=>x.id===pointId);
+          if(!point) throw new Error('Point missing from owner profile');
+          if(Number(point.activeTechnicianCount)!==technicians.length) throw new Error('OWNER or non-technician affects active technician count');
+          NODE
+
+          api POST "/service/orders/$order_id/service-card" '{"printMode":"PHYSICAL_AND_ONLINE"}' > card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./card.json');
+          if(!/^SV-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(d.staffScanCode||''))throw new Error('Manual staff scan code missing');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Generated card is not a real PDF');
+          if(pdf.length<10000)throw new Error('Generated card PDF is unexpectedly small');
+          fs.writeFileSync('service-card.pdf',pdf);
+          fs.writeFileSync('staff-scan-code.txt',d.staffScanCode);
+          NODE
+
+          command -v pdfinfo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils; }
+          pdfinfo service-card.pdf > pdfinfo.txt
+          cat pdfinfo.txt
+          grep -q '^Pages:[[:space:]]*1' pdfinfo.txt || { echo "::error::Service card is not exactly one page"; exit 1; }
+          grep -Eq '^Page size:[[:space:]]+84[01](\.[0-9]+)? x 59[45](\.[0-9]+)? pts' pdfinfo.txt || { echo "::error::Service card is not A4 landscape"; exit 1; }
+          pdftotext -layout service-card.pdf service-card.txt
+          echo "--- extracted service card text ---"
+          cat service-card.txt
+          grep -qi 'PRZETNIJ' service-card.txt || { echo "::error::Cut-line label is missing from rendered PDF text"; exit 1; }
+          grep -qi 'LockOn' service-card.txt || { echo "::error::LockOn branding is missing from rendered PDF text"; exit 1; }
+          grep -Fqi 'Karta urządzenia' service-card.txt || { echo "::error::Physical PDF lost the device-card half"; exit 1; }
+          grep -Fqi 'Karta serwisowa' service-card.txt || { echo "::error::Physical PDF lost the customer-card half"; exit 1; }
+          grep -Fqi 'Zeskanuj kod QR w ServiceOS' service-card.txt || { echo "::error::Device QR purpose text is missing from rendered PDF"; exit 1; }
+          grep -Fqi 'Kod ręczny' service-card.txt || { echo "::error::Manual scan-code explanation is missing from rendered PDF"; exit 1; }
+          grep -Eq '[0-9]{2}\.[0-9]{2}\.[0-9]{4}[^0-9]+[0-9]{2}:[0-9]{2}' service-card.txt || { echo "::error::Physical service card is missing intake time"; exit 1; }
+
+          customer_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.customer.id)")"
+          api POST "/customer-accounts/$customer_id/code" '{"rotate":false}' > customer-code.json
+          customer_code="$(node -e "const d=require('./customer-code.json');if(!d.code)throw new Error('Customer portal code missing');process.stdout.write(d.code)")"
+          curl --silent --show-error --fail-with-body \
+            --request POST "$TEMP_API_URL/public/customer-portal/login" \
+            --header "Content-Type: application/json" \
+            --data "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$customer_code")" > customer-login.json
+          customer_token="$(node -e "const d=require('./customer-login.json');if(!d.sessionToken)throw new Error('Customer portal login failed');process.stdout.write(d.sessionToken)")"
+          curl --silent --show-error --fail-with-body \
+            "$TEMP_API_URL/public/customer-portal/orders/$order_id/service-card" \
+            --header "Authorization: Bearer $customer_token" > customer-card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./customer-card.json');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Customer service card is not a real PDF');
+          if(pdf.length<10000)throw new Error('Customer service card PDF is unexpectedly small');
+          fs.writeFileSync('customer-card.pdf',pdf);
+          NODE
+          pdfinfo customer-card.pdf > customer-card-pdfinfo.txt
+          cat customer-card-pdfinfo.txt
+          grep -q '^Pages:[[:space:]]*1' customer-card-pdfinfo.txt || { echo "::error::Customer card is not exactly one page"; exit 1; }
+          grep -Eq '^Page size:[[:space:]]+59[45](\.[0-9]+)? x 84[12](\.[0-9]+)? pts' customer-card-pdfinfo.txt || { echo "::error::Customer card is not full A4 portrait"; exit 1; }
+          pdftotext -layout customer-card.pdf customer-card.txt
+          echo "--- extracted customer card text ---"
+          cat customer-card.txt
+          grep -Fqi 'Panel klienta' customer-card.txt || { echo "::error::Customer panel section missing from PDF"; exit 1; }
+          grep -Fqi 'Kod klienta' customer-card.txt || { echo "::error::Customer code missing from PDF"; exit 1; }
+          grep -Fqi 'Cena orientacyjna' customer-card.txt || { echo "::error::Estimated price missing from customer PDF"; exit 1; }
+          grep -Fqi 'Przyjęcie i urządzenie' customer-card.txt || { echo "::error::Customer intake section missing from PDF"; exit 1; }
+          grep -Fqi 'Obsługa serwisowa' customer-card.txt || { echo "::error::Customer service section missing from PDF"; exit 1; }
+          grep -Eq '[0-9]{2}\.[0-9]{2}\.[0-9]{4}[^0-9]+[0-9]{2}:[0-9]{2}' customer-card.txt || { echo "::error::Customer card is missing intake time"; exit 1; }
+          grep -Fqi 'Warunki przyjęcia i odbioru' customer-card.txt || { echo "::error::Terms missing from customer PDF"; exit 1; }
+          grep -Fqi 'nie oznacza porzucenia' customer-card.txt || { echo "::error::Safe 90-day collection wording missing from customer PDF"; exit 1; }
+          grep -Fqi 'szkody będące następstwem' customer-card.txt || { echo "::error::Data-loss consequential-damage notice missing from customer PDF"; exit 1; }
+          grep -Eq 'KS-[0-9]{4}-[0-9]{6}' customer-card.txt || { echo "::error::Service card number missing from customer PDF"; exit 1; }
+          if grep -Fqi 'PRZETNIJ TUTAJ' customer-card.txt; then echo "::error::Customer-only PDF reused the physical two-card cut layout"; exit 1; fi
+
+          staff_code="$(cat staff-scan-code.txt)"
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > active-original.json
+
+          set +e
+          wrong_scan_http="$(curl --silent --show-error --output wrong-scan.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/scan"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({actingPointId:process.argv[1],code:process.argv[2]}))" "$OTHER_POINT" "$staff_code")")"
+          set -e
+          [ "$wrong_scan_http" = "409" ]
+          node -e "const d=require('./wrong-scan.json');if(d.error!=='TRANSFER_REQUIRED')throw new Error('Wrong-point scan was not rejected by server-bound active point')"
+
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
+          api POST "/service/orders/$order_id/transfer" "$(node -e "process.stdout.write(JSON.stringify({kind:'OUTBOUND_SERVICE',toPointId:process.argv[1],note:'CI temp smoke'}))" "$ORIGINAL_POINT")" > outbound.json
+
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
+          api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-outbound.json
+          node -e "const d=require('./scan-outbound.json');if(d.scanAction!=='SERVICE_ACCEPTED')throw new Error('Outbound transfer was not accepted by scan')"
+
+          api POST "/service/orders/$order_id/status" '{"status":"REPAIR_DONE","note":"CI temp smoke"}' > repair-done.json
+          node -e "const d=require('./repair-done.json');if(d.order?.status!=='REPAIR_DONE')throw new Error('Could not mark repair done at service point')"
+
+          api POST "/service/orders/$order_id/transfer" '{"kind":"RETURN_HOME","note":"CI temp smoke return before warranty"}' > return-home.json
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$OTHER_POINT")" > /dev/null
+          api POST /service/scan "$(node -e "process.stdout.write(JSON.stringify({code:process.argv[1]}))" "$staff_code")" > scan-return-before-warranty.json
+          node - <<'NODE'
+          const d=require('./scan-return-before-warranty.json');
+          if(d.scanAction!=='RETURN_ACCEPTED_WARRANTY_REQUIRED')throw new Error('Return-home scan did not keep REPAIR_DONE pending warranty');
+          if(d.order?.status!=='REPAIR_DONE')throw new Error('Returned repaired order changed status before warranty');
+          NODE
+
+          set +e
+          ready_without_warranty_http="$(curl --silent --show-error --output ready-without-warranty.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_id/status"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data '{"status":"READY","note":"CI must be blocked before warranty"}')"
+          set -e
+          [ "$ready_without_warranty_http" = "409" ] || { echo "::error::READY was not blocked before warranty: HTTP $ready_without_warranty_http"; cat ready-without-warranty.json; exit 1; }
+          node -e "const d=require('./ready-without-warranty.json');if(d.error!=='WARRANTY_REQUIRED')throw new Error('READY rejection did not use WARRANTY_REQUIRED: '+JSON.stringify(d))"
+
+          api POST "/service/orders/$order_id/warranty" '{"months":6,"repairSummary":"Wymiana modułu wyświetlacza i test funkcjonalny CI"}' > warranty.json
+          node - <<'NODE'
+          const d=require('./warranty.json');
+          if(d.warranty?.months!==6)throw new Error('Warranty months were not saved');
+          if(!d.warranty?.startedAt||!d.warranty?.expiresAt)throw new Error('Warranty dates were not created');
+          if(d.warranty?.repairSummary!=='Wymiana modułu wyświetlacza i test funkcjonalny CI')throw new Error('Repair summary was not saved with warranty');
+          if(!d.warranty?.warrantyCardNumber?.startsWith('GW-'))throw new Error('Warranty card number missing');
+          if(d.order?.warrantyReady!==false)throw new Error('Warranty must not be ready before card print');
+          NODE
+
+          api POST "/service/orders/$order_id/warranty-card" '{}' > warranty-card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./warranty-card.json');
+          if(d.order?.warrantyReady!==true)throw new Error('Warranty was not unlocked after card print');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Warranty card is not a PDF');
+          if(pdf.length<7000)throw new Error('Warranty card PDF is unexpectedly small');
+          fs.writeFileSync('warranty-card.pdf',pdf);
+          NODE
+          pdfinfo warranty-card.pdf > warranty-card-pdfinfo.txt
+          grep -q '^Pages:[[:space:]]*1' warranty-card-pdfinfo.txt || { echo "::error::Warranty card is not exactly one page"; exit 1; }
+          pdftotext -layout warranty-card.pdf warranty-card.txt
+          grep -Fqi 'Karta gwarancyjna naprawy' warranty-card.txt || { echo "::error::Warranty title missing from PDF"; exit 1; }
+          grep -Fqi 'Kod klienta' warranty-card.txt || { echo "::error::Customer code missing from warranty PDF"; exit 1; }
+          grep -Fqi '6 mies.' warranty-card.txt || { echo "::error::Warranty duration missing from PDF"; exit 1; }
+          grep -Fqi 'Wykonana naprawa' warranty-card.txt || { echo "::error::Performed repair heading missing from warranty PDF"; exit 1; }
+          grep -Fqi 'Wymiana modułu wyświetlacza' warranty-card.txt || { echo "::error::Performed repair content missing from warranty PDF"; exit 1; }
+          grep -Eq 'GW-[0-9]{4}-[0-9]{6}' warranty-card.txt || { echo "::error::Warranty card number missing from PDF"; exit 1; }
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/public/customer-portal/me"             --header "Authorization: Bearer $customer_token" > customer-warranty.json
+          node - <<'NODE' "$order_id"
+          const d=require('./customer-warranty.json'), orderId=process.argv[2];
+          const order=d.orders?.find((item)=>item.id===orderId);
+          if(!order?.warranty||order.warranty.months!==6||!order.warranty.expiresAt)throw new Error('Customer portal does not expose warranty');
+          if(order.warranty.status!=='ACTIVE'||order.warranty.active!==true||order.warranty.daysRemaining<1)throw new Error('Customer warranty status is not active');
+          if(order.warranty.cardAvailable!==true||!order.warranty.cardNumber?.startsWith('GW-'))throw new Error('Customer warranty card metadata missing');
+          if(!order.warranty.repairSummary?.includes('Wymiana modułu'))throw new Error('Customer warranty repair summary missing');
+          NODE
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/public/customer-portal/orders/$order_id/warranty-card"             --header "Authorization: Bearer $customer_token" > customer-warranty-card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./customer-warranty-card.json');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-')throw new Error('Customer warranty card download is not a PDF');
+          if(!d.warrantyCardNumber?.startsWith('GW-'))throw new Error('Customer warranty card number missing');
+          fs.writeFileSync('customer-warranty-card.pdf',pdf);
+          NODE
+
+          api POST "/service/orders/$order_id/status" '{"status":"READY","note":"CI warranty gate passed"}' > ready-after-warranty.json
+          node -e "const d=require('./ready-after-warranty.json');if(d.order?.status!=='READY')throw new Error('READY did not succeed after warranty card generation')"
+
+          api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$ORIGINAL_POINT")" > /dev/null
+
+          api GET "/service/orders?limit=1&offset=0" > orders-page-one.json
+          node -e "const d=require('./orders-page-one.json');if(!Array.isArray(d)||d.length>1)throw new Error('Service orders pagination limit failed')"
+
+          api GET /service/orders > owner-orders-after-transfer.json
+          node - <<'NODE' "$owner_id" "$order_id"
+          const orders=require('./owner-orders-after-transfer.json');
+          const [ownerId,orderId]=process.argv.slice(2);
+          const order=orders.find(x=>x.id===orderId);
+          if(!order) throw new Error('OWNER transfer regression order missing');
+          const transfers=order.transfers||[];
+          const sent=transfers.filter(x=>x.sentByUserId===ownerId);
+          const accepted=transfers.filter(x=>x.acceptedByUserId===ownerId);
+          if(!sent.length || !accepted.length) throw new Error('OWNER transfer actor fixtures missing');
+          if(sent.some(x=>x.sentByName!=='System LockOn') || accepted.some(x=>x.acceptedByName!=='System LockOn')) throw new Error('OWNER transfer identity leaked');
+          NODE
+
+
+      - name: Temp complaint flow E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
+          point_id="$(node -e "const d=require('./me.json');process.stdout.write(d.points[0].id)")"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/me/active-point"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$point_id")" > complaint-point.json
+
+          suffix="cmp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          imei="$(printf '870000%09d' "$((GITHUB_RUN_ID % 1000000000))")"
+          imei="${imei:0:15}"
+
+          node - <<'NODE' "$suffix" "$imei" > complaint-original-body.json
+          const [suffix,imei]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'Reklamacja '+suffix,
+            email:'complaint-'+suffix+'@invalid.test',
+            phone:'+48111222333',
+            brand:'LockOn',
+            model:'Complaint E2E',
+            imei,
+            serialNumber:'CMP-'+suffix,
+            deviceNotes:'Urządzenie bazowe reklamacji TEMP E2E.',
+            issueDescription:'Naprawa bazowa TEMP przed reklamacją.',
+            orderType:'REPAIR'
+          }));
+          NODE
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data @complaint-original-body.json > complaint-original.json
+          original_id="$(node -e "const d=require('./complaint-original.json');if(!d.order?.id)throw new Error('Original repair missing');process.stdout.write(d.order.id)")"
+          original_number="$(node -e "const d=require('./complaint-original.json');process.stdout.write(String(d.order.orderNumber||''))")"
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/orders/search?q=$(node -p "encodeURIComponent(process.argv[1])" "$original_number")"             --header "Authorization: Bearer $token" > complaint-search.json
+          node - <<'NODE' "$original_id"
+          const rows=require('./complaint-search.json'), originalId=process.argv[2];
+          if(!rows.some(x=>x.id===originalId)) throw new Error('Order search did not find original repair');
+          NODE
+
+          node - <<'NODE' "$suffix" "$imei" "$original_id" > complaint-body.json
+          const [suffix,imei,originalOrderId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            firstName:'CI',
+            lastName:'Reklamacja '+suffix,
+            email:'complaint-'+suffix+'@invalid.test',
+            phone:'+48111222333',
+            brand:'LockOn',
+            model:'Complaint E2E',
+            imei,
+            serialNumber:'CMP-'+suffix,
+            deviceNotes:'Syntetyczna reklamacja TEMP E2E.',
+            issueDescription:'Reklamacja TEMP: weryfikacja trybu COMPLAINT_FLOW.',
+            orderType:'COMPLAINT',
+            originalOrderId
+          }));
+          NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data @complaint-body.json > complaint.json
+
+          node - <<'NODE' "$original_id"
+          const d=require('./complaint.json'), originalId=process.argv[2];
+          if(!d.order?.id) throw new Error('Complaint order was not created');
+          if(d.order.orderType!=='COMPLAINT') throw new Error('Complaint orderType mismatch');
+          if(d.order.originalOrderId!==originalId) throw new Error('Complaint originalOrderId mismatch');
+          if(d.order.handlingMode!=='COMPLAINT_FLOW') throw new Error('Complaint did not derive COMPLAINT_FLOW');
+          if(d.serviceCard?.required!==true) throw new Error('Complaint did not require service card');
+          NODE
+
+          complaint_id="$(node -e "const d=require('./complaint.json');process.stdout.write(d.order.id)")"
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders/$complaint_id/service-card"             --header "Authorization: Bearer $token"             --header "Content-Type: application/json"             --data '{"printMode":"PHYSICAL_AND_ONLINE"}' > complaint-card.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const d=require('./complaint-card.json');
+          const pdf=Buffer.from(d.pdfBase64||'','base64');
+          if(pdf.subarray(0,5).toString()!=='%PDF-') throw new Error('Complaint card is not PDF');
+          fs.writeFileSync('complaint-card.pdf',pdf);
+          NODE
+          pdftotext -layout complaint-card.pdf complaint-card.txt
+          grep -qi 'Reklamacja' complaint-card.txt || { echo "::error::Complaint label missing from service card"; exit 1; }
+
+      - name: Temp private technician notes E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          tech_token="$(node -e "const d=require('./role-TECHNICIAN.json');process.stdout.write(d.token)")"
+          owner_token="$(node -e "const d=require('./role-OWNER.json');process.stdout.write(d.token)")"
+          marker="Prywatna notatka CI ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({title:'TEMP E2E',body:process.argv[1],pinned:true}))" "$marker")" > tech-note.json
+
+          note_id="$(node -e "const d=require('./tech-note.json');if(!d.id)throw new Error('Missing private note id');process.stdout.write(d.id)")"
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $tech_token" > tech-notes.json
+          node - <<'NODE' "$marker" "$note_id"
+          const notes=require('./tech-notes.json'), marker=process.argv[2], id=process.argv[3];
+          if(!notes.some(x=>x.id===id&&x.body===marker&&x.pinned===true)) throw new Error('Technician cannot read own private note');
+          NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/technician-notes/$note_id"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data '{"title":"TEMP E2E edited","body":"Edytowana prywatna notatka CI","pinned":false}' > tech-note-edited.json
+          node -e "const d=require('./tech-note-edited.json');if(d.title!=='TEMP E2E edited'||d.body!=='Edytowana prywatna notatka CI'||d.pinned!==false)throw new Error('Private note edit failed')"
+
+          owner_code="$(curl --silent --show-error --output owner-private-note.json --write-out '%{http_code}'             "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $owner_token")"
+          [ "$owner_code" = "403" ] || { echo "::error::OWNER unexpectedly read technician private notes: HTTP $owner_code"; cat owner-private-note.json; exit 1; }
+
+          curl --silent --show-error --fail-with-body             --request DELETE "$TEMP_API_URL/service/technician-notes/$note_id"             --header "Authorization: Bearer $tech_token" > tech-note-delete.json
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/technician-notes"             --header "Authorization: Bearer $tech_token" > tech-notes-after.json
+          node -e "const d=require('./tech-notes-after.json');if(d.some(x=>x.id===process.argv[1]))throw new Error('Private note was not deleted')" "$note_id"
+
+      - name: Temp draggable technician plan E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          tech_token="$(node -e "const d=require('./role-TECHNICIAN.json');process.stdout.write(d.token)")"
+          tech_point="$(node -e "const d=require('./role-TECHNICIAN.json');process.stdout.write(d.activePointId||d.points?.[0]?.id||'')")"
+          [ -n "$tech_point" ]
+
+          plan_api() {
+            local method="$1" path="$2" body="${3:-}"
+            if [ -n "$body" ]; then
+              curl --silent --show-error --fail-with-body \
+                --request "$method" "$TEMP_API_URL$path" \
+                --header "Authorization: Bearer $tech_token" \
+                --header "Content-Type: application/json" \
+                --data "$body"
+            else
+              curl --silent --show-error --fail-with-body \
+                --request "$method" "$TEMP_API_URL$path" \
+                --header "Authorization: Bearer $tech_token"
+            fi
+          }
+
+          suffix="PLAN-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          make_order() {
+            local ordinal="$1"
+            node - <<'NODE' "$suffix" "$ordinal"
+          const [suffix,ordinal]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            firstName:'Plan',
+            lastName:'CI '+suffix+' '+ordinal,
+            email:'serviceos-plan-'+suffix+'-'+ordinal+'@invalid.test',
+            phone:'+48123456789',
+            brand:'CI',
+            model:'Drag '+ordinal,
+            issueDescription:'Test przeciągania i kolejności planu pracy',
+            orderType:'REPAIR'
+          }));
+          NODE
+          }
+
+          plan_api POST /service/orders "$(make_order 1)" > plan-order-1.json
+          plan_api POST /service/orders "$(make_order 2)" > plan-order-2.json
+          order_1="$(node -e "const d=require('./plan-order-1.json');if(!d.order?.id||!d.order?.assignedTechnicianId)throw new Error('Technician intake did not self-assign');process.stdout.write(d.order.id)")"
+          order_2="$(node -e "const d=require('./plan-order-2.json');if(!d.order?.id||!d.order?.assignedTechnicianId)throw new Error('Technician intake did not self-assign');process.stdout.write(d.order.id)")"
+
+          target_day="$(node -e "const d=new Date(Date.now()+5*86400000);d.setUTCHours(12,0,0,0);process.stdout.write(d.toISOString())")"
+          target_key="$(node -e "process.stdout.write(new Date(process.argv[1]).toISOString().slice(0,10))" "$target_day")"
+
+          plan_api POST "/service/orders/$order_1/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-move-1.json
+          node - <<'NODE' "$target_key"
+          const d=require('./plan-move-1.json'),target=process.argv[2];
+          if(!d.order?.estimatedCompletionAt)throw new Error('Plan move did not return ETA');
+          if(new Date(d.order.estimatedCompletionAt).toISOString().slice(0,10)!==target)throw new Error('Plan move returned wrong day');
+          if(Number(d.order.planPosition||0)<=0)throw new Error('Plan position was not persisted');
+          if(!d.notification||typeof d.notification.sent!=='boolean')throw new Error('ETA notification result missing');
+          NODE
+
+          earlier_day="$(node -e "const d=new Date(process.argv[1]);d.setUTCDate(d.getUTCDate()-1);process.stdout.write(d.toISOString())" "$target_day")"
+          set +e
+          earlier_http="$(curl --silent --show-error --output plan-earlier.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_1/plan"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$earlier_day")")"
+          remove_http="$(curl --silent --show-error --output plan-remove.json --write-out '%{http_code}'             --request POST "$TEMP_API_URL/service/orders/$order_1/plan"             --header "Authorization: Bearer $tech_token"             --header "Content-Type: application/json"             --data '{"estimatedCompletionAt":null,"targetIndex":0}')"
+          set -e
+          [ "$earlier_http" = "409" ] || { echo "::error::Plan allowed moving ETA backward: HTTP $earlier_http"; cat plan-earlier.json; exit 1; }
+          [ "$remove_http" = "409" ] || { echo "::error::Plan allowed removing established ETA: HTTP $remove_http"; cat plan-remove.json; exit 1; }
+          node -e "const d=require('./plan-earlier.json');if(d.error!=='ETA_CANNOT_MOVE_BACK')throw new Error('Backward plan move returned wrong error')"
+          node -e "const d=require('./plan-remove.json');if(d.error!=='ETA_CANNOT_REMOVE')throw new Error('ETA removal returned wrong error')"
+
+          plan_api POST "/service/orders/$order_2/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-move-2.json
+          plan_api POST "/service/orders/$order_1/plan" "$(node -e "process.stdout.write(JSON.stringify({estimatedCompletionAt:process.argv[1],targetIndex:0}))" "$target_day")" > plan-reorder.json
+
+          node - <<'NODE'
+          const d=require('./plan-reorder.json');
+          if(!d.order||Number(d.order.planPosition)!==10)throw new Error('Same-day reorder did not move order to first position');
+          if(d.notification?.queued===true)throw new Error('Same-day reorder unexpectedly queued ETA email');
+          NODE
+
+          plan_api GET /service/technician-workspace > plan-workspace.json
+          node - <<'NODE' "$order_1" "$order_2" "$target_key"
+          const w=require('./plan-workspace.json');
+          const [oneId,twoId,target]=process.argv.slice(2);
+          const one=w.orders?.find(x=>x.id===oneId),two=w.orders?.find(x=>x.id===twoId);
+          if(!one||!two)throw new Error('Moved orders missing from technician workspace');
+          if(new Date(one.estimatedCompletionAt).toISOString().slice(0,10)!==target||new Date(two.estimatedCompletionAt).toISOString().slice(0,10)!==target)throw new Error('Cross-day drag date was not persisted');
+          if(Number(one.planPosition)!==10||Number(two.planPosition)!==20)throw new Error('Daily drag order was not persisted as 1/2');
+          NODE
+
+      - name: Temp private invoice signed URL E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner_token="$(node -e "const d=require('./role-OWNER.json');process.stdout.write(d.token)")"
+          user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
+          support_token="$(node -e "const d=require('./role-SUPPORT.json');process.stdout.write(d.token)")"
+          order_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.id)")"
+          invoice_point_id="$(node -e "const d=require('./intake.json');process.stdout.write(d.order.pointId)")"
+
+          test -s service-card.pdf
+          size_bytes="$(stat -c%s service-card.pdf)"
+          sha256="$(sha256sum service-card.pdf | awk '{print $1}')"
+          invoice_date="$(date -u +%F)"
+          period="${invoice_date:0:7}"
+          file_name="CI-Faktura-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.pdf"
+
+          node - <<'NODE' "$file_name" "$size_bytes" "$sha256" "$invoice_date" > invoice-intent-body.json
+          const [fileName,sizeBytes,sha256,invoiceDate]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            fileName,
+            sizeBytes:Number(sizeBytes),
+            sha256,
+            invoiceNumber:'CI/'+Date.now(),
+            supplier:'LockOn CI TEMP',
+            invoiceDate,
+            grossAmount:123.45
+          }));
+          NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/orders/$order_id/invoices/upload-intent"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data @invoice-intent-body.json > invoice-intent.json
+
+          invoice_id="$(node -e "const d=require('./invoice-intent.json');if(!d.invoiceId||!d.uploadUrl)throw new Error('Missing signed upload intent');if(d.expiresInSeconds!==600)throw new Error('Unexpected signed URL TTL');process.stdout.write(d.invoiceId)")"
+          upload_url="$(node -e "const d=require('./invoice-intent.json');process.stdout.write(d.uploadUrl)")"
+          node -e "const d=require('./invoice-intent.json');if(d.requiredHeaders?.['content-type']!=='application/pdf'||d.requiredHeaders?.['x-amz-meta-sha256']!==process.argv[1])throw new Error('Signed upload headers mismatch')" "$sha256"
+
+          curl --silent --show-error --fail-with-body             --request PUT "$upload_url"             --header "content-type: application/pdf"             --header "x-amz-meta-sha256: $sha256"             --data-binary @service-card.pdf > /dev/null
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/invoices/$invoice_id/complete"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data '{}' > invoice-complete.json
+          owner_id="$(node -e "const d=require('./me.json');process.stdout.write(d.user.id)")"
+          node - <<'NODE' "$invoice_id" "$owner_id"
+          const d=require('./invoice-complete.json');
+          const [invoiceId,ownerId]=process.argv.slice(2);
+          if(d.id!==invoiceId||!d.readyAt) throw new Error('Invoice did not become READY');
+          if(d.uploadedByUserId!==ownerId || d.uploadedByName!=='System LockOn') throw new Error('OWNER invoice uploader identity leaked');
+          NODE
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/service/invoices?month=$period&pointId=$invoice_point_id"             --header "Authorization: Bearer $owner_token" > invoices-list.json
+          node - <<'NODE' "$invoice_id" "$owner_id"
+          const d=require('./invoices-list.json');
+          const [invoiceId,ownerId]=process.argv.slice(2);
+          const invoice=d.invoices?.find(x=>x.id===invoiceId);
+          if(!invoice) throw new Error('Ready invoice missing from warehouse');
+          if(invoice.uploadedByUserId!==ownerId || invoice.uploadedByName!=='System LockOn') throw new Error('OWNER invoice list identity leaked');
+          NODE
+
+          for role_token in "$user_token" "$support_token"; do
+            denied="$(curl --silent --show-error --output invoice-denied.json --write-out '%{http_code}'               --request POST "$TEMP_API_URL/service/invoices/$invoice_id/download-intent"               --header "Authorization: Bearer $role_token"               --header "Content-Type: application/json"               --data '{}')"
+            [ "$denied" = "403" ] || { echo "::error::Unauthorized role obtained invoice download intent: HTTP $denied"; cat invoice-denied.json; exit 1; }
+          done
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/service/invoices/$invoice_id/download-intent"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data '{}' > invoice-download.json
+          download_url="$(node -e "const d=require('./invoice-download.json');if(!d.downloadUrl||d.expiresInSeconds!==600)throw new Error('Missing signed download URL');const u=new URL(d.downloadUrl);if(![...u.searchParams.keys()].some(k=>k.toLowerCase()==='x-amz-signature'))throw new Error('Download URL is not signed');process.stdout.write(d.downloadUrl)")"
+
+          curl --silent --show-error --fail-with-body "$download_url" --output downloaded-invoice.pdf
+          cmp service-card.pdf downloaded-invoice.pdf
+
+          unsigned_url="$(node -e "const u=new URL(process.argv[1]);u.search='';process.stdout.write(u.toString())" "$download_url")"
+          unsigned_code="$(curl --silent --show-error --output unsigned-invoice.txt --write-out '%{http_code}' "$unsigned_url")"
+          [ "$unsigned_code" != "200" ] || { echo "::error::Private invoice object is publicly readable"; exit 1; }
+
+          tampered_url="$(node -e "const u=new URL(process.argv[1]);const k=[...u.searchParams.keys()].find(x=>x.toLowerCase()==='x-amz-signature');u.searchParams.set(k,'0'.repeat(64));process.stdout.write(u.toString())" "$download_url")"
+          tampered_code="$(curl --silent --show-error --output tampered-invoice.txt --write-out '%{http_code}' "$tampered_url")"
+          [ "$tampered_code" != "200" ] || { echo "::error::Tampered invoice signature was accepted"; exit 1; }
+
+          curl --silent --show-error --fail-with-body             --request DELETE "$TEMP_API_URL/service/invoices/$invoice_id"             --header "Authorization: Bearer $owner_token" > invoice-delete.json
+
+      - name: Temp hotline privacy and handoff E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
+          support_token="$(node -e "const d=require('./role-SUPPORT.json');process.stdout.write(d.token)")"
+          user_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.user.id)")"
+          point_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.activePointId||d.points?.[0]?.id||'')")"
+          [ -n "$point_id" ]
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data '{}' > hotline-reset.json
+
+          private_marker="BOT-PRIVATE-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/assistant/chat"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({message:process.argv[1],target:'BOT'}))" "$private_marker")" > hotline-bot.json
+          node - <<'NODE'
+          const d=require('./hotline-bot.json');
+          if(!d.assistantMessage?.text) throw new Error('Bot did not answer before consultant request');
+          if(d.consultantState!=='BOT') throw new Error('Unexpected consultant state before request');
+          NODE
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/tickets"             --header "Authorization: Bearer $support_token" > hotline-tickets-before.json
+          node -e "const d=require('./hotline-tickets-before.json');if(d.some(x=>x.userId===process.argv[1]))throw new Error('Bot-only conversation leaked into consultant queue')" "$user_id"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/request"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1],message:'Proszę konsultanta o dołączenie.'}))" "$point_id")" > hotline-request.json
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/tickets"             --header "Authorization: Bearer $support_token" > hotline-tickets-waiting.json
+          node - <<'NODE' "$user_id" "$private_marker"
+          const tickets=require('./hotline-tickets-waiting.json'), userId=process.argv[2], secret=process.argv[3];
+          const t=tickets.find(x=>x.userId===userId);
+          if(!t) throw new Error('Consultant request missing from queue');
+          if((t.messages||[]).some(m=>String(m.text||'').includes(secret))) throw new Error('Private bot message leaked to consultant after request');
+          NODE
+
+          consultant_marker="CONSULTANT-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/assistant/chat"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({message:process.argv[1],target:'CONSULTANT'}))" "$consultant_marker")" > hotline-consultant-msg.json
+          node -e "const d=require('./hotline-consultant-msg.json');if(d.assistantMessage!==null||d.userMessage?.target!=='CONSULTANT')throw new Error('Consultant-target message generated bot reply')"
+
+          parallel_bot_marker="BOT-WHILE-WAITING-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/assistant/chat"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({message:process.argv[1],target:'BOT'}))" "$parallel_bot_marker")" > hotline-parallel-bot.json
+          node -e "const d=require('./hotline-parallel-bot.json');if(!d.assistantMessage?.text||d.consultantState!=='WAITING')throw new Error('Bot stopped helping while consultant was requested')"
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/tickets"             --header "Authorization: Bearer $support_token" > hotline-tickets-after.json
+          node - <<'NODE' "$user_id" "$consultant_marker" "$parallel_bot_marker" > hotline-ticket-id.txt
+          const tickets=require('./hotline-tickets-after.json');
+          const [userId,consultantMarker,botMarker]=process.argv.slice(2);
+          const t=tickets.find(x=>x.userId===userId);
+          if(!t) throw new Error('Waiting ticket missing');
+          if(!(t.messages||[]).some(m=>String(m.text||'').includes(consultantMarker))) throw new Error('Consultant-target message missing from queue');
+          if((t.messages||[]).some(m=>String(m.text||'').includes(botMarker))) throw new Error('Parallel private bot message leaked to consultant');
+          process.stdout.write(t.id);
+          NODE
+          ticket_id="$(cat hotline-ticket-id.txt)"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/tickets/$ticket_id/take"             --header "Authorization: Bearer $support_token"             --header "Content-Type: application/json"             --data '{}' > hotline-take.json
+
+          support_marker="ODPOWIEDZ-KONSULTANTA-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/tickets/$ticket_id/reply"             --header "Authorization: Bearer $support_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({message:process.argv[1]}))" "$support_marker")" > hotline-reply.json
+
+          visible=0
+          for attempt in $(seq 1 12); do
+            curl --silent --show-error --fail-with-body               "$TEMP_API_URL/support/conversation"               --header "Authorization: Bearer $user_token" > hotline-user-conversation.json
+            if node - <<'NODE' "$support_marker" "$private_marker" "$parallel_bot_marker"
+          const d=require('./hotline-user-conversation.json');
+          const [supportMarker,privateMarker,parallelBot]=process.argv.slice(2);
+          if(d.consultantState!=='JOINED') process.exit(1);
+          for(const marker of [supportMarker,privateMarker,parallelBot]){
+            if(!(d.messages||[]).some(m=>String(m.text||'').includes(marker))) process.exit(1);
+          }
+          NODE
+            then
+              visible=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [[ "$visible" != "1" ]]; then
+            echo "::error::Latest consultant reply did not become visible in the user conversation."
+            cat hotline-user-conversation.json
+            exit 1
+          fi
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $user_token"             --header "Content-Type: application/json"             --data '{}' > hotline-leave.json
+          node -e "const d=require('./hotline-leave.json');if(d.consultantState!=='BOT')throw new Error('Bot did not remain after consultant channel closed')"
+
+
+      - name: Temp OWNER hotline identity regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner_token="$(node -e "const d=require('./role-OWNER.json');process.stdout.write(d.token)")"
+          owner_id="$(node -e "const d=require('./role-OWNER.json');process.stdout.write(d.user.id)")"
+          support_token="$(node -e "const d=require('./role-SUPPORT.json');process.stdout.write(d.token)")"
+          boss_token="$(node -e "const d=require('./role-BOSS.json');process.stdout.write(d.token)")"
+          boss_id="$(node -e "const d=require('./role-BOSS.json');process.stdout.write(d.user.id)")"
+          point_id="$(node -e "const d=require('./role-SUPPORT.json');process.stdout.write(d.activePointId||d.points?.[0]?.id||'')")"
+          [ -n "$point_id" ]
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/presence"             --header "Authorization: Bearer $support_token" > owner-presence.json
+          node - <<'NODE' "$owner_id"
+          const rows=require('./owner-presence.json'), ownerId=process.argv[2];
+          const owner=rows.find(x=>x.userId===ownerId);
+          if(!owner) throw new Error('OWNER missing from hotline presence regression');
+          if(owner.name!=='Właściciel aplikacji' || owner.email!==null || owner.role!=='OWNER') throw new Error('OWNER hotline presence identity is not protected');
+          NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data '{}' > owner-hotline-reset.json
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/request"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1],message:'OWNER privacy regression'}))" "$point_id")" > owner-hotline-request.json
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/tickets"             --header "Authorization: Bearer $support_token" > owner-hotline-tickets-before.json
+          node - <<'NODE' "$boss_id" > owner-hotline-ticket-id.txt
+          const tickets=require('./owner-hotline-tickets-before.json'), bossId=process.argv[2];
+          const ticket=tickets.find(x=>x.userId===bossId);
+          if(!ticket) throw new Error('OWNER hotline regression ticket missing');
+          process.stdout.write(ticket.id);
+          NODE
+          ticket_id="$(cat owner-hotline-ticket-id.txt)"
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/tickets/$ticket_id/take"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data '{}' > owner-hotline-take.json
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/conversation"             --header "Authorization: Bearer $boss_token" > owner-hotline-conversation.json
+          node - <<'NODE' "$owner_id"
+          const d=require('./owner-hotline-conversation.json'), ownerId=process.argv[2];
+          if(d.assignedSupportUserId!==ownerId || d.assignedSupportName!=='Właściciel aplikacji') throw new Error('OWNER consultant label is invalid');
+          const joined=(d.messages||[]).find(m=>String(m.text||'').includes('Właściciel aplikacji')&&String(m.text||'').includes('dołączył do rozmowy'));
+          if(!joined) throw new Error('OWNER join system message is not anonymized');
+          if(JSON.stringify(d).includes('System LockOn')) throw new Error('Operational OWNER alias leaked into Help instead of hotline label');
+          NODE
+
+          curl --silent --show-error --fail-with-body             "$TEMP_API_URL/support/tickets"             --header "Authorization: Bearer $support_token" > owner-hotline-tickets-after.json
+          node - <<'NODE' "$ticket_id" "$owner_id"
+          const tickets=require('./owner-hotline-tickets-after.json');
+          const [ticketId,ownerId]=process.argv.slice(2);
+          const ticket=tickets.find(x=>x.id===ticketId);
+          if(!ticket) throw new Error('OWNER-assigned hotline ticket missing');
+          if(ticket.assignedSupportUserId!==ownerId || ticket.assignedSupportName!=='Właściciel aplikacji') throw new Error('OWNER ticket assignment leaked identity');
+          NODE
+
+          curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/support/leave"             --header "Authorization: Bearer $boss_token"             --header "Content-Type: application/json"             --data '{}' > owner-hotline-cleanup.json
