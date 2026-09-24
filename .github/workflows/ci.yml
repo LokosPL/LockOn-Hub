@@ -261,7 +261,14 @@ jobs:
           if ($login.Contains("window.lockOn.gmail.connect")) {
             throw "Login screen must not start a second Gmail OAuth flow."
           }
-          @("Zalogowano. Otwieram ServiceOS","Jedno logowanie obejmuje wysyłkę Gmail","gmail.send") | ForEach-Object {
+          @(
+            "Zalogowano. Otwieram ServiceOS",
+            "Jedno logowanie obejmuje wysyłkę Gmail",
+            "gmail.send",
+            "GOOGLE_SESSION_RECOVERY_INTERVAL_MS",
+            "window.lockOn.auth.getState()",
+            "Sesja Google została odzyskana"
+          ) | ForEach-Object {
             if (-not $login.Contains($_)) { throw "Missing unified login UX contract: $_" }
           }
 
@@ -270,7 +277,10 @@ jobs:
             "https://www.googleapis.com/auth/gmail.send",
             "access_type: 'offline'",
             "include_granted_scopes: 'true'",
-            "prompt: 'consent select_account'"
+            "prompt: 'consent select_account'",
+            "AUTH_SESSION_RESTORE_TIMEOUT_MS = 12_000",
+            "GOOGLE_GMAIL_AUTOCONNECT_TIMEOUT_MS = 8_000",
+            "writeStoredSession({ apiToken: payload.token, provider: 'google'"
           ) | ForEach-Object {
             if (-not $auth.Contains($_)) { throw "Missing primary OAuth Gmail contract: $_" }
           }
@@ -286,12 +296,25 @@ jobs:
             "EXISTING_USER_SENDER_REUSED",
             "user_gmail_credentials",
             "credentialLocation:'SERVER_USER'",
-            "GMAIL_IDENTITY_MISMATCH"
+            "GMAIL_IDENTITY_MISMATCH",
+            "GMAIL_UPSTREAM_TIMEOUT_MS = 8_000",
+            "requeueNoSenderNotificationsForUser",
+            "const [meetingGmail,gmail] = await Promise.all"
           ) | ForEach-Object {
             if (-not $central.Contains($_)) { throw "Missing per-user unified Gmail contract: $_" }
           }
           if ($central.Contains("const loadActiveMailSender = async")) {
             throw "Customer mail must not fall back to a point/global Gmail sender."
+          }
+
+          $main = Get-Content electron/main.ts -Raw
+          @("auth:state-changed","refreshAndPushAuthState","pushAuthState(state)") | ForEach-Object {
+            if (-not $main.Contains($_)) { throw "Missing auth recovery IPC contract: $_" }
+          }
+
+          $preload = Get-Content electron/preload.ts -Raw
+          if (-not $preload.Contains("auth:state-changed")) {
+            throw "Missing auth recovery preload event."
           }
 
           $gmail = Get-Content electron/gmailAuth.ts -Raw

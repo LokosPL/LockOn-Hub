@@ -14,7 +14,12 @@ contextBridge.exposeInMainWorld('lockOn', {
     getState: () => ipcRenderer.invoke('auth:getState'),
     loginGoogle: () => ipcRenderer.invoke('auth:loginGoogle'),
     loginLocal: () => ipcRenderer.invoke('auth:loginLocal'),
-    logout: () => ipcRenderer.invoke('auth:logout')
+    logout: () => ipcRenderer.invoke('auth:logout'),
+    onState: (callback: (state: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state);
+      ipcRenderer.on('auth:state-changed', listener);
+      return () => ipcRenderer.removeListener('auth:state-changed', listener);
+    }
   },
   access: {
     requestPoint: (payload: unknown) => ipcRenderer.invoke('access:requestPoint', payload)
