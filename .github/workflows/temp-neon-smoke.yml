@@ -147,7 +147,7 @@ jobs:
           echo "::error::The exact bundle artifact and connector staging files were produced successfully. Configure NEON_API_KEY (or restore an equivalent exact-deploy path) and rerun this workflow."
           exit 1
 
-      - name: Apply additive 1.0.0.20 migrations to temp Neon
+      - name: Apply additive ServiceOS migrations to temp Neon
         if: steps.neon_credential.outputs.available == 'true'
         shell: bash
         run: |
@@ -194,15 +194,17 @@ jobs:
 
           for migration in \
             database/migrations/2026-09-24-v100020-user-gmail-credentials.sql \
-            database/migrations/2026-09-24-v100020-meetings.sql
+            database/migrations/2026-09-24-v100020-meetings.sql \
+            database/migrations/2026-09-24-v100022-meeting-collaboration.sql
           do
             echo "Applying additive TEMP migration: $migration"
             psql "$database_url" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
           done
 
-          tables="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT concat_ws(',',to_regclass('public.user_gmail_credentials'),to_regclass('public.meetings'),to_regclass('public.meeting_email_outbox'));")"
-          if [[ "$tables" != *"user_gmail_credentials"* || "$tables" != *"meetings"* || "$tables" != *"meeting_email_outbox"* ]]; then
-            echo "::error::TEMP migration verification failed: $tables"
+          tables="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT concat_ws(',',to_regclass('public.user_gmail_credentials'),to_regclass('public.meetings'),to_regclass('public.meeting_email_outbox'),to_regclass('public.meeting_chat_messages'),to_regclass('public.meeting_hand_raises'));")"
+          email_column="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='meetings' AND column_name='email_notifications_enabled';")"
+          if [[ "$tables" != *"user_gmail_credentials"* || "$tables" != *"meetings"* || "$tables" != *"meeting_email_outbox"* || "$tables" != *"meeting_chat_messages"* || "$tables" != *"meeting_hand_raises"* || "$email_column" != "1" ]]; then
+            echo "::error::TEMP migration verification failed: tables=$tables email_notifications_enabled=$email_column"
             exit 1
           fi
           echo "TEMP additive migrations verified."
