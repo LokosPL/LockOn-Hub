@@ -594,6 +594,21 @@ const visiblePointIds = async (user) => {
   return rows.map((r) => r.id);
 };
 
+const meetingScopeForUser = async (user) => ({
+  global:MEETING_GLOBAL_MANAGE_ROLES.has(user.role_code),
+  pointIds:await visiblePointIds(user)
+});
+
+const meetingTargetUserInScope = async (user, scope, targetUserId) => {
+  if(scope.global){
+    return (await q("SELECT id,status,blocked_at FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[targetUserId])).rows[0]||null;
+  }
+  return (await q(
+    "SELECT u.id,u.status,u.blocked_at FROM users u WHERE u.id=$1 AND u.status='ACTIVE' AND u.blocked_at IS NULL AND (u.id=$2 OR EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=u.id AND upa.point_id=ANY($3::text[]))) LIMIT 1",
+    [targetUserId,user.id,scope.pointIds]
+  )).rows[0]||null;
+};
+
 const meetingCanManage = (user, meeting) =>
   MEETING_GLOBAL_MANAGE_ROLES.has(user.role_code) ||
   meeting?.created_by_user_id === user.id ||
@@ -4436,9 +4451,14 @@ const route = async (request) => {
   if(method==='GET'&&url.pathname==='/meetings/options'){
     const session=await requireActive(request),u=session.user;
     if(!MEETING_CREATE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do planowania spotkań.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    const scope=await meetingScopeForUser(u);
     const [pointsResult,usersResult]=await Promise.all([
-      q("SELECT id,name,city FROM points WHERE active=true ORDER BY name"),
-      q("SELECT id,name,email,role_code FROM users WHERE status='ACTIVE' AND blocked_at IS NULL AND role_code IS NOT NULL ORDER BY lower(name),lower(email)")
+      scope.global
+        ? q("SELECT id,name,city FROM points WHERE active=true ORDER BY name")
+        : q("SELECT id,name,city FROM points WHERE active=true AND id=ANY($1::text[]) ORDER BY name",[scope.pointIds]),
+      scope.global
+        ? q("SELECT id,name,email,role_code FROM users WHERE status='ACTIVE' AND blocked_at IS NULL AND role_code IS NOT NULL ORDER BY lower(name),lower(email)")
+        : q("SELECT DISTINCT u.id,u.name,u.email,u.role_code FROM users u LEFT JOIN user_point_access upa ON upa.user_id=u.id WHERE u.status='ACTIVE' AND u.blocked_at IS NULL AND u.role_code IS NOT NULL AND (u.id=$1 OR upa.point_id=ANY($2::text[])) ORDER BY lower(u.name),lower(u.email)",[u.id,scope.pointIds])
     ]);
     return json(request,{
       points:pointsResult.rows.map((row)=>({id:row.id,name:row.name,city:row.city})),
@@ -4458,9 +4478,10 @@ const route = async (request) => {
     if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy termin spotkania.'},400);
     if(startsAt.getTime()<Date.now()-10*60_000)return json(request,{error:'MEETING_DATE',message:'Nie można zaplanować spotkania w przeszłości.'},400);
 
+    const scope=await meetingScopeForUser(u);
     let hostUserId=cleanText(body.hostUserId,120)||u.id;
-    const host=(await q("SELECT id,status,blocked_at FROM users WHERE id=$1 LIMIT 1",[hostUserId])).rows[0];
-    if(!host||host.status!=='ACTIVE'||host.blocked_at)return json(request,{error:'MEETING_HOST',message:'Wybrany prowadzący nie ma aktywnego konta.'},409);
+    const host=await meetingTargetUserInScope(u,scope,hostUserId);
+    if(!host)return json(request,{error:'MEETING_HOST',message:'Wybrany prowadzący nie jest dostępny w zakresie Twoich punktów.'},409);
 
     const sourceAudience=Array.isArray(body.audience)&&body.audience.length?body.audience:[{type:'ALL'}];
     const audience=[];
@@ -4492,10 +4513,13 @@ const route = async (request) => {
         if(item.type==='POINT'){
           const exists=(await client.query("SELECT id FROM points WHERE id=$1 AND active=true LIMIT 1",[item.pointId])).rows[0];
           if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego punktu dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_POINT'});
+          if(!scope.global&&!scope.pointIds.includes(item.pointId))throw Object.assign(new Error('Nie możesz kierować spotkania do punktu poza swoim zakresem.'),{status:403,code:'MEETING_AUDIENCE_SCOPE'});
         }
         if(item.type==='USER'){
-          const exists=(await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0];
-          if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_USER'});
+          const exists=scope.global
+            ? (await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0]
+            : (await client.query("SELECT u.id FROM users u WHERE u.id=$1 AND u.status='ACTIVE' AND u.blocked_at IS NULL AND (u.id=$2 OR EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=u.id AND upa.point_id=ANY($3::text[]))) LIMIT 1",[item.userId,u.id,scope.pointIds])).rows[0];
+          if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika w zakresie Twoich punktów.'),{status:409,code:'MEETING_AUDIENCE_USER'});
         }
         await client.query(
           "INSERT INTO meeting_audience(id,meeting_id,audience_type,point_id,user_id) VALUES($1,$2,$3,$4,$5)",
@@ -4525,6 +4549,7 @@ const route = async (request) => {
     if(!meeting)return json(request,{error:'NOT_FOUND'},404);
     if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zmieniać tego spotkania.'},403);
     if(meeting.status!=='SCHEDULED')return json(request,{error:'MEETING_STATE',message:'Spotkanie można edytować tylko przed rozpoczęciem.'},409);
+    const scope=await meetingScopeForUser(u);
 
     const body=await readJson(request);
     const title=body.title===undefined?meeting.title:cleanText(body.title,120);
@@ -4589,10 +4614,13 @@ const route = async (request) => {
           if(item.type==='POINT'){
             const exists=(await client.query("SELECT id FROM points WHERE id=$1 AND active=true LIMIT 1",[item.pointId])).rows[0];
             if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego punktu dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_POINT'});
+            if(!scope.global&&!scope.pointIds.includes(item.pointId))throw Object.assign(new Error('Nie możesz kierować spotkania do punktu poza swoim zakresem.'),{status:403,code:'MEETING_AUDIENCE_SCOPE'});
           }
           if(item.type==='USER'){
-            const exists=(await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0];
-            if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_USER'});
+            const exists=scope.global
+              ? (await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0]
+              : (await client.query("SELECT u.id FROM users u WHERE u.id=$1 AND u.status='ACTIVE' AND u.blocked_at IS NULL AND (u.id=$2 OR EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=u.id AND upa.point_id=ANY($3::text[]))) LIMIT 1",[item.userId,u.id,scope.pointIds])).rows[0];
+            if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika w zakresie Twoich punktów.'),{status:409,code:'MEETING_AUDIENCE_USER'});
           }
         }
       }
