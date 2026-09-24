@@ -81,11 +81,30 @@ const focusMainWindow = () => {
   mainWindow.focus();
 };
 
+const pushAuthState = (state: Awaited<ReturnType<typeof getAuthState>>) => {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  mainWindow.webContents.send('auth:state-changed', state);
+};
+
+const refreshAndPushAuthState = async () => {
+  try {
+    const state = await getAuthState(isDevelopment);
+    pushAuthState(state);
+    return state;
+  } catch (error) {
+    console.warn('[auth state refresh]', error instanceof Error ? error.message : String(error));
+    return null;
+  }
+};
+
 const handleProtocolUrl = (value: string) => {
   try {
     const url = new URL(value);
     if (url.protocol !== APP_PROTOCOL + ':' || url.hostname !== 'login-complete') return false;
     focusMainWindow();
+    // Deep-link z karty sukcesu jest również sygnałem odzyskania sesji.
+    // Jeżeli pierwotne ipcRenderer.invoke utknęło, renderer dostanie stan osobnym kanałem.
+    void refreshAndPushAuthState();
     return true;
   } catch {
     return false;
@@ -792,11 +811,21 @@ const registerIpc = () => {
   secureHandle('window:close', () => mainWindow?.close());
 
   secureHandle('auth:getState', () => getAuthState(isDevelopment));
-  secureHandle('auth:loginGoogle', () => loginWithGoogle(isDevelopment));
-  secureHandle('auth:loginLocal', () => loginLocalStarter(isDevelopment));
+  secureHandle('auth:loginGoogle', async () => {
+    const state = await loginWithGoogle(isDevelopment);
+    pushAuthState(state);
+    return state;
+  });
+  secureHandle('auth:loginLocal', async () => {
+    const state = await loginLocalStarter(isDevelopment);
+    pushAuthState(state);
+    return state;
+  });
   secureHandle('auth:logout', async () => {
     withMainWindow((window) => setBrowserVisible(window, false));
-    return logout(isDevelopment);
+    const state = await logout(isDevelopment);
+    pushAuthState(state);
+    return state;
   });
 
   secureHandle('access:requestPoint', async (payload: { pointName?: unknown; city?: unknown; requestedRole?: unknown; technicianSplitPercent?: unknown }) => {
