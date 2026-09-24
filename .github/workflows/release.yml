@@ -101,7 +101,7 @@ jobs:
 
           $prodSha = [string]$prod.head_sha
 
-          $smokeUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&event=workflow_run&status=success&per_page=100"
+          $smokeUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&status=success&per_page=100"
           $smokeResponse = Invoke-RestMethod -Uri $smokeUrl -Headers $headers -Method Get
           $expectedSmokeTitle = "Production API smoke · $prodSha"
           $smoke = $smokeResponse.workflow_runs |
