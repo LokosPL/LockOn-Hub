@@ -1,5 +1,6 @@
 import {
   BadgeDollarSign,
+  CalendarRange,
   Gauge,
   Globe2,
   Headphones,
@@ -20,6 +21,7 @@ export type NavigationKey =
   | 'administration'
   | 'customers'
   | 'service'
+  | 'meetings'
   | 'earnings'
   | 'browser'
   | 'support'
@@ -40,6 +42,7 @@ const items = [
   { key: 'dashboard', label: 'Start', icon: Gauge },
   { key: 'browser', label: 'Przeglądarka', icon: Globe2 },
   { key: 'service', label: 'Serwis', icon: Wrench },
+  { key: 'meetings', label: 'Spotkania i szkolenia', icon: CalendarRange },
   { key: 'earnings', label: 'Rozliczenia', icon: BadgeDollarSign },
   { key: 'administration', label: 'Administracja', icon: UserCog },
   { key: 'customers', label: 'Klienci', icon: UsersRound },
