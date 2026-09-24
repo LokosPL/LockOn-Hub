@@ -517,22 +517,30 @@ jobs:
           owner_token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
           [ -n "$user_point" ]
 
-          user_api() {
-            local method="$1" path="$2" body="${3:-}"
+          api_checked() {
+            local actor="$1" token="$2" method="$3" path="$4" body="${5:-}" tmp code
+            tmp="$(mktemp)"
             if [ -n "$body" ]; then
-              curl --silent --show-error --fail-with-body --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data "$body"
+              code="$(curl --silent --show-error --output "$tmp" --write-out '%{http_code}' --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $token" --header "Content-Type: application/json" --data "$body")"
             else
-              curl --silent --show-error --fail-with-body --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $user_token"
+              code="$(curl --silent --show-error --output "$tmp" --write-out '%{http_code}' --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $token")"
             fi
+            if [[ "$code" -lt 200 || "$code" -ge 300 ]]; then
+              echo "::error::$actor $method $path returned HTTP $code" >&2
+              cat "$tmp" >&2
+              rm -f "$tmp"
+              return 22
+            fi
+            cat "$tmp"
+            rm -f "$tmp"
+          }
+
+          user_api() {
+            api_checked USER "$user_token" "$1" "$2" "${3:-}"
           }
 
           owner_api() {
-            local method="$1" path="$2" body="${3:-}"
-            if [ -n "$body" ]; then
-              curl --silent --show-error --fail-with-body --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data "$body"
-            else
-              curl --silent --show-error --fail-with-body --request "$method" "$TEMP_API_URL$path" --header "Authorization: Bearer $owner_token"
-            fi
+            api_checked OWNER "$owner_token" "$1" "$2" "${3:-}"
           }
 
           user_api POST /me/active-point "$(node -e "process.stdout.write(JSON.stringify({pointId:process.argv[1]}))" "$user_point")" > user-active-point.json
