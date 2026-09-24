@@ -72,7 +72,8 @@ test('Pokój, edycja i frekwencja są widokami panelu zamiast modalami nakładan
   const room=await read('src/components/MeetingRoom.tsx');
   const meetings=await read('src/components/MeetingsCard.tsx');
   const styles=await read('src/styles.css');
-  assert.match(room,/className="meeting-room-panel"/);
+  assert.match(room,/meeting-room-panel/);
+  assert.match(room,/theater-mode/);
   assert.doesNotMatch(room,/className="meeting-room-backdrop"/);
   assert.match(meetings,/meetings-card-workspace/);
   assert.match(meetings,/Wróć do spotkań/);
