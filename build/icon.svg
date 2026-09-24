@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">ServiceOS</title>
+  <desc id="desc">Ikona ServiceOS: smartfon otoczony pomarańczową orbitą</desc>
+  <defs>
+    <radialGradient id="bgGlow" cx="56%" cy="42%" r="68%">
+      <stop offset="0" stop-color="#1f2935"/><stop offset=".52" stop-color="#111820"/><stop offset="1" stop-color="#090c10"/>
+    </radialGradient>
+    <linearGradient id="frame" x1=".12" y1=".08" x2=".88" y2=".94">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".45" stop-color="#dbe3ea"/><stop offset=".72" stop-color="#ffffff"/><stop offset="1" stop-color="#aeb9c4"/>
+    </linearGradient>
+    <linearGradient id="screen" x1=".14" y1=".08" x2=".86" y2=".92">
+      <stop offset="0" stop-color="#1b2632"/><stop offset=".46" stop-color="#0f151c"/><stop offset="1" stop-color="#070a0e"/>
+    </linearGradient>
+    <linearGradient id="orbit" x1=".08" y1=".65" x2=".92" y2=".36">
+      <stop offset="0" stop-color="#ff4b16"/><stop offset=".42" stop-color="#ff7a1a"/><stop offset=".72" stop-color="#ff9d00"/><stop offset="1" stop-color="#ffd36a"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="22" stdDeviation="22" flood-color="#000" flood-opacity=".55"/></filter>
+    <filter id="orangeGlow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="softWhite" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="3.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <clipPath id="screenClip"><rect x="174" y="96" width="164" height="320" rx="39"/></clipPath>
+  </defs>
+  <rect x="18" y="18" width="476" height="476" rx="108" fill="url(#bgGlow)" stroke="#222c36" stroke-width="3" filter="url(#shadow)"/>
+  <path d="M90 350C149 274 278 228 396 241C442 246 462 266 456 289C449 319 398 350 328 369C237 394 133 392 83 367" fill="none" stroke="#ff6a19" stroke-opacity=".20" stroke-width="38" stroke-linecap="round" filter="url(#orangeGlow)"/>
+  <g filter="url(#shadow)">
+    <rect x="151" y="70" width="210" height="372" rx="54" fill="#080b0f" stroke="url(#frame)" stroke-width="15" filter="url(#softWhite)"/>
+    <rect x="168" y="89" width="176" height="336" rx="43" fill="url(#screen)" stroke="#2b3946" stroke-width="3"/>
+    <g clip-path="url(#screenClip)" opacity=".5"><path d="M164 94H333L188 318Z" fill="#435264" opacity=".32"/><path d="M294 91H344V425H218Z" fill="#05080b" opacity=".38"/></g>
+    <rect x="225" y="102" width="62" height="10" rx="5" fill="#eef3f7" opacity=".92"/>
+    <rect x="228" y="401" width="56" height="9" rx="4.5" fill="#dfe7ed" opacity=".86"/>
+  </g>
+  <g filter="url(#orangeGlow)">
+    <path d="M75 344C139 292 239 248 341 235C397 228 439 235 451 254C466 278 430 310 365 337C294 367 201 382 129 374C82 369 57 357 75 344Z" fill="none" stroke="url(#orbit)" stroke-width="18" stroke-linecap="round"/>
+    <path d="M84 350C151 308 240 274 329 260C387 251 427 253 447 266" fill="none" stroke="#fff2c3" stroke-opacity=".66" stroke-width="3.5" stroke-linecap="round"/>
+  </g>
+  <ellipse cx="351" cy="245" rx="8" ry="8" fill="#ffb21d" filter="url(#orangeGlow)"/>
+</svg>
