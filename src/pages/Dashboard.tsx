@@ -278,7 +278,7 @@ export function Dashboard({ onNavigate, onOpenHelp, onOpenMeeting, pointName, ro
         </aside>
       </section>
 
-      <NextMeetingCard onOpen={() => onNavigate('meetings')} onOpenMeeting={onOpenMeeting} />
+      <NextMeetingCard onOpen={() => onNavigate('meetings')} onOpenMeeting={onOpenMeeting} role={role} />
 
       <section className="start-section">
         <div className="start-section-heading">

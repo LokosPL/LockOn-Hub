@@ -1117,7 +1117,7 @@ const registerIpc = () => {
     requireSessionToken();
     const sources = await desktopCapturer.getSources({
       types:['screen','window'],
-      thumbnailSize:{width:320,height:180},
+      thumbnailSize:{width:640,height:360},
       fetchWindowIcons:true
     });
     return sources.slice(0,40).map((source)=>({
