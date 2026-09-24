@@ -36,7 +36,7 @@
     "livekit-server-sdk": "2.19.1"
   },
   "devDependencies": {
-    "@types/node": "^22.15.30",
+    "@types/node": "^26.6.2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "concurrently": "^9.1.2",
