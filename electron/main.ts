@@ -83,6 +83,48 @@ const focusMainWindow = () => {
   mainWindow.focus();
 };
 
+type MeetingShareOverlayState = {
+  meetingId:string;
+  meetingTitle:string;
+  startedAt:string;
+  plannedMinutes:number;
+  elapsedSeconds:number;
+  participantCount:number;
+  speakingNames:string[];
+  micEnabled:boolean;
+  handCount:number;
+  latestMessage?:{authorName:string;body:string}|null;
+};
+
+const clampOverlayText = (value: unknown, max = 180) =>
+  String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+
+const normalizeMeetingShareOverlayState = (value: unknown): MeetingShareOverlayState => {
+  const input = value && typeof value === 'object' ? value as Record<string,unknown> : {};
+  const rawMessage = input.latestMessage && typeof input.latestMessage === 'object'
+    ? input.latestMessage as Record<string,unknown>
+    : null;
+  return {
+    meetingId:clampOverlayText(input.meetingId,64),
+    meetingTitle:clampOverlayText(input.meetingTitle,120) || 'Spotkanie',
+    startedAt:clampOverlayText(input.startedAt,64),
+    plannedMinutes:Math.max(1,Math.min(24*60,Math.trunc(Number(input.plannedMinutes)||60))),
+    elapsedSeconds:Math.max(0,Math.min(7*24*3600,Math.trunc(Number(input.elapsedSeconds)||0))),
+    participantCount:Math.max(0,Math.min(500,Math.trunc(Number(input.participantCount)||0))),
+    speakingNames:Array.isArray(input.speakingNames)
+      ? input.speakingNames.slice(0,4).map((item)=>clampOverlayText(item,48)).filter(Boolean)
+      : [],
+    micEnabled:input.micEnabled===true,
+    handCount:Math.max(0,Math.min(500,Math.trunc(Number(input.handCount)||0))),
+    latestMessage:rawMessage
+      ? {
+          authorName:clampOverlayText(rawMessage.authorName,48) || 'Uczestnik',
+          body:clampOverlayText(rawMessage.body,180)
+        }
+      : null
+  };
+};
+
 const closeMeetingShareOverlay = () => {
   if (!meetingShareOverlayWindow || meetingShareOverlayWindow.isDestroyed()) {
     meetingShareOverlayWindow = null;
@@ -92,25 +134,138 @@ const closeMeetingShareOverlay = () => {
   meetingShareOverlayWindow = null;
 };
 
+const updateMeetingShareOverlay = async (state: unknown) => {
+  if (!meetingShareOverlayWindow || meetingShareOverlayWindow.isDestroyed()) {
+    meetingShareOverlayWindow = null;
+    return {ok:true,shown:false};
+  }
+  const safe = normalizeMeetingShareOverlayState(state);
+  const serialized = JSON.stringify(safe);
+  await meetingShareOverlayWindow.webContents
+    .executeJavaScript('window.__lockOnMeetingOverlayUpdate?.(' + serialized + ')', true)
+    .catch(() => undefined);
+  return {ok:true,shown:true};
+};
+
 const showMeetingShareOverlay = async (source: { kind?:string; displayId?:string|null; name?:string } | null) => {
   closeMeetingShareOverlay();
-  if (!source || source.kind !== 'screen' || !source.displayId) return { ok:true, shown:false };
-  const display = screen.getAllDisplays().find((item) => String(item.id) === String(source.displayId));
+  if (!source) return { ok:true, shown:false };
+
+  const requestedDisplay = source.displayId
+    ? screen.getAllDisplays().find((item) => String(item.id) === String(source.displayId))
+    : null;
+  const display = requestedDisplay
+    ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+    ?? screen.getPrimaryDisplay();
   if (!display) return { ok:true, shown:false };
+
   const bounds = display.bounds;
-  const label = String(source.name || 'Udostępniany ekran').replace(/[<>&"']/g,'').slice(0,120);
+  const label = clampOverlayText(source.name || (source.kind === 'window' ? 'Wybrane okno' : 'Wybrany ekran'),120);
+  const sourceKind = source.kind === 'window' ? 'OKNO' : 'EKRAN';
+
   meetingShareOverlayWindow = new BrowserWindow({
     x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height,
     frame:false,transparent:true,backgroundColor:'#00000000',resizable:false,movable:false,
     focusable:false,skipTaskbar:true,show:false,alwaysOnTop:true,hasShadow:false,
-    webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,devTools:false}
+    webPreferences:{
+      sandbox:true,
+      contextIsolation:true,
+      nodeIntegration:false,
+      devTools:false,
+      backgroundThrottling:false
+    }
   });
   meetingShareOverlayWindow.setAlwaysOnTop(true,'screen-saver');
   meetingShareOverlayWindow.setIgnoreMouseEvents(true,{forward:true});
   meetingShareOverlayWindow.setContentProtection(true);
-  const html='<!doctype html><html><body style="margin:0;box-sizing:border-box;width:100vw;height:100vh;border:4px solid rgba(255,122,69,.92);font-family:Segoe UI,Arial,sans-serif;pointer-events:none"><div style="position:fixed;top:14px;left:50%;transform:translateX(-50%);background:rgba(10,12,15,.92);color:#fff;border:1px solid rgba(255,122,69,.55);border-radius:999px;padding:9px 14px;font-size:12px;font-weight:700;box-shadow:0 8px 32px rgba(0,0,0,.35)">● Udostępniasz ten ekran w LockOn ServiceOS · '+label+'</div></body></html>';
+  meetingShareOverlayWindow.setVisibleOnAllWorkspaces(true,{visibleOnFullScreen:true});
+
+  const sourceLabel = label
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+
+  const html=`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font-family:Inter,"Segoe UI",Arial,sans-serif;color:#f6f8fb}
+body{pointer-events:none}
+.frame{position:fixed;inset:0;border:3px solid rgba(255,113,45,.9);box-shadow:inset 0 0 0 1px rgba(255,188,151,.12),inset 0 0 38px rgba(255,91,24,.08);border-radius:2px}
+.hud{position:fixed;left:18px;top:18px;width:min(430px,calc(100vw - 36px));padding:12px 13px;border:1px solid rgba(255,255,255,.13);border-radius:15px;background:linear-gradient(145deg,rgba(13,18,24,.84),rgba(9,13,18,.72));box-shadow:0 16px 48px rgba(0,0,0,.34);backdrop-filter:blur(18px) saturate(125%)}
+.top{display:flex;align-items:center;gap:9px;min-width:0}
+.live{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;color:#ff9a69;font-size:10px;font-weight:850;letter-spacing:.055em}
+.dot{width:7px;height:7px;border-radius:50%;background:#ff7138;box-shadow:0 0 0 4px rgba(255,113,56,.12),0 0 16px rgba(255,91,27,.42)}
+.title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:800}
+.timer{margin-left:auto;flex:0 0 auto;padding:5px 7px;border:1px solid rgba(255,255,255,.09);border-radius:8px;background:rgba(255,255,255,.035);font-variant-numeric:tabular-nums;font-size:11px;font-weight:800}
+.source{margin-top:8px;color:#8593a0;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.metrics{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:9px}
+.metric{padding:5px 7px;border:1px solid rgba(255,255,255,.075);border-radius:8px;background:rgba(255,255,255,.025);color:#acb7c2;font-size:10px}
+.metric b{color:#f4f7fa}
+.speaker,.chat{margin-top:8px;padding:8px 9px;border-radius:10px;border:1px solid rgba(255,255,255,.075);background:rgba(5,8,12,.32);display:none}
+.speaker.show,.chat.show{display:flex}
+.speaker{align-items:center;gap:7px;color:#a9b5c0;font-size:10px}
+.speaker i{width:7px;height:7px;border-radius:50%;background:#5de09b;box-shadow:0 0 12px rgba(93,224,155,.5)}
+.speaker strong{color:#dcf6e9}
+.chat{flex-direction:column;gap:2px}
+.chat strong{color:#ffb18b;font-size:9px}
+.chat span{color:#d7dde3;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
+</head>
+<body>
+<div class="frame"></div>
+<div class="hud">
+  <div class="top">
+    <span class="live"><i class="dot"></i> UDOSTĘPNIASZ</span>
+    <strong class="title" id="meetingTitle">Spotkanie</strong>
+    <span class="timer" id="timer">00:00</span>
+  </div>
+  <div class="source">${sourceKind}: ${sourceLabel}</div>
+  <div class="metrics">
+    <span class="metric"><b id="people">0</b> osób</span>
+    <span class="metric">plan <b id="plan">60 min</b></span>
+    <span class="metric" id="mic">mikrofon wyłączony</span>
+    <span class="metric">ręce <b id="hands">0</b></span>
+  </div>
+  <div class="speaker" id="speaker"><i></i><span>Mówi: <strong id="speakerNames"></strong></span></div>
+  <div class="chat" id="chat"><strong id="chatAuthor"></strong><span id="chatBody"></span></div>
+</div>
+<script>
+const formatTime=(value)=>{
+  const safe=Math.max(0,Math.floor(Number(value)||0));
+  const h=Math.floor(safe/3600),m=Math.floor((safe%3600)/60),s=safe%60;
+  return h>0?[h,m,s].map(v=>String(v).padStart(2,'0')).join(':'):[m,s].map(v=>String(v).padStart(2,'0')).join(':');
+};
+window.__lockOnMeetingOverlayUpdate=(state)=>{
+  if(!state)return;
+  document.getElementById('meetingTitle').textContent=state.meetingTitle||'Spotkanie';
+  document.getElementById('timer').textContent=formatTime(state.elapsedSeconds);
+  document.getElementById('people').textContent=String(state.participantCount||0);
+  document.getElementById('plan').textContent=String(state.plannedMinutes||60)+' min';
+  document.getElementById('mic').textContent=state.micEnabled?'mikrofon włączony':'mikrofon wyłączony';
+  document.getElementById('hands').textContent=String(state.handCount||0);
+  const speaker=document.getElementById('speaker');
+  const names=Array.isArray(state.speakingNames)?state.speakingNames.filter(Boolean):[];
+  speaker.classList.toggle('show',names.length>0);
+  document.getElementById('speakerNames').textContent=names.join(', ');
+  const chat=document.getElementById('chat');
+  const msg=state.latestMessage&&state.latestMessage.body?state.latestMessage:null;
+  chat.classList.toggle('show',Boolean(msg));
+  document.getElementById('chatAuthor').textContent=msg?msg.authorName:'';
+  document.getElementById('chatBody').textContent=msg?msg.body:'';
+};
+</script>
+</body>
+</html>`;
+
   await meetingShareOverlayWindow.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(html));
-  if (meetingShareOverlayWindow && !meetingShareOverlayWindow.isDestroyed()) meetingShareOverlayWindow.showInactive();
+  if (meetingShareOverlayWindow && !meetingShareOverlayWindow.isDestroyed()) {
+    meetingShareOverlayWindow.showInactive();
+  }
   return { ok:true, shown:true };
 };
 
@@ -360,7 +515,10 @@ const secureWebPreferences = {
   allowRunningInsecureContent: false,
   experimentalFeatures: false,
   devTools: isDevelopment,
-  spellcheck: false
+  spellcheck: false,
+  // Spotkanie, mikrofon i screen share mają działać również po zminimalizowaniu
+  // ServiceOS albo podczas pracy w innej aplikacji.
+  backgroundThrottling: false
 } as const;
 
 const createSplashWindow = async () => {
@@ -1137,7 +1295,16 @@ const registerIpc = () => {
     }
     if (!source || typeof source !== 'object') throw new Error('Nieprawidłowe źródło udostępniania.');
     const safe = source as { kind?:string; displayId?:string|null; name?:string };
-    return showMeetingShareOverlay({kind:safe.kind,displayId:safe.displayId||null,name:String(safe.name||'').slice(0,120)});
+    if (safe.kind !== 'screen' && safe.kind !== 'window') throw new Error('Nieprawidłowy typ źródła udostępniania.');
+    return showMeetingShareOverlay({
+      kind:safe.kind,
+      displayId:safe.displayId||null,
+      name:clampOverlayText(safe.name,120)
+    });
+  });
+  secureHandle('meetings:updateShareOverlay', async (state: unknown) => {
+    requireSessionToken();
+    return updateMeetingShareOverlay(state);
   });
   secureHandle('meetings:chat', async (meetingId: string) => {
     const token=requireSessionToken();
