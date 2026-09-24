@@ -53,6 +53,7 @@ const WEB_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 90;
 const WEB_SESSION_ABSOLUTE_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 5;
 const WEBSITE_CODE_TTL_MS = 1000 * 60 * 5;
 const PUBLIC_AUTH_RATE_WINDOW_MS = 60_000;
+const GMAIL_UPSTREAM_TIMEOUT_MS = 8_000;
 const PUBLIC_CODE_ATTEMPT_LIMIT = 12;
 const PUBLIC_GOOGLE_ATTEMPT_LIMIT = 30;
 const BODY_LIMIT = 64 * 1024;
@@ -1477,6 +1478,7 @@ const refreshGmailAccess = async (refreshToken, legacyClientSecret = '') => {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    signal: AbortSignal.timeout(GMAIL_UPSTREAM_TIMEOUT_MS),
     body: new URLSearchParams({
       client_id: GOOGLE_DESKTOP_CLIENT_ID,
       client_secret: clientSecret,
@@ -1506,7 +1508,8 @@ const isGmailReauthError = (error) => Boolean(error && typeof error === 'object'
 
 const gmailProfile = async (accessToken) => {
   const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
-    headers: { Authorization: 'Bearer ' + accessToken }
+    headers: { Authorization: 'Bearer ' + accessToken },
+    signal: AbortSignal.timeout(GMAIL_UPSTREAM_TIMEOUT_MS)
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.emailAddress) throw new Error('Brak uprawnienia gmail.send dla połączonego konta.');
@@ -1550,11 +1553,16 @@ const gmailStatusForUser = async (user) => {
   };
 };
 
-const recoverNoSenderNotificationsForUser = async (userId) => {
+const requeueNoSenderNotificationsForUser = async (userId) => {
   const { rows } = await q(
     "UPDATE notification_outbox SET status='PENDING',attempts=0,last_error=NULL,available_at=now(),updated_at=now() WHERE user_id=$1 AND status='FAILED' AND last_error IN ('Brak aktywnego, kompletnego nadawcy Gmail dla punktu.','Brak aktywnego Gmail zalogowanego pracownika.') RETURNING id",
     [userId]
   );
+  return rows;
+};
+
+const recoverNoSenderNotificationsForUser = async (userId) => {
+  const rows = await requeueNoSenderNotificationsForUser(userId);
   let sent = 0;
   for (const row of rows) {
     const result = await processNotification(row.id);
@@ -1591,26 +1599,24 @@ const autoConnectGmailFromPrimaryLogin = async (loginPayload, profile, tokens) =
       [userId,profile.email,profile.sub]
     )).rows[0];
     if (existing?.refresh_token_ciphertext) {
-      try {
-        await refreshGmailAccess(decryptSecret(existing.refresh_token_ciphertext), '');
-        await q("UPDATE user_gmail_credentials SET google_sub=COALESCE(google_sub,$2),last_error=NULL,status='ACTIVE',updated_at=now() WHERE user_id=$1",[userId,profile.sub]);
-        return {
-          connected:true,
-          skipped:false,
-          pointId:pointId || null,
-          email:operationalIdentityEmail(existing.sender_email, role),
-          status:'ACTIVE',
-          reason:'EXISTING_USER_SENDER_REUSED'
-        };
-      } catch {
-        console.warn('[gmail user credential reuse at login] stored credential could not be refreshed');
-      }
+      // Nie blokujemy logowania dodatkowym requestem do Google. Credential został
+      // wcześniej zweryfikowany; ewentualne cofnięcie zgody wykryje wysyłka/status Gmail.
+      await q("UPDATE user_gmail_credentials SET google_sub=COALESCE(google_sub,$2),last_error=NULL,status='ACTIVE',updated_at=now() WHERE user_id=$1",[userId,profile.sub]);
+      return {
+        connected:true,
+        skipped:false,
+        pointId:pointId || null,
+        email:operationalIdentityEmail(existing.sender_email, role),
+        status:'ACTIVE',
+        reason:'EXISTING_USER_SENDER_REUSED'
+      };
     }
     return { connected:false, skipped:false, reason:'REFRESH_TOKEN_MISSING', pointId:pointId || null };
   }
 
   try {
-    await refreshGmailAccess(refreshToken, '');
+    // Refresh token pochodzi z właśnie zakończonej, zweryfikowanej wymiany OAuth.
+    // Nie wykonujemy redundantnego requestu refresh podczas krytycznej ścieżki loginu.
     await q(
       "INSERT INTO user_gmail_credentials(user_id,google_sub,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,granted_scopes,status,last_error,connected_at,updated_at) VALUES($1,$2,$3,$4,NULL,$5::text[],'ACTIVE',NULL,now(),now()) ON CONFLICT(user_id) DO UPDATE SET google_sub=EXCLUDED.google_sub,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,granted_scopes=EXCLUDED.granted_scopes,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
       [userId,profile.sub,profile.email,encryptSecret(refreshToken),grantedScopes]
@@ -1622,7 +1628,8 @@ const autoConnectGmailFromPrimaryLogin = async (loginPayload, profile, tokens) =
       );
     }
 
-    const recovery = await recoverNoSenderNotificationsForUser(userId);
+    const requeued = await requeueNoSenderNotificationsForUser(userId);
+    const recovery = { recovered:requeued.length, sent:0 };
     const user = await loadUser(userId);
     if (user) {
       await audit(
@@ -1671,17 +1678,12 @@ const autoConnectMeetingGmailFromOwner = async (loginPayload, profile, tokens) =
   if(!refreshToken){
     const existing=(await q("SELECT sender_email,refresh_token_ciphertext,status FROM meeting_email_sender WHERE id='default' LIMIT 1")).rows[0];
     if(existing?.status==='ACTIVE'&&existing.refresh_token_ciphertext){
-      try{
-        await refreshGmailAccess(decryptSecret(existing.refresh_token_ciphertext),'');
-        return {connected:true,skipped:false,email:existing.sender_email,status:'ACTIVE',reason:'EXISTING_MEETING_SENDER_REUSED'};
-      }catch{
-        console.warn('[meeting gmail credential reuse] stored credential could not be refreshed');
-      }
+      // Tak samo jak dla Gmaila użytkownika: nie dokładamy requestu Google do loginu.
+      return {connected:true,skipped:false,email:existing.sender_email,status:'ACTIVE',reason:'EXISTING_MEETING_SENDER_REUSED'};
     }
     return {connected:false,skipped:false,reason:'REFRESH_TOKEN_MISSING'};
   }
   try{
-    await refreshGmailAccess(refreshToken,'');
     await q(
       "INSERT INTO meeting_email_sender(id,connected_by_user_id,sender_email,refresh_token_ciphertext,oauth_client_secret_ciphertext,status,last_error,connected_at,updated_at) VALUES('default',$1,$2,$3,NULL,'ACTIVE',NULL,now(),now()) ON CONFLICT(id) DO UPDATE SET connected_by_user_id=EXCLUDED.connected_by_user_id,sender_email=EXCLUDED.sender_email,refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,oauth_client_secret_ciphertext=NULL,status='ACTIVE',last_error=NULL,connected_at=now(),updated_at=now()",
       [userId,profile.email,encryptSecret(refreshToken)]
@@ -3612,8 +3614,12 @@ const route = async (request) => {
       if (!tokens?.id_token) return json(request, { error:'GOOGLE_ID_TOKEN', message:'Google nie zwrócił tokena tożsamości.' }, 400);
       const profile = await verifyGoogle(String(tokens.id_token), GOOGLE_DESKTOP_CLIENT_ID);
       const login = await loginProfile(profile, 'DESKTOP', true);
-      const meetingGmail = await autoConnectMeetingGmailFromOwner(login, profile, tokens);
-      const gmail = await autoConnectGmailFromPrimaryLogin(login, profile, tokens);
+      // Dodatkowe spięcie Gmaila nie może serializować krytycznej ścieżki logowania.
+      // Obie operacje są lokalne/DB-only dla świeżego tokena i wykonują się równolegle.
+      const [meetingGmail,gmail] = await Promise.all([
+        autoConnectMeetingGmailFromOwner(login, profile, tokens),
+        autoConnectGmailFromPrimaryLogin(login, profile, tokens)
+      ]);
       return json(request, { ...login, gmail, meetingGmail });
     } catch (error) {
       if (error?.status) throw error;
