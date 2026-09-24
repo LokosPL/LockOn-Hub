@@ -1,0 +1,12 @@
+LockOn ServiceOS 1.0.5.22
+
+Najważniejsze zmiany
+- Usunięto duplikujący przycisk „Zatrzymaj” z dolnego paska pokoju spotkania.
+- Zatrzymanie udostępniania pozostaje w kontekstowym pasku aktywnej transmisji, razem z podglądem, Trybem kinowym i zmianą źródła.
+- Pokój spotkania zachowuje uproszczony układ z wersji 1.0.4.22: jedna główna scena, chat/uczestnicy po prawej i opcjonalny Tryb kinowy.
+- Strona app.serviceos.pl została przebudowana od podstaw w stylu aplikacji ServiceOS: mniej powtarzających się opisów, interaktywne podglądy modułów, krótszy przewodnik po procesie, nowy podgląd spotkań i prostsze połączenie telefonu.
+- Nowy landing jest responsywny od małych telefonów po duże monitory i respektuje prefers-reduced-motion.
+
+Stabilność
+- Zmiana pokoju nie modyfikuje lifecycle LiveKit ani sposobu zatrzymywania tracka — usuwa wyłącznie redundantny przycisk z dolnego toolbara.
+- Właściwa akcja zatrzymania streamu nadal wykonuje pełny cleanup publikacji i host overlay.
