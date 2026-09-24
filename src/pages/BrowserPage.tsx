@@ -46,7 +46,6 @@ export function BrowserPage() {
       setBrowser(state);
       setInput(state.url || initialState.url);
     }).catch((reason) => setError(reason instanceof Error ? reason.message : 'Nie udało się odczytać stanu przeglądarki.'));
-    void window.lockOn.browser.setVisible(true).catch((reason) => setError(reason instanceof Error ? reason.message : 'Nie udało się otworzyć przeglądarki.'));
 
     const unsubscribe = window.lockOn.browser.onState((state) => {
       setBrowser(state);
