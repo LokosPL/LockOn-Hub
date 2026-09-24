@@ -14,6 +14,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { AdministrationPage } from './pages/AdministrationPage';
 import { CustomerAccountsPage } from './pages/CustomerAccountsPage';
 import { EarningsPage } from './pages/EarningsPage';
+import { MeetingsPage } from './pages/MeetingsPage';
 import { ServicePage } from './pages/ServicePage';
 import type { AuthState, HelpAction } from './types/electron';
 import { ROLE_DEFINITIONS, roleCanNavigate, type UserRole } from './config/roles';
@@ -28,6 +29,7 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
   const [focusUserId, setFocusUserId] = useState<string | null>(null);
+  const [focusMeetingId, setFocusMeetingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (view === 'splash') return;
@@ -50,6 +52,15 @@ export default function App() {
     if (view === 'splash') return;
     return window.lockOn.auth.onState((nextAuth) => {
       setAuth(nextAuth);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (view === 'splash') return;
+    return window.lockOn.meetings.onOpenMeeting((meetingId) => {
+      if (!/^mtg_[a-f0-9]{20}$/.test(meetingId)) return;
+      setFocusMeetingId(meetingId);
+      setActive('meetings');
     });
   }, []);
 
@@ -175,6 +186,8 @@ export default function App() {
           )}
           {active === 'administration' && <AdministrationPage focusUserId={focusUserId} />}
           {active === 'customers' && <CustomerAccountsPage effectiveRole={effectiveRole!} />}
+          {active === 'meetings' && <MeetingsPage role={effectiveRole!} focusMeetingId={focusMeetingId} />}
+
           {active === 'service' && <ServicePage auth={auth} effectiveRole={effectiveRole!} focusOrderId={focusOrderId} />}
           {active === 'earnings' && <EarningsPage auth={auth} effectiveRole={effectiveRole!} />}
           {active === 'browser' && <BrowserPage />}

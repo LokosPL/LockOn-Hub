@@ -70,8 +70,18 @@ contextBridge.exposeInMainWorld('lockOn', {
     participants: (meetingId: string) => ipcRenderer.invoke('meetings:participants', meetingId),
     moderate: (meetingId: string, payload: unknown) => ipcRenderer.invoke('meetings:moderate', meetingId, payload),
     screenSources: () => ipcRenderer.invoke('meetings:screenSources'),
+    shareOverlay: (source: unknown) => ipcRenderer.invoke('meetings:shareOverlay', source),
     attendanceAction: (meetingId: string, action:'JOIN'|'LEAVE') => ipcRenderer.invoke('meetings:attendanceAction', meetingId, action),
-    attendance: (meetingId: string) => ipcRenderer.invoke('meetings:attendance', meetingId)
+    attendance: (meetingId: string) => ipcRenderer.invoke('meetings:attendance', meetingId),
+    chat: (meetingId: string) => ipcRenderer.invoke('meetings:chat', meetingId),
+    sendChat: (meetingId: string, message: string) => ipcRenderer.invoke('meetings:sendChat', meetingId, message),
+    hands: (meetingId: string) => ipcRenderer.invoke('meetings:hands', meetingId),
+    setHandRaised: (meetingId: string, raised: boolean) => ipcRenderer.invoke('meetings:setHandRaised', meetingId, raised),
+    onOpenMeeting: (callback: (meetingId:string) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, meetingId:string) => callback(meetingId);
+      ipcRenderer.on('meetings:open-deep-link', listener);
+      return () => ipcRenderer.removeListener('meetings:open-deep-link', listener);
+    }
   },
   service: {
     searchCustomers: (query: string) => ipcRenderer.invoke('service:searchCustomers', query),

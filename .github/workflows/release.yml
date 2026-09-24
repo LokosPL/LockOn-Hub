@@ -235,7 +235,17 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.build_version }}
         run: |
           $highlights = ""
-          if ($env:VERSION -eq "1.0.0.21") {
+          if ($env:VERSION -eq "1.0.0.22") {
+            $highlights = @"
+
+          Najważniejsze zmiany:
+          - Spotkania i szkolenia są osobnym modułem, a Start pozostaje użytkowym ekranem z krótkim podsumowaniem.
+          - Chat, podnoszenie ręki i wskaźnik aktywnego mówcy działają wewnątrz konkretnego spotkania.
+          - Udostępnianie ekranu ma lokalny podgląd, zmianę źródła, spójny cleanup i bezpieczny wskaźnik pełnego ekranu.
+          - Powiadomienia e-mail są świadomym opt-in; link spotkania jest stały i nie zawiera tokenu LiveKit.
+          - Publiczna strona app.serviceos.pl prezentuje nowy moduł spotkań w responsywnej odsłonie 1.0.0.22.
+          "@
+          } elseif ($env:VERSION -eq "1.0.0.21") {
             $highlights = @"
 
           Najważniejsze zmiany:

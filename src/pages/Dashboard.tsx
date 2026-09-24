@@ -20,7 +20,7 @@ import {
   Wrench
 } from 'lucide-react';
 import { StatusBadge } from '../components/StatusBadge';
-import { MeetingsCard } from '../components/MeetingsCard';
+import { NextMeetingCard } from '../components/NextMeetingCard';
 import type { NavigationKey } from '../components/Sidebar';
 import type { AppInfo, DashboardData, UpdateState, WeatherData } from '../types/electron';
 import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
@@ -277,7 +277,7 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, w
         </aside>
       </section>
 
-      <MeetingsCard role={role} />
+      <NextMeetingCard onOpen={() => onNavigate('meetings')} />
 
       <section className="start-section">
         <div className="start-section-heading">

@@ -1,5 +1,5 @@
 name: Temp Neon integration smoke
-# Final exact-candidate marker: ServiceOS 1.0.0.21 with explicit production smoke gate.
+# Final release-candidate marker: ServiceOS 1.0.0.22 meetings collaboration, e-mail opt-in and exact production gate.
 
 on:
   push:
@@ -147,7 +147,7 @@ jobs:
           echo "::error::The exact bundle artifact and connector staging files were produced successfully. Configure NEON_API_KEY (or restore an equivalent exact-deploy path) and rerun this workflow."
           exit 1
 
-      - name: Apply additive 1.0.0.20 migrations to temp Neon
+      - name: Apply additive ServiceOS migrations to temp Neon
         if: steps.neon_credential.outputs.available == 'true'
         shell: bash
         run: |
@@ -194,15 +194,17 @@ jobs:
 
           for migration in \
             database/migrations/2026-09-24-v100020-user-gmail-credentials.sql \
-            database/migrations/2026-09-24-v100020-meetings.sql
+            database/migrations/2026-09-24-v100020-meetings.sql \
+            database/migrations/2026-09-24-v100022-meeting-collaboration.sql
           do
             echo "Applying additive TEMP migration: $migration"
             psql "$database_url" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
           done
 
-          tables="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT concat_ws(',',to_regclass('public.user_gmail_credentials'),to_regclass('public.meetings'),to_regclass('public.meeting_email_outbox'));")"
-          if [[ "$tables" != *"user_gmail_credentials"* || "$tables" != *"meetings"* || "$tables" != *"meeting_email_outbox"* ]]; then
-            echo "::error::TEMP migration verification failed: $tables"
+          tables="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT concat_ws(',',to_regclass('public.user_gmail_credentials'),to_regclass('public.meetings'),to_regclass('public.meeting_email_outbox'),to_regclass('public.meeting_chat_messages'),to_regclass('public.meeting_hand_raises'));")"
+          email_column="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='meetings' AND column_name='email_notifications_enabled';")"
+          if [[ "$tables" != *"user_gmail_credentials"* || "$tables" != *"meetings"* || "$tables" != *"meeting_email_outbox"* || "$tables" != *"meeting_chat_messages"* || "$tables" != *"meeting_hand_raises"* || "$email_column" != "1" ]]; then
+            echo "::error::TEMP migration verification failed: tables=$tables email_notifications_enabled=$email_column"
             exit 1
           fi
           echo "TEMP additive migrations verified."
@@ -465,13 +467,14 @@ jobs:
           meeting_body="$(node - <<'NODE' "$starts_at" "$user_id"
           const [startsAt,userId]=process.argv.slice(2);
           process.stdout.write(JSON.stringify({
-            title:'CI szkolenie 1.0.0.20',
+            title:'CI szkolenie 1.0.0.22',
             description:'TEMP E2E spotkań ServiceOS',
             startsAt,
             plannedMinutes:30,
             maxParticipants:4,
             allowParticipantAudio:false,
             allowParticipantScreenShare:false,
+            emailNotificationsEnabled:true,
             audience:[{type:'USER',userId}]
           }));
           NODE
@@ -482,7 +485,7 @@ jobs:
           [ "$user_create_http" = "403" ] || { echo "::error::USER created a meeting: HTTP $user_create_http"; cat meeting-response.json; exit 1; }
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data "$meeting_body" > meeting-created.json
-          meeting_id="$(node -e "const d=require('./meeting-created.json');if(!d.meeting?.id)throw new Error('Meeting create failed');process.stdout.write(d.meeting.id)")"
+          meeting_id="$(node -e "const d=require('./meeting-created.json');if(!d.meeting?.id)throw new Error('Meeting create failed');if(d.meeting.emailNotificationsEnabled!==true)throw new Error('Explicit e-mail opt-in was not persisted');process.stdout.write(d.meeting.id)")"
 
           rescheduled_at="$(node -e "process.stdout.write(new Date(Date.now()+7200000).toISOString())")"
           reschedule_body="$(node -e "process.stdout.write(JSON.stringify({startsAt:process.argv[1]}))" "$rescheduled_at")"

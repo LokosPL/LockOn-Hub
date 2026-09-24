@@ -15,6 +15,7 @@ type MeetingFormState = {
   targetIds:string[];
   allowParticipantAudio:boolean;
   allowParticipantScreenShare:boolean;
+  emailNotificationsEnabled:boolean;
 };
 
 const statusLabel: Record<MeetingSummary['status'], string> = {
@@ -60,7 +61,8 @@ const blankForm = (): MeetingFormState => ({
   audienceType:'ALL',
   targetIds:[],
   allowParticipantAudio:true,
-  allowParticipantScreenShare:false
+  allowParticipantScreenShare:false,
+  emailNotificationsEnabled:false
 });
 
 const formForMeeting = (meeting: MeetingSummary): MeetingFormState => {
@@ -76,7 +78,8 @@ const formForMeeting = (meeting: MeetingSummary): MeetingFormState => {
     audienceType,
     targetIds:audienceType==='POINT'?pointIds:audienceType==='USER'?userIds:[],
     allowParticipantAudio:meeting.allowParticipantAudio,
-    allowParticipantScreenShare:meeting.allowParticipantScreenShare
+    allowParticipantScreenShare:meeting.allowParticipantScreenShare,
+    emailNotificationsEnabled:meeting.emailNotificationsEnabled
   };
 };
 
@@ -94,6 +97,7 @@ const payloadFromForm = (form: MeetingFormState) => {
     maxParticipants:Number(form.maxParticipants),
     allowParticipantAudio:form.allowParticipantAudio,
     allowParticipantScreenShare:form.allowParticipantScreenShare,
+    emailNotificationsEnabled:form.emailNotificationsEnabled,
     audience:form.audienceType==='ALL'
       ? [{type:'ALL' as const}]
       : form.audienceType==='POINT'
@@ -102,7 +106,7 @@ const payloadFromForm = (form: MeetingFormState) => {
   };
 };
 
-export function MeetingsCard({ role }: { role: UserRole }) {
+export function MeetingsCard({ role, focusMeetingId }: { role: UserRole; focusMeetingId?: string | null }) {
   const { confirm } = useAppDialog();
   const canCreate = role === 'OWNER' || role === 'BOSS' || role === 'COORDINATOR';
   const [meetings, setMeetings] = useState<MeetingSummary[]>([]);
@@ -153,23 +157,45 @@ export function MeetingsCard({ role }: { role: UserRole }) {
     return () => window.clearInterval(timer);
   }, [canCreate]);
 
-  const visible = useMemo(
-    () => meetings
+  const visible = useMemo(() => {
+    const ordered=meetings
       .filter((item) => item.status === 'LIVE' || item.status === 'SCHEDULED')
       .sort((a,b) => a.status===b.status
         ? new Date(a.startsAt).getTime()-new Date(b.startsAt).getTime()
-        : a.status==='LIVE' ? -1 : 1)
-      .slice(0,6),
-    [meetings]
-  );
+        : a.status==='LIVE' ? -1 : 1);
+    const focused=focusMeetingId ? ordered.find((item)=>item.id===focusMeetingId) : null;
+    const first=ordered.slice(0,6);
+    return focused && !first.some((item)=>item.id===focused.id)
+      ? [...first.slice(0,5),focused]
+      : first;
+  }, [meetings,focusMeetingId]);
 
-  const history = useMemo(
-    () => meetings
+  const history = useMemo(() => {
+    const ordered=meetings
       .filter((item)=>item.status==='ENDED'||item.status==='CANCELLED')
-      .sort((a,b)=>new Date(b.updatedAt).getTime()-new Date(a.updatedAt).getTime())
-      .slice(0,6),
-    [meetings]
-  );
+      .sort((a,b)=>new Date(b.updatedAt).getTime()-new Date(a.updatedAt).getTime());
+    const focused=focusMeetingId ? ordered.find((item)=>item.id===focusMeetingId) : null;
+    const first=ordered.slice(0,6);
+    return focused && !first.some((item)=>item.id===focused.id)
+      ? [...first.slice(0,5),focused]
+      : first;
+  }, [meetings,focusMeetingId]);
+
+  useEffect(() => {
+    if (!focusMeetingId || loading) return;
+    const target=meetings.find((item)=>item.id===focusMeetingId);
+    if (!target) {
+      setError('Nie znaleziono spotkania albo nie masz do niego dostępu.');
+      return;
+    }
+    if (target.status==='LIVE' && (target.canManage || target.registeredByMe)) {
+      setActiveRoom(target);
+      return;
+    }
+    window.setTimeout(() => {
+      document.getElementById('meeting-'+focusMeetingId)?.scrollIntoView({behavior:'smooth',block:'center'});
+    },80);
+  }, [focusMeetingId,loading,meetings]);
 
   const editedMeeting = editId ? meetings.find((item)=>item.id===editId) ?? null : null;
   const rescheduledMeeting = rescheduleId ? meetings.find((item)=>item.id===rescheduleId) ?? null : null;
@@ -332,6 +358,7 @@ export function MeetingsCard({ role }: { role: UserRole }) {
       <div className="meeting-create-flags">
         <label><input type="checkbox" checked={value.allowParticipantAudio} onChange={(e)=>setValue({...value,allowParticipantAudio:e.target.checked})}/><Mic2 size={14}/> Zezwól na mikrofony uczestników</label>
         <label><input type="checkbox" checked={value.allowParticipantScreenShare} onChange={(e)=>setValue({...value,allowParticipantScreenShare:e.target.checked})}/><MonitorUp size={14}/> Zezwól na udostępnianie ekranu</label>
+        <label className="meeting-email-optin"><input type="checkbox" checked={value.emailNotificationsEnabled} onChange={(e)=>setValue({...value,emailNotificationsEnabled:e.target.checked})}/><span><strong>Powiadom uczestników e-mailem</strong><small>Wyłączone oznacza: bez zaproszeń, zmian terminu i anulowania.</small></span></label>
       </div>
       <div className="meeting-editor-actions">
         <button className="button secondary" disabled={Boolean(busyId)} onClick={resetPanel}>Anuluj</button>
@@ -344,7 +371,7 @@ export function MeetingsCard({ role }: { role: UserRole }) {
     const full = meeting.registeredCount >= meeting.maxParticipants && !meeting.registeredByMe;
     const date=new Date(meeting.startsAt);
     return (
-      <article className={'meeting-row meeting-row-'+meeting.status.toLowerCase()} key={meeting.id}>
+      <article id={'meeting-'+meeting.id} className={'meeting-row meeting-row-'+meeting.status.toLowerCase()+(meeting.id===focusMeetingId?' meeting-row-focused':'')} key={meeting.id}>
         <div className="meeting-date-box">
           <CalendarDays size={18}/>
           <small>{date.toLocaleDateString('pl-PL',{weekday:'short'})}</small>
@@ -363,6 +390,7 @@ export function MeetingsCard({ role }: { role: UserRole }) {
             <span><UserRound size={13}/> Prowadzący: {meeting.hostName}</span>
             <span className={meeting.allowParticipantAudio?'available':'unavailable'}><Mic2 size={13}/> Audio: {meeting.allowParticipantAudio?'dostępne':'wyłączone'}</span>
             <span className={meeting.allowParticipantScreenShare?'available':'unavailable'}><MonitorUp size={13}/> Ekran: {meeting.allowParticipantScreenShare?'dostępny':'wyłączony'}</span>
+            {meeting.canManage&&<span className={meeting.emailNotificationsEnabled?'available':'unavailable'}>E-mail: {meeting.emailNotificationsEnabled?'włączony':'wyłączony'}</span>}
           </div>
           <div className="meeting-subline">
             <small>{meeting.status==='SCHEDULED'?meetingScheduleHint(meeting.startsAt):formatWhen(meeting.startsAt)}</small>

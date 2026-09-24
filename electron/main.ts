@@ -56,6 +56,7 @@ app.enableSandbox();
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
+let meetingShareOverlayWindow: BrowserWindow | null = null;
 let mainReady: Promise<void> = Promise.resolve();
 let rendererBootReady: Promise<void> = Promise.resolve();
 let resolveRendererBootReady: (() => void) | null = null;
@@ -69,6 +70,7 @@ const resetRendererBootGate = () => {
 
 const APP_PROTOCOL = 'lockon-serviceos';
 let pendingProtocolFocus = false;
+let pendingMeetingDeepLink: string | null = null;
 
 const focusMainWindow = () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -79,6 +81,37 @@ const focusMainWindow = () => {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+};
+
+const closeMeetingShareOverlay = () => {
+  if (!meetingShareOverlayWindow || meetingShareOverlayWindow.isDestroyed()) {
+    meetingShareOverlayWindow = null;
+    return;
+  }
+  meetingShareOverlayWindow.destroy();
+  meetingShareOverlayWindow = null;
+};
+
+const showMeetingShareOverlay = async (source: { kind?:string; displayId?:string|null; name?:string } | null) => {
+  closeMeetingShareOverlay();
+  if (!source || source.kind !== 'screen' || !source.displayId) return { ok:true, shown:false };
+  const display = screen.getAllDisplays().find((item) => String(item.id) === String(source.displayId));
+  if (!display) return { ok:true, shown:false };
+  const bounds = display.bounds;
+  const label = String(source.name || 'Udostępniany ekran').replace(/[<>&"']/g,'').slice(0,120);
+  meetingShareOverlayWindow = new BrowserWindow({
+    x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height,
+    frame:false,transparent:true,backgroundColor:'#00000000',resizable:false,movable:false,
+    focusable:false,skipTaskbar:true,show:false,alwaysOnTop:true,hasShadow:false,
+    webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,devTools:false}
+  });
+  meetingShareOverlayWindow.setAlwaysOnTop(true,'screen-saver');
+  meetingShareOverlayWindow.setIgnoreMouseEvents(true,{forward:true});
+  meetingShareOverlayWindow.setContentProtection(true);
+  const html='<!doctype html><html><body style="margin:0;box-sizing:border-box;width:100vw;height:100vh;border:4px solid rgba(255,122,69,.92);font-family:Segoe UI,Arial,sans-serif;pointer-events:none"><div style="position:fixed;top:14px;left:50%;transform:translateX(-50%);background:rgba(10,12,15,.92);color:#fff;border:1px solid rgba(255,122,69,.55);border-radius:999px;padding:9px 14px;font-size:12px;font-weight:700;box-shadow:0 8px 32px rgba(0,0,0,.35)">● Udostępniasz ten ekran w LockOn ServiceOS · '+label+'</div></body></html>';
+  await meetingShareOverlayWindow.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+  if (meetingShareOverlayWindow && !meetingShareOverlayWindow.isDestroyed()) meetingShareOverlayWindow.showInactive();
+  return { ok:true, shown:true };
 };
 
 const pushAuthState = (state: Awaited<ReturnType<typeof getAuthState>>) => {
@@ -97,15 +130,37 @@ const refreshAndPushAuthState = async () => {
   }
 };
 
+const deliverPendingMeetingDeepLink = () => {
+  if (!pendingMeetingDeepLink || !mainWindow || mainWindow.isDestroyed()) return;
+  const meetingId=pendingMeetingDeepLink;
+  void Promise.all([mainReady,rendererBootReady]).then(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || pendingMeetingDeepLink!==meetingId) return;
+    mainWindow.webContents.send('meetings:open-deep-link',meetingId);
+    pendingMeetingDeepLink=null;
+    focusMainWindow();
+  });
+};
+
 const handleProtocolUrl = (value: string) => {
   try {
     const url = new URL(value);
-    if (url.protocol !== APP_PROTOCOL + ':' || url.hostname !== 'login-complete') return false;
-    focusMainWindow();
-    // Deep-link z karty sukcesu jest również sygnałem odzyskania sesji.
-    // Jeżeli pierwotne ipcRenderer.invoke utknęło, renderer dostanie stan osobnym kanałem.
-    void refreshAndPushAuthState();
-    return true;
+    if (url.protocol !== APP_PROTOCOL + ':') return false;
+    if (url.hostname === 'login-complete') {
+      focusMainWindow();
+      // Deep-link z karty sukcesu jest również sygnałem odzyskania sesji.
+      // Jeżeli pierwotne ipcRenderer.invoke utknęło, renderer dostanie stan osobnym kanałem.
+      void refreshAndPushAuthState();
+      return true;
+    }
+    if (url.hostname === 'meeting') {
+      const meetingId = String(url.pathname || '').replace(/^\/+/, '');
+      if (!/^mtg_[a-f0-9]{20}$/.test(meetingId)) return false;
+      pendingMeetingDeepLink=meetingId;
+      focusMainWindow();
+      deliverPendingMeetingDeepLink();
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -1068,9 +1123,37 @@ const registerIpc = () => {
     return sources.slice(0,40).map((source)=>({
       id:source.id,
       name:String(source.name||'Ekran').slice(0,180),
+      displayId:source.display_id || null,
+      kind:source.id.startsWith('screen:') ? 'screen' : 'window',
       thumbnail:source.thumbnail.isEmpty() ? null : source.thumbnail.toDataURL(),
       appIcon:source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null
     }));
+  });
+  secureHandle('meetings:shareOverlay', async (source: unknown) => {
+    requireSessionToken();
+    if (source === null) {
+      closeMeetingShareOverlay();
+      return {ok:true,shown:false};
+    }
+    if (!source || typeof source !== 'object') throw new Error('Nieprawidłowe źródło udostępniania.');
+    const safe = source as { kind?:string; displayId?:string|null; name?:string };
+    return showMeetingShareOverlay({kind:safe.kind,displayId:safe.displayId||null,name:String(safe.name||'').slice(0,120)});
+  });
+  secureHandle('meetings:chat', async (meetingId: string) => {
+    const token=requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/chat`,{},token);
+  });
+  secureHandle('meetings:sendChat', async (meetingId: string, message: string) => {
+    const token=requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/chat`,{method:'POST',body:JSON.stringify({message:String(message||'').slice(0,2000)})},token);
+  });
+  secureHandle('meetings:hands', async (meetingId: string) => {
+    const token=requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/hands`,{},token);
+  });
+  secureHandle('meetings:setHandRaised', async (meetingId: string, raised: boolean) => {
+    const token=requireSessionToken();
+    return backendRequest(`/meetings/${encodeURIComponent(safeId(meetingId,'mtg'))}/hands`,{method:'POST',body:JSON.stringify({raised:raised===true})},token);
   });
   secureHandle('meetings:attendanceAction', async (meetingId: string, action:'JOIN'|'LEAVE') => {
     const token=requireSessionToken();
@@ -1498,17 +1581,22 @@ app.whenReady().then(async () => {
 
   await createSplashWindow();
   await runStartupSequence();
+  deliverPendingMeetingDeepLink();
   if (pendingProtocolFocus) focusMainWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
-      void mainReady.then(() => mainWindow?.show());
+      void mainReady.then(() => {
+        mainWindow?.show();
+        deliverPendingMeetingDeepLink();
+      });
     }
   });
 });
 
 app.on('before-quit', () => {
+  closeMeetingShareOverlay();
   stopAutomaticUpdateChecks();
   if (localApiProcess && !localApiProcess.killed) localApiProcess.kill();
 });
