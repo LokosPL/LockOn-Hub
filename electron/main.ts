@@ -1451,8 +1451,16 @@ app.whenReady().then(async () => {
   const startupDeepLink = process.argv.find((arg) => arg.startsWith(APP_PROTOCOL + '://'));
   if (startupDeepLink) handleProtocolUrl(startupDeepLink);
 
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  session.defaultSession.setPermissionCheckHandler(() => false);
+  const allowMeetingMedia = (webContents: Electron.WebContents, permission: string) =>
+    permission === 'media' && isTrustedRendererUrl(webContents.getURL());
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    const allowed = allowMeetingMedia(webContents, permission);
+    if (!allowed) console.warn('[permission denied]', { permission, url:new URL(webContents.getURL()).origin });
+    callback(allowed);
+  });
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) =>
+    allowMeetingMedia(webContents, permission)
+  );
 
   await createSplashWindow();
   await runStartupSequence();
