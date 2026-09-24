@@ -1,0 +1,88 @@
+name: Dispatch production from exact TEMP
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "PROD_RELEASE_REQUEST"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: lockon-production-release-request
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve exact successful TEMP candidate
+        id: temp
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          request="$(tr -d '\r\n' < PROD_RELEASE_REQUEST)"
+          product="$(tr -d '\r\n' < RELEASE_VERSION)"
+          build="$(tr -d '\r\n' < BUILD_VERSION)"
+          ready="$(tr -d '\r\n' < RELEASE_READY)"
+
+          if [[ "$request" != "$product|REQUEST_PROD" ]]; then
+            echo "::error::PROD_RELEASE_REQUEST must equal $product|REQUEST_PROD"
+            exit 1
+          fi
+          if [[ "$ready" == "$product|$build" ]]; then
+            echo "::error::Release $product is already marked ready; refusing duplicate production dispatch."
+            exit 1
+          fi
+
+          release_branch="release/$product"
+          encoded_branch="$(node -p "encodeURIComponent(process.argv[1])" "$release_branch")"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=$encoded_branch&event=push&status=success&per_page=100" > temp-runs.json
+
+          node - <<'NODE' > selected-temp.json
+          const fs=require('fs');
+          const product=fs.readFileSync('RELEASE_VERSION','utf8').trim();
+          const branch='release/'+product;
+          const runs=JSON.parse(fs.readFileSync('temp-runs.json','utf8')).workflow_runs||[];
+          const run=runs
+            .filter((item)=>item.name==='Temp Neon integration smoke'&&item.conclusion==='success'&&item.head_branch===branch)
+            .sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))[0];
+          if(!run)throw new Error('No successful exact TEMP run found for '+branch);
+          if(!/^[a-f0-9]{40}$/.test(String(run.head_sha||'')))throw new Error('TEMP run has invalid SHA');
+          process.stdout.write(JSON.stringify({id:run.id,sha:run.head_sha,branch:run.head_branch}));
+          NODE
+
+          temp_id="$(node -e "const x=require('./selected-temp.json');process.stdout.write(String(x.id))")"
+          temp_sha="$(node -e "const x=require('./selected-temp.json');process.stdout.write(x.sha)")"
+          echo "Selected TEMP run $temp_id at $temp_sha."
+
+          git fetch --no-tags origin "$temp_sha"
+          if ! git diff --quiet "$temp_sha" HEAD --; then
+            echo "::error::main differs from exact TEMP candidate $temp_sha."
+            git diff --stat "$temp_sha" HEAD
+            exit 1
+          fi
+
+          echo "run_id=$temp_id" >> "$GITHUB_OUTPUT"
+          echo "temp_sha=$temp_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch existing production gate
+        shell: bash
+        env:
+          TEMP_RUN_ID: ${{ steps.temp.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh workflow run prod-neon-deploy.yml             --ref main             -f "temp_run_id=$TEMP_RUN_ID"             -f "confirmation=DEPLOY_PROD"
+          echo "Production Neon exact deploy dispatched from TEMP run $TEMP_RUN_ID."
