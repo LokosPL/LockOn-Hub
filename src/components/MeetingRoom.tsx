@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Hand, MessageSquare, Mic, MicOff, MonitorUp, MonitorX, PhoneOff, RefreshCw, Send, Shield, UserMinus, VolumeX, X } from 'lucide-react';
+import { ArrowLeft, Hand, MessageSquare, Mic, MicOff, Monitor, MonitorUp, MonitorX, PhoneOff, RefreshCw, Send, Shield, UserMinus, UsersRound, VolumeX, X } from 'lucide-react';
 import {
   Room,
   RoomEvent,
@@ -74,6 +74,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const attendanceOpenRef = useRef(false);
   const audioHostRef = useRef<HTMLDivElement | null>(null);
   const videoHostRef = useRef<HTMLDivElement | null>(null);
+  const remotePreviewHostRef = useRef<HTMLDivElement | null>(null);
   const localPreviewRef = useRef<HTMLVideoElement | null>(null);
   const localPreviewStreamRef = useRef<MediaStream | null>(null);
   const chatMessagesRef = useRef<HTMLDivElement | null>(null);
@@ -85,6 +86,10 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const [micEnabled, setMicEnabled] = useState(false);
   const [screenEnabled, setScreenEnabled] = useState(false);
   const [remoteScreenActive, setRemoteScreenActive] = useState(false);
+  const [remoteScreenOwner, setRemoteScreenOwner] = useState('');
+  const [stageView, setStageView] = useState<'self'|'remote'>('self');
+  const [localDesktopPreview, setLocalDesktopPreview] = useState<string | null>(null);
+  const [localDesktopName, setLocalDesktopName] = useState('Twój ekran');
   const [canMic, setCanMic] = useState(false);
   const [canShare, setCanShare] = useState(false);
   const [canManage, setCanManage] = useState(false);
@@ -97,7 +102,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const [handRaises, setHandRaises] = useState<MeetingHandRaise[]>([]);
   const [handRaised, setHandRaised] = useState(false);
   const [chatInput, setChatInput] = useState('');
-  const [sideTab, setSideTab] = useState<'participants'|'chat'>('participants');
+  const [sideTab, setSideTab] = useState<'participants'|'chat'>('chat');
   const [mobileView, setMobileView] = useState<'meeting'|'participants'|'chat'>('meeting');
   const [busy, setBusy] = useState('');
 
@@ -114,21 +119,42 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     ]);
   };
 
-  const attachTrack = (track: RemoteTrack) => {
-    const element = track.attach();
-    element.autoplay = true;
+  const attachTrack = (track: RemoteTrack, participant?: Participant) => {
+    const sid = track.sid || '';
     if (track.kind === Track.Kind.Audio) {
-      element.setAttribute('data-meeting-track', track.sid || '');
+      const alreadyAttached = Array.from(audioHostRef.current?.querySelectorAll('[data-meeting-track]') ?? [])
+        .some((element) => element.getAttribute('data-meeting-track') === sid);
+      if (alreadyAttached) return;
+      const element = track.attach();
+      element.autoplay = true;
+      element.setAttribute('data-meeting-track', sid);
       audioHostRef.current?.appendChild(element);
       void (element as HTMLMediaElement).play().catch(() => undefined);
       return;
     }
     if (track.source === Track.Source.ScreenShare) {
-      element.setAttribute('data-meeting-track', track.sid || '');
-      element.classList.add('meeting-screen-video');
-      videoHostRef.current?.appendChild(element);
+      const alreadyAttached = Array.from(videoHostRef.current?.querySelectorAll('[data-meeting-track]') ?? [])
+        .some((element) => element.getAttribute('data-meeting-track') === sid);
+      if (alreadyAttached) return;
+
+      const stageElement = track.attach();
+      stageElement.autoplay = true;
+      stageElement.muted = true;
+      stageElement.setAttribute('data-meeting-track', sid);
+      stageElement.classList.add('meeting-screen-video');
+      videoHostRef.current?.appendChild(stageElement);
+      void (stageElement as HTMLMediaElement).play().catch(() => undefined);
+
+      const previewElement = track.attach();
+      previewElement.autoplay = true;
+      previewElement.muted = true;
+      previewElement.setAttribute('data-meeting-preview-track', sid);
+      previewElement.classList.add('meeting-screen-thumb-video');
+      remotePreviewHostRef.current?.appendChild(previewElement);
+      void (previewElement as HTMLMediaElement).play().catch(() => undefined);
+
+      setRemoteScreenOwner(participant?.name || 'Uczestnik');
       setRemoteScreenActive(true);
-      void (element as HTMLMediaElement).play().catch(() => undefined);
     }
   };
 
@@ -136,7 +162,24 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     for (const element of track.detach()) element.remove();
     if (track.source === Track.Source.ScreenShare) {
       const remaining = videoHostRef.current?.querySelectorAll('[data-meeting-track]').length ?? 0;
-      setRemoteScreenActive(remaining > 0);
+      const active = remaining > 0;
+      setRemoteScreenActive(active);
+      if (!active) {
+        setRemoteScreenOwner('');
+        setStageView('self');
+      }
+    }
+  };
+
+  const refreshLocalDesktopPreview = async () => {
+    try {
+      const list = await window.lockOn.meetings.screenSources();
+      const preferred = list.find((source) => source.kind === 'screen') ?? list[0] ?? null;
+      setLocalDesktopPreview(preferred?.thumbnail ?? null);
+      setLocalDesktopName(preferred?.name || 'Twój ekran');
+    } catch {
+      setLocalDesktopPreview(null);
+      setLocalDesktopName('Twój ekran');
     }
   };
 
@@ -176,13 +219,15 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     setMicEnabled(false);
     setScreenEnabled(false);
     setRemoteScreenActive(false);
+    setRemoteScreenOwner('');
+    setStageView('self');
     setParticipants([]);
 
     const room = new Room({ adaptiveStream:true, dynacast:true });
     roomRef.current = room;
 
-    const onSubscribed = (track: RemoteTrack, _publication: RemoteTrackPublication, _participant: RemoteParticipant) => {
-      attachTrack(track);
+    const onSubscribed = (track: RemoteTrack, _publication: RemoteTrackPublication, participant: RemoteParticipant) => {
+      attachTrack(track, participant);
       refreshParticipants(room);
     };
     const onUnsubscribed = (track: RemoteTrack) => {
@@ -242,9 +287,10 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         attendanceOpenRef.current = true;
         refreshParticipants(room);
         void loadCollaboration();
+        void refreshLocalDesktopPreview();
         for (const participant of room.remoteParticipants.values()) {
           for (const publication of participant.trackPublications.values()) {
-            if (publication.track) attachTrack(publication.track);
+            if (publication.track) attachTrack(publication.track, participant);
           }
         }
       } catch (err) {
@@ -305,6 +351,13 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     if (!connected) return;
     const room=roomRef.current;
     const timer=window.setInterval(()=>{if(room)refreshParticipants(room);},140);
+    return () => window.clearInterval(timer);
+  }, [connected, meeting.id]);
+
+  useEffect(() => {
+    if (!connected) return;
+    void refreshLocalDesktopPreview();
+    const timer = window.setInterval(() => void refreshLocalDesktopPreview(), 4_000);
     return () => window.clearInterval(timer);
   }, [connected, meeting.id]);
 
@@ -570,16 +623,59 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         </div>
         <div className="meeting-room-layout">
           <main className={'meeting-stage '+(mobileView!=='meeting'?'meeting-mobile-hidden':'')}>
-            <div className="meeting-screen-host" ref={videoHostRef}>
-              {joining && <div className="meeting-stage-empty">Łączenie ze spotkaniem…</div>}
-              {!joining && !connected && <div className="meeting-stage-empty">Połączenie nie jest aktywne.</div>}
-              {connected && !remoteScreenActive && <div className="meeting-stage-empty meeting-stage-hint"><MonitorUp size={30}/><strong>Nikt nie udostępnia ekranu</strong><span>Udostępniany ekran prowadzącego lub uczestnika pojawi się tutaj.</span></div>}
+            <div className={'meeting-screen-workspace stage-'+stageView}>
+              <div className="meeting-screen-stage-header">
+                <div>
+                  <Monitor size={15}/>
+                  <strong>{stageView==='self' ? 'Twój ekran' : (remoteScreenOwner || 'Udostępniany ekran')}</strong>
+                  {canManage && stageView==='self' && <span>Ty (prowadzący)</span>}
+                </div>
+                <small>{stageView==='self' ? 'Podgląd lokalny · nie jest automatycznie udostępniany' : 'Udostępnia uczestnik'}</small>
+              </div>
+
+              <div className="meeting-screen-main">
+                <div className="meeting-self-screen" aria-hidden={stageView!=='self'}>
+                  {localDesktopPreview
+                    ? <img src={localDesktopPreview} alt="Podgląd Twojego ekranu" />
+                    : <div className="meeting-self-screen-empty"><Monitor size={34}/><strong>Twój ekran</strong><span>Podgląd pojawi się po połączeniu z aplikacją.</span></div>}
+                </div>
+                <div className="meeting-screen-host" ref={videoHostRef} aria-hidden={stageView!=='remote'}>
+                  {joining && <div className="meeting-stage-empty">Łączenie ze spotkaniem…</div>}
+                  {!joining && !connected && <div className="meeting-stage-empty">Połączenie nie jest aktywne.</div>}
+                  {connected && stageView==='remote' && !remoteScreenActive && <div className="meeting-stage-empty meeting-stage-hint"><MonitorUp size={30}/><strong>Udostępnianie zostało zakończone</strong><span>Wracam do podglądu Twojego ekranu.</span></div>}
+                </div>
+              </div>
             </div>
+
+            <div className="meeting-screen-filmstrip" aria-label="Dostępne ekrany">
+              <button type="button" className={'meeting-screen-tile '+(stageView==='self'?'selected':'')} onClick={()=>setStageView('self')}>
+                <div className="meeting-screen-tile-preview">
+                  {localDesktopPreview ? <img src={localDesktopPreview} alt="" /> : <Monitor size={24}/>}
+                </div>
+                <div><strong>Twój ekran</strong><span>{localDesktopName}</span></div>
+              </button>
+
+              <button
+                type="button"
+                className={'meeting-screen-tile '+(stageView==='remote'?'selected':'')+(remoteScreenActive?'':' disabled')}
+                disabled={!remoteScreenActive}
+                onClick={()=>setStageView('remote')}
+              >
+                <div className="meeting-screen-tile-preview meeting-remote-preview-host" ref={remotePreviewHostRef}>
+                  {!remoteScreenActive && <MonitorUp size={24}/>}
+                </div>
+                <div>
+                  <strong>{remoteScreenActive ? (remoteScreenOwner || 'Uczestnik')+' udostępnia' : 'Brak udostępnianego ekranu'}</strong>
+                  <span>{remoteScreenActive ? 'Kliknij, aby otworzyć na głównym ekranie' : 'Pojawi się tutaj, gdy ktoś zacznie udostępniać'}</span>
+                </div>
+              </button>
+            </div>
+
             {screenEnabled && selectedSource && (
               <div className="meeting-local-share-preview">
                 <div><span>● Udostępniasz ekran</span><strong>{selectedSource.name}</strong></div>
                 {/LockOn ServiceOS/i.test(selectedSource.name)
-                  ? <p>Podgląd ukryty, aby uniknąć efektu nieskończonego lustra. Uczestnicy nadal widzą wybrane źródło.</p>
+                  ? <p>Podgląd udostępnianego okna ServiceOS jest ukryty, aby uniknąć efektu lustra. Uczestnicy nadal widzą wybrane źródło.</p>
                   : <video ref={localPreviewRef} muted playsInline autoPlay />}
                 <div className="meeting-local-share-actions">
                   <button onClick={()=>void openScreenPicker()}><RefreshCw size={14}/> Zmień ekran / okno</button>
@@ -592,8 +688,8 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
 
           <aside className={'meeting-participants-panel meeting-side-'+sideTab+' '+(mobileView==='meeting'?'meeting-mobile-hidden':'')}>
             <div className="meeting-side-tabs" role="tablist">
-              <button className={sideTab==='participants'?'active':''} onClick={()=>setSideTab('participants')}><Shield size={14}/> Uczestnicy</button>
-              <button className={sideTab==='chat'?'active':''} onClick={()=>setSideTab('chat')}><MessageSquare size={14}/> Chat</button>
+              <button className={sideTab==='chat'?'active':''} onClick={()=>setSideTab('chat')}><MessageSquare size={14}/> Czat {chatMessages.length>0&&<b>{chatMessages.length}</b>}</button>
+              <button className={sideTab==='participants'?'active':''} onClick={()=>setSideTab('participants')}><UsersRound size={14}/> Uczestnicy <b>{participants.length}</b></button>
             </div>
             {sideTab==='participants' ? <>
               <div className="meeting-participants-heading"><h3>Uczestnicy</h3><span>{participants.length}</span></div>
@@ -632,12 +728,20 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
               )}
             </> : <div className="meeting-chat-panel">
               <div className="meeting-chat-messages" ref={chatMessagesRef}>
-                {chatMessages.length===0?<div className="meeting-chat-empty">Brak wiadomości. Napisz pierwszą.</div>:chatMessages.map((message)=><article key={message.id} className={message.mine?'mine':''}><div><strong>{message.authorName}</strong><time>{new Date(message.createdAt).toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})}</time></div><p>{message.body}</p></article>)}
+                {chatMessages.length===0?<div className="meeting-chat-empty">Brak wiadomości. Napisz pierwszą.</div>:chatMessages.map((message)=><article key={message.id} className={message.mine?'mine':''}><div><strong>{message.mine?'Ty':message.authorName}</strong><time>{new Date(message.createdAt).toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})}</time></div><p>{message.body}</p></article>)}
               </div>
               <div className="meeting-chat-compose">
                 <input value={chatInput} maxLength={2000} placeholder="Napisz wiadomość…" onChange={(e)=>setChatInput(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void sendChat();}}} />
                 <button disabled={!chatInput.trim()||Boolean(busy)} onClick={()=>void sendChat()} aria-label="Wyślij wiadomość"><Send size={16}/></button>
               </div>
+              {canManage && (
+                <div className="meeting-chat-hands">
+                  <div className="meeting-chat-hands-head"><strong><Hand size={14}/> Podniesione ręce ({handRaises.length})</strong></div>
+                  {handRaises.length===0
+                    ? <span className="meeting-chat-hands-empty">Nikt nie czeka na głos.</span>
+                    : handRaises.map((item)=><div key={item.userId}><b>{item.position}</b><span>{item.name}</span><Hand size={13}/></div>)}
+                </div>
+              )}
             </div>}
           </aside>
         </div>
@@ -651,6 +755,8 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
           </button>
           <button className={'meeting-control '+(handRaised?'active':'')} disabled={!connected||Boolean(busy)} onClick={()=>void toggleHand()}><Hand size={18}/> {handRaised?'Opuść rękę':'Podnieś rękę'}</button>
           {screenEnabled&&<button className="meeting-control" disabled={Boolean(busy)} onClick={()=>void stopScreenShare()}><MonitorX size={18}/> Zatrzymaj</button>}
+          <button className={'meeting-control '+(sideTab==='chat'?'active':'')} onClick={()=>{setSideTab('chat');setMobileView('chat');}}><MessageSquare size={18}/> Czat {chatMessages.length>0&&<b className="meeting-control-badge">{chatMessages.length}</b>}</button>
+          <button className={'meeting-control '+(sideTab==='participants'?'active':'')} onClick={()=>{setSideTab('participants');setMobileView('participants');}}><UsersRound size={18}/> Uczestnicy <b className="meeting-control-badge">{participants.length}</b></button>
           {canManage && <button className="meeting-control danger" disabled={Boolean(busy)} onClick={()=>void endForEveryone()}><PhoneOff size={18}/> Zakończ dla wszystkich</button>}
           <button className="meeting-control danger" disabled={busy==='end'} onClick={leave}><PhoneOff size={18}/> Opuść spotkanie</button>
         </footer>
