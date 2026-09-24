@@ -65,7 +65,7 @@ const SERVICE_INTAKE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECH
 const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
-const MEETING_MANAGE_ROLES = new Set(['OWNER', 'BOSS']);
+const MEETING_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const CUSTOMER_QUOTE_STAFF_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const FINANCE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const DEV_TEST_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER', 'SUPPORT']);
@@ -4447,7 +4447,7 @@ const route = async (request) => {
 
   if(method==='POST'&&url.pathname==='/meetings'){
     const session=await requireActive(request),u=session.user;
-    if(!MEETING_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Spotkania może planować OWNER lub BOSS.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    if(!MEETING_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Spotkania może planować OWNER, BOSS lub COORDINATOR.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
     const body=await readJson(request);
     const title=cleanText(body.title,120),description=cleanText(body.description,2000);
     const startsAtRaw=cleanText(body.startsAt,80),startsAt=new Date(startsAtRaw);
