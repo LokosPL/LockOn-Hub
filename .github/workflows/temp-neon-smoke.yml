@@ -1,5 +1,5 @@
 name: Temp Neon integration smoke
-# Final release-candidate marker: ServiceOS 1.0.4.22 clean meeting room and theater mode.
+# Final release-candidate marker: ServiceOS 1.0.5.22 cleaner meeting controls and rebuilt website.
 
 on:
   push:
