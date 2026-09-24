@@ -133,7 +133,7 @@ export const backendGoogleLogin = (idToken: string, signal?: AbortSignal) =>
 export const backendDevOwnerLogin = () =>
   backendRequest<BackendLoginPayload>('/auth/dev-owner', { method: 'POST', body: '{}' });
 
-export const backendMe = (token: string) => backendRequest<BackendAuthPayload>('/me', {}, token);
+export const backendMe = (token: string, signal?: AbortSignal) => backendRequest<BackendAuthPayload>('/me', { signal }, token);
 
-export const backendLogout = (token: string) =>
-  backendRequest<{ ok: true }>('/auth/logout', { method: 'POST', body: '{}' }, token);
+export const backendLogout = (token: string, signal?: AbortSignal) =>
+  backendRequest<{ ok: true }>('/auth/logout', { method: 'POST', body: '{}', signal }, token);
