@@ -8,7 +8,8 @@ import {
   screen,
   session,
   shell,
-  type IpcMainInvokeEvent
+  type IpcMainInvokeEvent,
+  type WebContents
 } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
@@ -1451,7 +1452,7 @@ app.whenReady().then(async () => {
   const startupDeepLink = process.argv.find((arg) => arg.startsWith(APP_PROTOCOL + '://'));
   if (startupDeepLink) handleProtocolUrl(startupDeepLink);
 
-  const allowMeetingMedia = (webContents: Electron.WebContents, permission: string) =>
+  const allowMeetingMedia = (webContents: WebContents, permission: string) =>
     permission === 'media' && isTrustedRendererUrl(webContents.getURL());
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
     const allowed = allowMeetingMedia(webContents, permission);
