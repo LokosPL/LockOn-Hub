@@ -15,6 +15,8 @@ on:
       - "package-lock.json"
       - "BUILD_VERSION"
       - "RELEASE_VERSION"
+      - "PROD_RELEASE_REQUEST"
+      - ".github/workflows/prod-release-request.yml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/temp-neon-smoke.yml"
