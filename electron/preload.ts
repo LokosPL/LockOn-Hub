@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld('lockOn', {
     moderate: (meetingId: string, payload: unknown) => ipcRenderer.invoke('meetings:moderate', meetingId, payload),
     screenSources: () => ipcRenderer.invoke('meetings:screenSources'),
     shareOverlay: (source: unknown) => ipcRenderer.invoke('meetings:shareOverlay', source),
+    updateShareOverlay: (state: unknown) => ipcRenderer.invoke('meetings:updateShareOverlay', state),
     attendanceAction: (meetingId: string, action:'JOIN'|'LEAVE') => ipcRenderer.invoke('meetings:attendanceAction', meetingId, action),
     attendance: (meetingId: string) => ipcRenderer.invoke('meetings:attendance', meetingId),
     chat: (meetingId: string) => ipcRenderer.invoke('meetings:chat', meetingId),
