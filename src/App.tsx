@@ -14,6 +14,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { AdministrationPage } from './pages/AdministrationPage';
 import { CustomerAccountsPage } from './pages/CustomerAccountsPage';
 import { EarningsPage } from './pages/EarningsPage';
+import { MeetingsPage } from './pages/MeetingsPage';
 import { ServicePage } from './pages/ServicePage';
 import type { AuthState, HelpAction } from './types/electron';
 import { ROLE_DEFINITIONS, roleCanNavigate, type UserRole } from './config/roles';
@@ -175,6 +176,8 @@ export default function App() {
           )}
           {active === 'administration' && <AdministrationPage focusUserId={focusUserId} />}
           {active === 'customers' && <CustomerAccountsPage effectiveRole={effectiveRole!} />}
+          {active === 'meetings' && <MeetingsPage role={effectiveRole!} />}
+
           {active === 'service' && <ServicePage auth={auth} effectiveRole={effectiveRole!} focusOrderId={focusOrderId} />}
           {active === 'earnings' && <EarningsPage auth={auth} effectiveRole={effectiveRole!} />}
           {active === 'browser' && <BrowserPage />}
