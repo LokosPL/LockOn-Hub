@@ -45,12 +45,13 @@ test('meetings are a dedicated module while Start keeps only summary',()=>{
   assert.doesNotMatch(dashboard,/MeetingsCard/);
 });
 
-test('meeting room exposes chat, hand, speaker and safe share cleanup',()=>{
-  for(const contract of ['sendChat','setHandRaised','ActiveSpeakersChanged','audioLevel','meeting-local-share-preview','Zmień ekran / okno','shareOverlay(null)']){
+test('meeting room exposes chat, hand, speaker and safe broadcast cleanup',()=>{
+  for(const contract of ['sendChat','setHandRaised','ActiveSpeakersChanged','audioLevel','meeting-broadcast-strip','Zmień źródło','shareOverlay(null)','updateShareOverlay']){
     assert.ok(room.includes(contract),contract);
   }
   assert.match(main,/setIgnoreMouseEvents\(true/);
   assert.match(main,/setContentProtection\(true\)/);
+  assert.match(main,/setVisibleOnAllWorkspaces\(true/);
   assert.match(main,/closeMeetingShareOverlay\(\)/);
 });
 
