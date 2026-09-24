@@ -102,5 +102,5 @@ test('1.0.5.22 product and updater versions stay aligned', () => {
   assert.equal(read('RELEASE_VERSION').trim(), '1.0.5.22');
   assert.equal(read('BUILD_VERSION').trim(), '1.5.22');
   assert.equal(JSON.parse(read('package.json')).version, '1.5.22');
-  assert.match(read('electron/appConfig.ts'), /productVersion: '1\.0\.4\.22'/);
+  assert.match(read('electron/appConfig.ts'), /productVersion: '1\.0\.5\.22'/);
 });
