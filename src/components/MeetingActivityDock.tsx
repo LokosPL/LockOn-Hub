@@ -86,7 +86,6 @@ export function MeetingActivityDock({ activePage, onOpenMeeting }: Props) {
   useEffect(() => {
     if (activePage !== 'browser') return;
     void window.lockOn.browser.setVisible(!expanded).catch(() => undefined);
-    return () => { void window.lockOn.browser.setVisible(true).catch(() => undefined); };
   }, [activePage, expanded]);
 
   const unreadCount = Math.max(0, messages.length - Math.max(0, seenMessageCount));
