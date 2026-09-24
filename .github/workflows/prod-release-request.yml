@@ -68,11 +68,31 @@ jobs:
           echo "Selected TEMP run $temp_id from $temp_branch at $temp_sha."
 
           git fetch --no-tags origin "$temp_sha"
-          if ! git diff --quiet "$temp_sha" HEAD --; then
-            echo "::error::main differs from exact TEMP candidate $temp_sha."
+          mapfile -t changed_files < <(git diff --name-only "$temp_sha" HEAD --)
+          allowed_release_control_files=(
+            "PROD_RELEASE_REQUEST"
+            ".github/workflows/prod-release-request.yml"
+          )
+          unexpected_files=()
+          for changed_file in "${changed_files[@]}"; do
+            allowed=false
+            for allowed_file in "${allowed_release_control_files[@]}"; do
+              if [[ "$changed_file" == "$allowed_file" ]]; then
+                allowed=true
+                break
+              fi
+            done
+            if [[ "$allowed" != "true" ]]; then
+              unexpected_files+=("$changed_file")
+            fi
+          done
+          if (( ${#unexpected_files[@]} > 0 )); then
+            echo "::error::main differs from exact TEMP candidate $temp_sha outside release-control files."
+            printf 'Unexpected file: %s\n' "${unexpected_files[@]}"
             git diff --stat "$temp_sha" HEAD
             exit 1
           fi
+          echo "Exact TEMP candidate verified. Release-control-only differences: ${changed_files[*]:-none}."
 
           echo "run_id=$temp_id" >> "$GITHUB_OUTPUT"
           echo "temp_sha=$temp_sha" >> "$GITHUB_OUTPUT"
