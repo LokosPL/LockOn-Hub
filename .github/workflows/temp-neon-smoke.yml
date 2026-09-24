@@ -404,6 +404,7 @@ jobs:
           owner_token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
           user_token="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.token)")"
           boss_token="$(node -e "const d=require('./role-BOSS.json');process.stdout.write(d.token)")"
+          coordinator_token="$(node -e "const d=require('./role-COORDINATOR.json');process.stdout.write(d.token)")"
           user_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.user.id)")"
 
           api_code() {
@@ -412,9 +413,10 @@ jobs:
             curl --silent --show-error --output meeting-response.json --write-out '%{http_code}'               --request "$method" "$TEMP_API_URL$path"               --header "Authorization: Bearer $token"               --header "Content-Type: application/json"               --data "$body"
           }
 
-          # Only OWNER/BOSS can access planning options.
+          # OWNER/BOSS/COORDINATOR can access planning options; USER cannot.
           [ "$(api_code "$owner_token" GET /meetings/options '{}')" = "200" ] || { cat meeting-response.json; exit 1; }
           [ "$(api_code "$boss_token" GET /meetings/options '{}')" = "200" ] || { cat meeting-response.json; exit 1; }
+          [ "$(api_code "$coordinator_token" GET /meetings/options '{}')" = "200" ] || { echo "::error::COORDINATOR cannot access meeting planning options"; cat meeting-response.json; exit 1; }
           [ "$(api_code "$user_token" GET /meetings/options '{}')" = "403" ] || { echo "::error::USER gained meeting planning options"; cat meeting-response.json; exit 1; }
 
           starts_at="$(node -e "process.stdout.write(new Date(Date.now()+3600000).toISOString())")"
@@ -525,7 +527,7 @@ jobs:
           cancelled_start_http="$(api_code "$owner_token" POST "/meetings/$past_meeting_id/start" '{}')"
           [ "$cancelled_start_http" = "409" ] || { echo "::error::Cancelled meeting could start: HTTP $cancelled_start_http"; cat meeting-response.json; exit 1; }
 
-          # BOSS zachowuje prawo tworzenia spotkań.
+          # BOSS i COORDINATOR zachowują prawo tworzenia i zarządzania spotkaniami.
           boss_starts_at="$(node -e "process.stdout.write(new Date(Date.now()+10800000).toISOString())")"
           boss_body="$(node - <<'NODE' "$boss_starts_at" "$user_id"
           const [startsAt,userId]=process.argv.slice(2);
@@ -535,6 +537,17 @@ jobs:
           curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings" --header "Authorization: Bearer $boss_token" --header "Content-Type: application/json" --data "$boss_body" > meeting-boss-created.json
           boss_meeting_id="$(node -e "const d=require('./meeting-boss-created.json');if(d.meeting?.status!=='SCHEDULED')throw new Error('BOSS could not create scheduled meeting');process.stdout.write(d.meeting.id)")"
           curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$boss_meeting_id/cancel" --header "Authorization: Bearer $boss_token" --header "Content-Type: application/json" --data '{}' > /dev/null
+
+          coordinator_starts_at="$(node -e "process.stdout.write(new Date(Date.now()+12600000).toISOString())")"
+          coordinator_body="$(node - <<'NODE' "$coordinator_starts_at" "$user_id"
+          const [startsAt,userId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({title:'CI COORDINATOR meeting',description:'role smoke',startsAt,plannedMinutes:20,maxParticipants:4,allowParticipantAudio:true,allowParticipantScreenShare:false,audience:[{type:'USER',userId}]}));
+          NODE
+          )"
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings" --header "Authorization: Bearer $coordinator_token" --header "Content-Type: application/json" --data "$coordinator_body" > meeting-coordinator-created.json
+          coordinator_meeting_id="$(node -e "const d=require('./meeting-coordinator-created.json');if(d.meeting?.status!=='SCHEDULED'||d.meeting?.canManage!==true)throw new Error('COORDINATOR could not create/manage scheduled meeting');process.stdout.write(d.meeting.id)")"
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$coordinator_meeting_id/cancel" --header "Authorization: Bearer $coordinator_token" --header "Content-Type: application/json" --data '{}' > meeting-coordinator-cancelled.json
+          node -e "const d=require('./meeting-coordinator-cancelled.json');if(d.meeting?.status!=='CANCELLED')throw new Error('COORDINATOR could not cancel own meeting')"
 
           user_start_http="$(api_code "$user_token" POST "/meetings/$meeting_id/start" '{}')"
           [ "$user_start_http" = "403" ] || { echo "::error::USER could start meeting: HTTP $user_start_http"; cat meeting-response.json; exit 1; }
@@ -582,7 +595,7 @@ jobs:
           ended_join_http="$(api_code "$user_token" POST "/meetings/$meeting_id/join-token" '{}')"
           [ "$ended_join_http" = "409" ] || { echo "::error::ENDED meeting exposed join-token: HTTP $ended_join_http"; cat meeting-response.json; exit 1; }
 
-          echo "Meetings TEMP E2E passed: backend lifecycle source-of-truth, OWNER/BOSS/USER roles, full edit/reschedule, pre/post-live join gates, canonical LiveKit token/grants, attendance, cancellation and end."
+          echo "Meetings TEMP E2E passed: backend lifecycle source-of-truth, OWNER/BOSS/COORDINATOR/USER roles, full edit/reschedule, pre/post-live join gates, canonical LiveKit token/grants, attendance, cancellation and end."
 
       - name: Temp USER front-desk service E2E
         shell: bash
