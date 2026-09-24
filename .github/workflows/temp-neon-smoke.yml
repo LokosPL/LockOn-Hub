@@ -351,6 +351,22 @@ jobs:
           if(!d.activePointId || !d.points.some((p)=>p.id===d.activePointId)) throw new Error('Temp session has no server-bound active point');
           NODE
 
+      - name: Temp Google login recovery contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq "GMAIL_UPSTREAM_TIMEOUT_MS = 8_000" functions/lockon-api.mjs
+          grep -Fq "requeueNoSenderNotificationsForUser" functions/lockon-api.mjs
+          grep -Fq "const [meetingGmail,gmail] = await Promise.all" functions/lockon-api.mjs
+          grep -Fq "AUTH_SESSION_RESTORE_TIMEOUT_MS = 12_000" electron/googleAuth.ts
+          grep -Fq "GOOGLE_SESSION_RECOVERY_INTERVAL_MS = 1_500" src/pages/LoginScreen.tsx
+          grep -Fq "auth:state-changed" electron/main.ts
+          grep -Fq "auth:state-changed" electron/preload.ts
+
+          owner_token="$(node -e "const d=require('./auth.json');process.stdout.write(d.token)")"
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/me" --header "Authorization: Bearer $owner_token" > auth-recovery-me.json
+          node -e "const d=require('./auth-recovery-me.json');if(!d.user?.id||d.user?.status!=='ACTIVE')throw new Error('Persisted session /me recovery failed')"
+
       - name: Temp role and authorization matrix
         shell: bash
         run: |
