@@ -78,8 +78,9 @@ export default function App() {
   }, [active, auth?.authenticated, auth?.status, effectiveRole]);
 
   useEffect(() => {
-    if (active !== 'browser') return;
-    void window.lockOn.browser.setVisible(!helpOpen);
+    if (view === 'splash') return;
+    const shouldShowBrowser = active === 'browser' && !helpOpen;
+    void window.lockOn.browser.setVisible(shouldShowBrowser).catch(() => undefined);
   }, [active, helpOpen]);
 
   if (view === 'splash') return <SplashScreen />;
