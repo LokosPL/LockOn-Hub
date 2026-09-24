@@ -136,6 +136,7 @@ jobs:
           zip -j prod-neon-lockonapi.zip central-api-dist/index.mjs
           sha256sum prod-neon-lockonapi.zip central-api-dist/index.mjs
 
+      # ServiceOS 1.0.0.22 exact migration gate: collaboration schema must exist before backend deploy.
       - name: Apply additive ServiceOS migrations to PROD
         shell: bash
         run: |
