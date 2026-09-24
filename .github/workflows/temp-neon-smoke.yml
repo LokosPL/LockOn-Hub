@@ -1,5 +1,5 @@
 name: Temp Neon integration smoke
-# Final release-candidate marker: ServiceOS 1.0.1.22 meeting command center, compact Start and exact production gate.
+# Final release-candidate marker: ServiceOS 1.0.2.22 meeting polish, browser lifecycle and HD screen share.
 
 on:
   push:
