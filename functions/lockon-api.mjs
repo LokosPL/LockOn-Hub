@@ -658,6 +658,36 @@ const meetingEvent = async (meetingId, actorUserId, eventType, metadata={}) =>
   ]);
 
 const meetingRoomName = (meetingId) => 'lockon-' + String(meetingId).replace(/[^A-Za-z0-9_-]/g,'').slice(0,100);
+const closeLiveKitRoom = async (meetingId) => {
+  if(!livekitConfigured())return {closed:false,reason:'not-configured'};
+  const room=meetingRoomName(meetingId),client=livekitRooms();
+  try{
+    await client.deleteRoom(room);
+    return {closed:true,mode:'delete-room'};
+  }catch(error){
+    console.error('[livekit room close]',{
+      meetingId,
+      roomName:room,
+      stage:'deleteRoom',
+      message:error instanceof Error?error.message:String(error)
+    });
+  }
+  try{
+    const participants=await client.listParticipants(room);
+    const results=await Promise.allSettled(participants.map((participant)=>client.removeParticipant(room,participant.identity)));
+    const failed=results.filter((item)=>item.status==='rejected').length;
+    if(failed)console.error('[livekit room close]',{meetingId,roomName:room,stage:'removeParticipants',failed,total:participants.length});
+    return {closed:failed===0,mode:'remove-participants',participants:participants.length,failed};
+  }catch(error){
+    console.error('[livekit room close]',{
+      meetingId,
+      roomName:room,
+      stage:'listParticipants',
+      message:error instanceof Error?error.message:String(error)
+    });
+    return {closed:false,reason:'livekit-error'};
+  }
+};
 const meetingParticipantIdentity = (meetingId,userId) =>
   'p_' + crypto.createHash('sha256').update(meetingId+':'+userId).digest('hex').slice(0,28);
 
@@ -4794,8 +4824,8 @@ const route = async (request) => {
       [meetingId,target,meeting.status]
     );
     if(!result.rows[0])return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
-    if((target==='ENDED'||target==='CANCELLED')&&livekitConfigured()){
-      await livekitRooms().deleteRoom(meetingRoomName(meetingId)).catch(()=>undefined);
+    if(target==='ENDED'||(target==='CANCELLED'&&meeting.status==='LIVE')){
+      await closeLiveKitRoom(meetingId);
     }
     await meetingEvent(meetingId,u.id,target,{});
     if(target==='ENDED'||target==='CANCELLED'){
