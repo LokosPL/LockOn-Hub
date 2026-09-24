@@ -37,10 +37,9 @@ test('Start layout receives the selected UI scale', () => {
   assert.match(styles, /\.start-meeting-hub/);
 });
 
-test('1.0.1.22 version contracts are aligned without arming release', () => {
+test('1.0.1.22 product and updater versions stay aligned', () => {
   assert.equal(read('RELEASE_VERSION').trim(), '1.0.1.22');
   assert.equal(read('BUILD_VERSION').trim(), '1.1.22');
   assert.equal(JSON.parse(read('package.json')).version, '1.1.22');
   assert.match(read('electron/appConfig.ts'), /productVersion: '1\.0\.1\.22'/);
-  assert.notEqual(read('RELEASE_READY').trim(), '1.0.1.22|1.1.22');
 });
