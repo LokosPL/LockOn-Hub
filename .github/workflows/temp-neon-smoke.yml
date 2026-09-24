@@ -565,13 +565,13 @@ jobs:
           curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$boss_meeting_id/cancel" --header "Authorization: Bearer $boss_token" --header "Content-Type: application/json" --data '{}' > /dev/null
 
           coordinator_starts_at="$(node -e "process.stdout.write(new Date(Date.now()+12600000).toISOString())")"
-          coordinator_body="$(node - <<'NODE' "$coordinator_starts_at" "$user_id"
-          const [startsAt,userId]=process.argv.slice(2);
-          process.stdout.write(JSON.stringify({title:'CI COORDINATOR meeting',description:'role smoke',startsAt,plannedMinutes:20,maxParticipants:4,allowParticipantAudio:true,allowParticipantScreenShare:false,audience:[{type:'USER',userId}]}));
+          coordinator_body="$(node - <<'NODE' "$coordinator_starts_at"
+          const [startsAt]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({title:'CI COORDINATOR meeting',description:'role smoke',startsAt,plannedMinutes:20,maxParticipants:4,allowParticipantAudio:true,allowParticipantScreenShare:false,audience:[{type:'ALL'}]}));
           NODE
           )"
           curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings" --header "Authorization: Bearer $coordinator_token" --header "Content-Type: application/json" --data "$coordinator_body" > meeting-coordinator-created.json
-          coordinator_meeting_id="$(node -e "const d=require('./meeting-coordinator-created.json');if(d.meeting?.status!=='SCHEDULED'||d.meeting?.canManage!==true)throw new Error('COORDINATOR could not create/manage scheduled meeting');process.stdout.write(d.meeting.id)")"
+          coordinator_meeting_id="$(node -e "const d=require('./meeting-coordinator-created.json'),auth=require('./role-COORDINATOR.json');const allowed=new Set((auth.points||[]).map(p=>p.id));if(d.meeting?.status!=='SCHEDULED'||d.meeting?.canManage!==true)throw new Error('COORDINATOR could not create/manage scheduled meeting');if(!d.meeting.audience?.length||d.meeting.audience.some(a=>a.type!=='POINT'||!allowed.has(a.pointId)))throw new Error('COORDINATOR ALL audience escaped assigned points');process.stdout.write(d.meeting.id)")"
           curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$coordinator_meeting_id/cancel" --header "Authorization: Bearer $coordinator_token" --header "Content-Type: application/json" --data '{}' > meeting-coordinator-cancelled.json
           node -e "const d=require('./meeting-coordinator-cancelled.json');if(d.meeting?.status!=='CANCELLED')throw new Error('COORDINATOR could not cancel own meeting')"
 
