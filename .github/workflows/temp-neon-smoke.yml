@@ -1,5 +1,5 @@
 name: Temp Neon integration smoke
-# Final release-candidate marker: ServiceOS 1.0.3.22 persistent broadcast mode, host overlay and low-latency media.
+# Final release-candidate marker: ServiceOS 1.0.4.22 clean meeting room and theater mode.
 
 on:
   push:
