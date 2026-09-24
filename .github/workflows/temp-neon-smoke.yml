@@ -704,6 +704,9 @@ jobs:
           NODE
           owner_api POST /service/orders "$(cat user-pickup-body.json)" > user-pickup-order.json
           pickup_order_id="$(node -e "const d=require('./user-pickup-order.json');process.stdout.write(d.order.id)")"
+          ci_technician_id="$(node -e "const d=require('./role-TECHNICIAN.json');if(!d.user?.id)throw new Error('CI TECHNICIAN fixture missing');process.stdout.write(d.user.id)")"
+          owner_api POST "/service/orders/$pickup_order_id/details" "$(node -e "process.stdout.write(JSON.stringify({assignedTechnicianId:process.argv[1]}))" "$ci_technician_id")" > user-pickup-assigned.json
+          node -e "const d=require('./user-pickup-assigned.json');if(d.order?.assignedTechnicianId!==process.argv[1])throw new Error('Pickup fixture did not assign CI TECHNICIAN')" "$ci_technician_id"
           owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"DIAGNOSIS","note":"CI USER pickup"}' > /dev/null
           owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"IN_REPAIR","note":"CI USER pickup"}' > /dev/null
           owner_api POST "/service/orders/$pickup_order_id/status" '{"status":"REPAIR_DONE","note":"CI USER pickup"}' > /dev/null
