@@ -75,6 +75,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const audioHostRef = useRef<HTMLDivElement | null>(null);
   const videoHostRef = useRef<HTMLDivElement | null>(null);
   const localPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const localPreviewStreamRef = useRef<MediaStream | null>(null);
   const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [joining, setJoining] = useState(true);
   const [connected, setConnected] = useState(false);
@@ -272,6 +273,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
       closeAttendance();
       void window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
       if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
+      localPreviewStreamRef.current = null;
       const localScreen = screenPublicationRef.current?.track;
       if (localScreen) {
         void room.localParticipant.unpublishTrack(localScreen);
@@ -296,6 +298,21 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     const timer = window.setInterval(() => void loadCollaboration(), 1_750);
     return () => window.clearInterval(timer);
   }, [connected, meeting.id]);
+
+  useEffect(() => {
+    if (!connected) return;
+    const room=roomRef.current;
+    const timer=window.setInterval(()=>{if(room)refreshParticipants(room);},140);
+    return () => window.clearInterval(timer);
+  }, [connected, meeting.id]);
+
+  useEffect(() => {
+    const preview=localPreviewRef.current;
+    if (!preview || !screenEnabled || !selectedSource || /LockOn ServiceOS/i.test(selectedSource.name)) return;
+    preview.srcObject=localPreviewStreamRef.current;
+    void preview.play().catch(()=>undefined);
+    return () => { if (preview.srcObject===localPreviewStreamRef.current) preview.srcObject=null; };
+  }, [screenEnabled, selectedSource?.id]);
 
   const retryConnection = () => {
     setError('');
@@ -351,6 +368,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
       }
       await window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
       if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
+      localPreviewStreamRef.current = null;
 
       const constraints = {
         mandatory: {
@@ -374,8 +392,9 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
       setSourcePickerOpen(false);
 
       const mirrorRisk=/LockOn ServiceOS/i.test(source.name);
+      localPreviewStreamRef.current = mirrorRisk ? null : new MediaStream([mediaTrack]);
       if (localPreviewRef.current) {
-        localPreviewRef.current.srcObject = mirrorRisk ? null : new MediaStream([mediaTrack]);
+        localPreviewRef.current.srcObject = localPreviewStreamRef.current;
         if (!mirrorRisk) void localPreviewRef.current.play().catch(() => undefined);
       }
       await window.lockOn.meetings.shareOverlay(source).catch(() => ({ok:true,shown:false}));
@@ -386,6 +405,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         setScreenEnabled(false);
         setSelectedSource(null);
         if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
+        localPreviewStreamRef.current = null;
         void room.localParticipant.unpublishTrack(publication.track).catch(() => undefined);
         void window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
       }, { once:true });
@@ -417,6 +437,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
       await room.localParticipant.unpublishTrack(publication.track).catch(() => undefined);
       publication.track.stop();
       if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
+      localPreviewStreamRef.current = null;
       await window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
       setSelectedSource(null);
       setScreenEnabled(false);
