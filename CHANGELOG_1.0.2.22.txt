@@ -1,0 +1,20 @@
+LockOn ServiceOS 1.0.2.22
+
+Najważniejsze zmiany
+- Start ma spokojniejszy, spójny panel „Spotkania i szkolenia” zamiast osobnych, konkurujących kafelków.
+- Serwisant, użytkownik i wsparcie nie widzą skrótów do zarządzania, historii i planowania spotkań przeznaczonych dla ról zarządzających.
+- Panel Start pokazuje zaplanowane szkolenie osobno od aktywnego spotkania; przy braku szkolenia wyświetla czytelny stan „Brak zaplanowanych szkoleń”.
+- Aktywne spotkanie jest częścią sekcji Spotkania i szkolenia, z licznikiem czatu, podniesionych rąk i szybkim powrotem do pokoju.
+- Pokój spotkania jest większy i czytelniejszy, z uproszczonym nagłówkiem oraz bez technicznych kafelków „Terminarz / Czat / Ekrany / Zgłoszenia”.
+- „Twój ekran” pojawia się wyłącznie wtedy, gdy faktycznie udostępniasz ekran. Bez aktywnego udostępniania scena pokazuje neutralny stan oczekiwania.
+- Udostępniany ekran uczestnika może zostać przełączony z miniatury na główną scenę.
+- Screen share priorytetyzuje czytelność obrazu: brak simulcastu, brak adaptive stream po stronie pokoju, do 3840×2160 / 30 fps i 8 Mb/s z preferencją utrzymania rozdzielczości.
+- Podglądy źródeł ekranu w pickerze zostały zwiększone do 640×360.
+- Naprawiono wyścig natywnego WebContentsView przeglądarki przy przejściu Przeglądarka → Serwis podczas aktywnego spotkania. Widoczność przeglądarki ma teraz jedno źródło prawdy w App.
+- Persistent meeting dock nadal pozwala prowadzącemu śledzić czat i podniesione ręce poza pokojem spotkania.
+
+Bezpieczeństwo i stabilność
+- Tokeny LiveKit nadal nie są przechowywane w globalnym panelu spotkania.
+- Dołączenie do pokoju nadal wymaga autoryzowanego backendu, statusu LIVE oraz odpowiednich uprawnień.
+- Screen share nadal wymaga świadomego wyboru źródła i sprząta tracki/overlay przy zmianie źródła, wyjściu i zakończeniu.
+- Zmiana jakości transmisji nie rozszerza uprawnień do przechwytywania ekranu ani dostępu do innych źródeł.
