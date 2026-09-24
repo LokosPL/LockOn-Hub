@@ -6,6 +6,7 @@ import type { NavigationKey } from './Sidebar';
 type Props = {
   activePage: NavigationKey;
   onOpenMeeting: (meetingId: string) => void;
+  onExpandedChange?: (expanded: boolean) => void;
 };
 
 const liveMeetingPriority = (meeting: MeetingSummary) => {
@@ -13,7 +14,7 @@ const liveMeetingPriority = (meeting: MeetingSummary) => {
   return meeting.hostUserId === meeting.createdByUserId ? 2 : 1;
 };
 
-export function MeetingActivityDock({ activePage, onOpenMeeting }: Props) {
+export function MeetingActivityDock({ activePage, onOpenMeeting, onExpandedChange }: Props) {
   const [meeting, setMeeting] = useState<MeetingSummary | null>(null);
   const [messages, setMessages] = useState<MeetingChatMessage[]>([]);
   const [hands, setHands] = useState<MeetingHandRaise[]>([]);
@@ -84,9 +85,9 @@ export function MeetingActivityDock({ activePage, onOpenMeeting }: Props) {
   }, [expanded, messages.length, seenMessageCount]);
 
   useEffect(() => {
-    if (activePage !== 'browser') return;
-    void window.lockOn.browser.setVisible(!expanded).catch(() => undefined);
-  }, [activePage, expanded]);
+    onExpandedChange?.(expanded);
+    return () => onExpandedChange?.(false);
+  }, [expanded, onExpandedChange]);
 
   const unreadCount = Math.max(0, messages.length - Math.max(0, seenMessageCount));
   const latestMessages = useMemo(() => messages.slice(-4), [messages]);
