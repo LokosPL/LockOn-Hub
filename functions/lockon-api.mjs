@@ -4596,6 +4596,9 @@ const route = async (request) => {
     }finally{client.release();}
 
     await audit(session,'MEETING_UPDATED','meeting',meetingId,null,{scheduleChanged,from:oldStartsAt,to:newStartsAt,plannedMinutes,maxParticipants,audienceChanged:Boolean(audience)});
+    if(scheduleChanged){
+      await audit(session,'MEETING_RESCHEDULED','meeting',meetingId,null,{from:oldStartsAt,to:newStartsAt});
+    }
     let email={eligible:0,queued:0,unchanged:true};
     if(scheduleChanged){
       email=await queueMeetingEmailEvent(meetingId,'RESCHEDULED:'+Date.now()+':'+crypto.randomBytes(4).toString('hex'));
