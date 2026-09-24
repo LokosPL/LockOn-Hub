@@ -109,6 +109,17 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const [mobileView, setMobileView] = useState<'meeting'|'participants'|'chat'>('meeting');
   const [busy, setBusy] = useState('');
 
+  useEffect(() => {
+    if (!theaterMode) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setTheaterMode(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [theaterMode]);
+
+
+
   const closeAttendance = () => {
     if (!attendanceOpenRef.current) return;
     attendanceOpenRef.current = false;
@@ -764,7 +775,11 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
                     </div>
                   )}
 
-                  <div className={'meeting-screen-main '+(stageView==='self'?'self-stage':'remote-stage')}>
+                  <div
+                    className={'meeting-screen-main '+(stageView==='self'?'self-stage':'remote-stage')}
+                    onDoubleClick={toggleTheaterMode}
+                    title="Kliknij dwukrotnie, aby przełączyć Tryb kinowy"
+                  >
                     {stageView === 'self' && (
                       showSelfPreview && !/LockOn ServiceOS/i.test(selectedSource?.name || '') ? (
                         <video ref={localStagePreviewRef} className="meeting-local-stage-video" muted playsInline autoPlay />
