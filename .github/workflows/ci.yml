@@ -162,8 +162,8 @@ jobs:
           }
 
           $roles = Get-Content src/config/roles.ts -Raw
-          if (-not $roles.Contains("navigation: ['dashboard', 'service', 'customers', 'browser', 'settings']")) {
-            throw "USER must have the point-scoped customer workspace in navigation."
+          if (-not $roles.Contains("navigation: ['dashboard', 'service', 'meetings', 'customers', 'browser', 'settings']")) {
+            throw "USER must keep the point-scoped customer workspace and dedicated meetings module in navigation."
           }
 
           @(
@@ -345,6 +345,9 @@ jobs:
             "meeting_attendance",
             "meeting_email_sender",
             "meeting_email_outbox",
+            "meeting_chat_messages",
+            "meeting_hand_raises",
+            "email_notifications_enabled",
             "queueMeetingEmailEvent",
             "normalizeLiveKitUrls",
             "canJoinMeeting(meeting.status)",
@@ -369,7 +372,14 @@ jobs:
             "CONNECTION_ERROR_MESSAGE",
             "room.connect(serverUrl, credentials.token",
             "meeting-room-panel",
-            "Wróć do spotkań"
+            "Wróć do spotkań",
+            "setHandRaised",
+            "sendChat",
+            "ActiveSpeakersChanged",
+            "audioLevel",
+            "meeting-local-share-preview",
+            "Zmień ekran / okno",
+            "shareOverlay(null)"
           ) | ForEach-Object {
             if (-not $room.Contains($_)) { throw "Missing live meeting UI contract: $_" }
           }
@@ -385,7 +395,9 @@ jobs:
             "Otwórz pokój spotkania",
             "Wróć do spotkań",
             "role === 'COORDINATOR'",
-            "Frekwencja"
+            "Frekwencja",
+            "Powiadom uczestników e-mailem",
+            "emailNotificationsEnabled"
           ) | ForEach-Object {
             if (-not $meetings.Contains($_)) { throw "Missing meeting scheduling UX contract: $_" }
           }
@@ -396,7 +408,7 @@ jobs:
           }
 
           $electron = Get-Content electron/main.ts -Raw
-          @("permission === 'media'","isTrustedRendererUrl","setPermissionCheckHandler") | ForEach-Object {
+          @("permission === 'media'","isTrustedRendererUrl","setPermissionCheckHandler","meetings:shareOverlay","setIgnoreMouseEvents","setContentProtection","meetings:open-deep-link") | ForEach-Object {
             if (-not $electron.Contains($_)) { throw "Missing trusted meeting media permission contract: $_" }
           }
 
