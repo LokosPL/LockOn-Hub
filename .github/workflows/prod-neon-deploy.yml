@@ -206,7 +206,8 @@ jobs:
             curl --silent --show-error --fail "$endpoint" --header "Authorization: Bearer $NEON_API_KEY" > function.json
             read -r id state < <(node - <<'NODE'
           const fs=require('fs');
-          const f=JSON.parse(fs.readFileSync('function.json','utf8'));
+          const payload=JSON.parse(fs.readFileSync('function.json','utf8'));
+          const f=payload.function ?? payload;
           const d=f.current_deployment ?? f.active_deployment ?? f.deployment ?? {};
           process.stdout.write(String(d.id ?? '')+' '+String(d.status ?? 'unknown'));
           NODE
