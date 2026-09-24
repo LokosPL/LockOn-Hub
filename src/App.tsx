@@ -4,6 +4,7 @@ import { SplashScreen } from './components/SplashScreen';
 import { TitleBar } from './components/TitleBar';
 import { Sidebar, type NavigationKey } from './components/Sidebar';
 import { HelpChat } from './components/HelpChat';
+import { MeetingActivityDock } from './components/MeetingActivityDock';
 import { UpdatePrompt } from './components/UpdatePrompt';
 import { Dashboard } from './pages/Dashboard';
 import { BrowserPage } from './pages/BrowserPage';
@@ -178,6 +179,10 @@ export default function App() {
             <Dashboard
               onNavigate={setActive}
               onOpenHelp={() => setHelpOpen(true)}
+              onOpenMeeting={(meetingId) => {
+                setFocusMeetingId(meetingId);
+                setActive('meetings');
+              }}
               pointName={pointName}
               role={effectiveRole!}
               userName={auth.user?.name ?? 'Użytkownik'}
@@ -201,6 +206,14 @@ export default function App() {
             />
           )}
         </main>
+
+        <MeetingActivityDock
+          activePage={active}
+          onOpenMeeting={(meetingId) => {
+            setFocusMeetingId(meetingId);
+            setActive('meetings');
+          }}
+        />
 
         <HelpChat open={helpOpen} onClose={() => setHelpOpen(false)} auth={auth} effectiveRole={effectiveRole!} onAction={handleHelpAction} />
         <UpdatePrompt />
