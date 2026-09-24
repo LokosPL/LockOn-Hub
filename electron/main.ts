@@ -70,6 +70,7 @@ const resetRendererBootGate = () => {
 
 const APP_PROTOCOL = 'lockon-serviceos';
 let pendingProtocolFocus = false;
+let pendingMeetingDeepLink: string | null = null;
 
 const focusMainWindow = () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -129,6 +130,17 @@ const refreshAndPushAuthState = async () => {
   }
 };
 
+const deliverPendingMeetingDeepLink = () => {
+  if (!pendingMeetingDeepLink || !mainWindow || mainWindow.isDestroyed()) return;
+  const meetingId=pendingMeetingDeepLink;
+  void Promise.all([mainReady,rendererBootReady]).then(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || pendingMeetingDeepLink!==meetingId) return;
+    mainWindow.webContents.send('meetings:open-deep-link',meetingId);
+    pendingMeetingDeepLink=null;
+    focusMainWindow();
+  });
+};
+
 const handleProtocolUrl = (value: string) => {
   try {
     const url = new URL(value);
@@ -143,8 +155,9 @@ const handleProtocolUrl = (value: string) => {
     if (url.hostname === 'meeting') {
       const meetingId = String(url.pathname || '').replace(/^\/+/, '');
       if (!/^mtg_[a-f0-9]{20}$/.test(meetingId)) return false;
+      pendingMeetingDeepLink=meetingId;
       focusMainWindow();
-      void mainReady.then(() => mainWindow?.webContents.send('meetings:open-deep-link', meetingId));
+      deliverPendingMeetingDeepLink();
       return true;
     }
     return false;
@@ -1568,12 +1581,16 @@ app.whenReady().then(async () => {
 
   await createSplashWindow();
   await runStartupSequence();
+  deliverPendingMeetingDeepLink();
   if (pendingProtocolFocus) focusMainWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
-      void mainReady.then(() => mainWindow?.show());
+      void mainReady.then(() => {
+        mainWindow?.show();
+        deliverPendingMeetingDeepLink();
+      });
     }
   });
 });
