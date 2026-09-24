@@ -1,0 +1,18 @@
+LockOn ServiceOS 1.0.0.22
+
+Najważniejsze zmiany
+- Spotkania i szkolenia są osobnym modułem; Start pozostaje użytkowym ekranem z kompaktowym podsumowaniem najbliższego spotkania.
+- Chat spotkania jest przypisany do konkretnego spotkania i zachowuje historię potrzebną do ponownego połączenia.
+- Uczestnik może podnieść i opuścić rękę; kolejność zgłoszeń i stan są odtwarzane po reconnect.
+- Aktywny mówca jest oznaczany na podstawie rzeczywistego poziomu audio, a nie samego włączenia mikrofonu.
+- Udostępnianie ekranu ma własny podgląd, zmianę źródła, spójne zatrzymanie i bezpieczny wskaźnik dla pełnego ekranu.
+- Ustawienie wysyłki e-mail jest jawne i domyślnie wyłączone; zaproszenia i zmiany terminu są wysyłane tylko po świadomym włączeniu.
+- Każde spotkanie ma stały link bez tokenu LiveKit oraz bezpieczny deep-link do aplikacji.
+- Koordynator nadal działa wyłącznie w zakresie przypisanych punktów; OWNER i BOSS zachowują pełne zarządzanie.
+- Publiczna strona app.serviceos.pl pokazuje nowy moduł spotkań w interaktywnej, responsywnej prezentacji.
+
+Bezpieczeństwo i zgodność
+- SCHEDULED nie przechodzi w LIVE od samej godziny; rozpoczęcie pozostaje świadomą akcją prowadzącego.
+- Token LiveKit powstaje dopiero po sprawdzeniu użytkownika, dostępu i statusu LIVE.
+- Migracja bazy jest addytywna i zachowuje istniejące dane spotkań.
+- Logowanie Google, Gmail serwisowy, role oraz portal klienta pozostają odseparowane od nowych zmian spotkań.
