@@ -65,7 +65,8 @@ const SERVICE_INTAKE_EDIT_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECH
 const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER']);
 const SERVICE_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
 const GMAIL_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
-const MEETING_MANAGE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
+const MEETING_CREATE_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR']);
+const MEETING_GLOBAL_MANAGE_ROLES = new Set(['OWNER', 'BOSS']);
 const CUSTOMER_QUOTE_STAFF_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const FINANCE_READ_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN']);
 const DEV_TEST_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER', 'SUPPORT']);
@@ -594,14 +595,14 @@ const visiblePointIds = async (user) => {
 };
 
 const meetingCanManage = (user, meeting) =>
-  MEETING_MANAGE_ROLES.has(user.role_code) ||
+  MEETING_GLOBAL_MANAGE_ROLES.has(user.role_code) ||
   meeting?.created_by_user_id === user.id ||
   meeting?.host_user_id === user.id;
 
 const meetingEligible = async (user, meetingId) => {
-  if (MEETING_MANAGE_ROLES.has(user.role_code)) return true;
+  if (MEETING_GLOBAL_MANAGE_ROLES.has(user.role_code)) return true;
   const row=(await q(
-    "SELECT EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=$1 AND (a.audience_type='ALL' OR (a.audience_type='USER' AND a.user_id=$2) OR (a.audience_type='POINT' AND EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=$2 AND upa.point_id=a.point_id)))) AS allowed",
+    "SELECT EXISTS(SELECT 1 FROM meetings m WHERE m.id=$1 AND (m.created_by_user_id=$2 OR m.host_user_id=$2 OR EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=m.id AND (a.audience_type='ALL' OR (a.audience_type='USER' AND a.user_id=$2) OR (a.audience_type='POINT' AND EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=$2 AND upa.point_id=a.point_id)))))) AS allowed",
     [meetingId,user.id]
   )).rows[0];
   return row?.allowed===true;
@@ -633,7 +634,7 @@ const meetingView = (row, user) => ({
 });
 
 const listMeetingsForUser = async (user) => {
-  const global=MEETING_MANAGE_ROLES.has(user.role_code);
+  const global=MEETING_GLOBAL_MANAGE_ROLES.has(user.role_code);
   const visibility=global
     ? 'true'
     : "(m.created_by_user_id=$1 OR m.host_user_id=$1 OR EXISTS(SELECT 1 FROM meeting_audience a WHERE a.meeting_id=m.id AND (a.audience_type='ALL' OR (a.audience_type='USER' AND a.user_id=$1) OR (a.audience_type='POINT' AND EXISTS(SELECT 1 FROM user_point_access upa WHERE upa.user_id=$1 AND upa.point_id=a.point_id)))))";
@@ -4434,7 +4435,7 @@ const route = async (request) => {
 
   if(method==='GET'&&url.pathname==='/meetings/options'){
     const session=await requireActive(request),u=session.user;
-    if(!MEETING_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do planowania spotkań.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    if(!MEETING_CREATE_ROLES.has(u.role_code))throw Object.assign(new Error('Brak uprawnień do planowania spotkań.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
     const [pointsResult,usersResult]=await Promise.all([
       q("SELECT id,name,city FROM points WHERE active=true ORDER BY name"),
       q("SELECT id,name,email,role_code FROM users WHERE status='ACTIVE' AND blocked_at IS NULL AND role_code IS NOT NULL ORDER BY lower(name),lower(email)")
@@ -4447,7 +4448,7 @@ const route = async (request) => {
 
   if(method==='POST'&&url.pathname==='/meetings'){
     const session=await requireActive(request),u=session.user;
-    if(!MEETING_MANAGE_ROLES.has(u.role_code))throw Object.assign(new Error('Spotkania może planować OWNER, BOSS lub COORDINATOR.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
+    if(!MEETING_CREATE_ROLES.has(u.role_code))throw Object.assign(new Error('Spotkania może planować OWNER, BOSS lub COORDINATOR.'),{status:403,code:'MEETING_MANAGE_FORBIDDEN'});
     const body=await readJson(request);
     const title=cleanText(body.title,120),description=cleanText(body.description,2000);
     const startsAtRaw=cleanText(body.startsAt,80),startsAt=new Date(startsAtRaw);
