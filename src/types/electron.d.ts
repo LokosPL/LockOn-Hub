@@ -58,7 +58,8 @@ export type MeetingStatus = 'SCHEDULED'|'LIVE'|'ENDED'|'CANCELLED';
 export interface MeetingAudienceItem { type:'ALL'|'POINT'|'USER'; pointId?:string|null; pointName?:string|null; userId?:string|null; userName?:string|null; }
 export interface MeetingSummary {
   id:string; title:string; description:string; startsAt:string; plannedMinutes:number; status:MeetingStatus; maxParticipants:number;
-  allowParticipantAudio:boolean; allowParticipantScreenShare:boolean; registeredCount:number; registeredByMe:boolean; canManage:boolean;
+  allowParticipantAudio:boolean; allowParticipantScreenShare:boolean; emailNotificationsEnabled:boolean; registeredCount:number; registeredByMe:boolean; canManage:boolean;
+  meetingUrl:string; desktopDeepLink:string;
   createdByUserId:string; createdByName:string; hostUserId:string; hostName:string; audience:MeetingAudienceItem[];
   startedAt?:string|null; endedAt?:string|null; cancelledAt?:string|null; createdAt:string; updatedAt:string;
 }
@@ -76,13 +77,18 @@ export interface MeetingUpdatePayload {
   maxParticipants?:number;
   allowParticipantAudio?:boolean;
   allowParticipantScreenShare?:boolean;
+  emailNotificationsEnabled?:boolean;
   audience?:Array<{type:'ALL'|'POINT'|'USER';pointId?:string;userId?:string}>;
 }
 export interface MeetingJoinToken { serverUrl:string; token:string; roomName:string; identity:string; canManage:boolean; permissions:{microphone:boolean;screenShare:boolean}; }
 export interface MeetingLiveParticipantTrack { sid:string; source:number; muted:boolean; }
 export interface MeetingLiveParticipant { identity:string; name:string; metadata:string; joinedAt?:string|null; tracks:MeetingLiveParticipantTrack[]; }
 export interface MeetingParticipantsPayload { configured:boolean; participants:MeetingLiveParticipant[]; }
-export interface MeetingScreenSource { id:string; name:string; thumbnail?:string|null; appIcon?:string|null; }
+export interface MeetingScreenSource { id:string; name:string; displayId?:string|null; kind:'screen'|'window'; thumbnail?:string|null; appIcon?:string|null; }
+export interface MeetingChatMessage { id:string; authorUserId:string; authorName:string; body:string; createdAt:string; mine:boolean; }
+export interface MeetingChatPayload { meetingId:string; messages:MeetingChatMessage[]; }
+export interface MeetingHandRaise { userId:string; name:string; raisedAt:string; position:number; mine:boolean; }
+export interface MeetingHandsPayload { meetingId:string; hands:MeetingHandRaise[]; }
 export interface MeetingAttendanceItem {
   userId:string; name:string; registrationStatus:'REGISTERED'|'CANCELLED'|'NOT_REGISTERED'; registeredAt?:string|null; joined:boolean;
   firstJoinedAt?:string|null; lastJoinedAt?:string|null; lastLeftAt?:string|null; totalSeconds:number; joinCount:number;
@@ -249,7 +255,7 @@ declare global {
       meetings: {
         list: () => Promise<MeetingListPayload>;
         options: () => Promise<MeetingOptions>;
-        create: (payload:{title:string;description?:string;startsAt:string;plannedMinutes:number;maxParticipants:number;allowParticipantAudio:boolean;allowParticipantScreenShare:boolean;hostUserId?:string;audience:Array<{type:'ALL'|'POINT'|'USER';pointId?:string;userId?:string}>}) => Promise<MeetingMutationResult>;
+        create: (payload:{title:string;description?:string;startsAt:string;plannedMinutes:number;maxParticipants:number;allowParticipantAudio:boolean;allowParticipantScreenShare:boolean;emailNotificationsEnabled:boolean;hostUserId?:string;audience:Array<{type:'ALL'|'POINT'|'USER';pointId?:string;userId?:string}>}) => Promise<MeetingMutationResult>;
         update: (meetingId:string,payload:MeetingUpdatePayload) => Promise<MeetingMutationResult & {email?:{eligible:number;queued:number;unchanged?:boolean}}>;
         action: (meetingId:string,action:'register'|'unregister'|'start'|'end'|'cancel') => Promise<MeetingMutationResult>;
         joinToken: (meetingId:string) => Promise<MeetingJoinToken>;
@@ -258,6 +264,11 @@ declare global {
         screenSources: () => Promise<MeetingScreenSource[]>;
         attendanceAction: (meetingId:string,action:'JOIN'|'LEAVE') => Promise<{ok:true}>;
         attendance: (meetingId:string) => Promise<MeetingAttendancePayload>;
+        chat: (meetingId:string) => Promise<MeetingChatPayload>;
+        sendChat: (meetingId:string,message:string) => Promise<{ok:true;message:MeetingChatMessage}>;
+        hands: (meetingId:string) => Promise<MeetingHandsPayload>;
+        setHandRaised: (meetingId:string,raised:boolean) => Promise<{ok:true;raised:boolean}>;
+        shareOverlay: (source:MeetingScreenSource|null) => Promise<{ok:true;shown:boolean}>;
       };
       service: {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
