@@ -311,7 +311,8 @@ jobs:
         run: |
           $central = Get-Content functions/lockon-api.mjs -Raw
           @(
-            "MEETING_MANAGE_ROLES",
+            "MEETING_CREATE_ROLES",
+            "MEETING_GLOBAL_MANAGE_ROLES",
             "OWNER', 'BOSS', 'COORDINATOR",
             "url.pathname==='/meetings'",
             "/join-token",
