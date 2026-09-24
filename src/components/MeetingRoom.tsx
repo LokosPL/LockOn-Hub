@@ -75,6 +75,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const audioHostRef = useRef<HTMLDivElement | null>(null);
   const videoHostRef = useRef<HTMLDivElement | null>(null);
   const remotePreviewHostRef = useRef<HTMLDivElement | null>(null);
+  const remoteScreenOwnersRef = useRef<Map<string,string>>(new Map());
   const localPreviewRef = useRef<HTMLVideoElement | null>(null);
   const localPreviewStreamRef = useRef<MediaStream | null>(null);
   const chatMessagesRef = useRef<HTMLDivElement | null>(null);
@@ -153,7 +154,9 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
       remotePreviewHostRef.current?.appendChild(previewElement);
       void (previewElement as HTMLMediaElement).play().catch(() => undefined);
 
-      setRemoteScreenOwner(participant?.name || 'Uczestnik');
+      const ownerName = participant?.name || 'Uczestnik';
+      remoteScreenOwnersRef.current.set(sid, ownerName);
+      setRemoteScreenOwner(ownerName);
       setRemoteScreenActive(true);
     }
   };
@@ -161,12 +164,16 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const detachTrack = (track: RemoteTrack) => {
     for (const element of track.detach()) element.remove();
     if (track.source === Track.Source.ScreenShare) {
+      remoteScreenOwnersRef.current.delete(track.sid || '');
       const remaining = videoHostRef.current?.querySelectorAll('[data-meeting-track]').length ?? 0;
       const active = remaining > 0;
       setRemoteScreenActive(active);
       if (!active) {
         setRemoteScreenOwner('');
         setStageView('self');
+      } else {
+        const owners = Array.from(remoteScreenOwnersRef.current.values());
+        setRemoteScreenOwner(owners[owners.length - 1] || 'Uczestnik');
       }
     }
   };
@@ -220,6 +227,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     setScreenEnabled(false);
     setRemoteScreenActive(false);
     setRemoteScreenOwner('');
+    remoteScreenOwnersRef.current.clear();
     setStageView('self');
     setParticipants([]);
 
@@ -639,11 +647,10 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
                     ? <img src={localDesktopPreview} alt="Podgląd Twojego ekranu" />
                     : <div className="meeting-self-screen-empty"><Monitor size={34}/><strong>Twój ekran</strong><span>Podgląd pojawi się po połączeniu z aplikacją.</span></div>}
                 </div>
-                <div className="meeting-screen-host" ref={videoHostRef} aria-hidden={stageView!=='remote'}>
-                  {joining && <div className="meeting-stage-empty">Łączenie ze spotkaniem…</div>}
-                  {!joining && !connected && <div className="meeting-stage-empty">Połączenie nie jest aktywne.</div>}
-                  {connected && stageView==='remote' && !remoteScreenActive && <div className="meeting-stage-empty meeting-stage-hint"><MonitorUp size={30}/><strong>Udostępnianie zostało zakończone</strong><span>Wracam do podglądu Twojego ekranu.</span></div>}
-                </div>
+                <div className="meeting-screen-host" ref={videoHostRef} aria-hidden={stageView!=='remote'} />
+                {stageView==='remote' && joining && <div className="meeting-stage-status">Łączenie ze spotkaniem…</div>}
+                {stageView==='remote' && !joining && !connected && <div className="meeting-stage-status">Połączenie nie jest aktywne.</div>}
+                {stageView==='remote' && connected && !remoteScreenActive && <div className="meeting-stage-status meeting-stage-hint"><MonitorUp size={30}/><strong>Udostępnianie zostało zakończone</strong><span>Wracam do podglądu Twojego ekranu.</span></div>}
               </div>
             </div>
 
@@ -661,8 +668,9 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
                 disabled={!remoteScreenActive}
                 onClick={()=>setStageView('remote')}
               >
-                <div className="meeting-screen-tile-preview meeting-remote-preview-host" ref={remotePreviewHostRef}>
-                  {!remoteScreenActive && <MonitorUp size={24}/>}
+                <div className="meeting-screen-tile-preview">
+                  <div className="meeting-remote-preview-host" ref={remotePreviewHostRef} />
+                  {!remoteScreenActive && <div className="meeting-screen-tile-placeholder"><MonitorUp size={24}/></div>}
                 </div>
                 <div>
                   <strong>{remoteScreenActive ? (remoteScreenOwner || 'Uczestnik')+' udostępnia' : 'Brak udostępnianego ekranu'}</strong>
