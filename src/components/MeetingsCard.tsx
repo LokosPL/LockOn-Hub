@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, CalendarDays, Clock3, Mic2, MonitorUp, Plus, Radio, UserRound, UsersRound } from 'lucide-react';
 import type { MeetingAttendanceItem, MeetingOptions, MeetingSummary, UserRole } from '../types/electron';
 import { MeetingRoom } from './MeetingRoom';
+import { useAppDialog } from './AppDialog';
 
 type AudienceType = 'ALL'|'POINT'|'USER';
 type MeetingFormState = {
@@ -102,6 +103,7 @@ const payloadFromForm = (form: MeetingFormState) => {
 };
 
 export function MeetingsCard({ role }: { role: UserRole }) {
+  const { confirm } = useAppDialog();
   const canCreate = role === 'OWNER' || role === 'BOSS' || role === 'COORDINATOR';
   const [meetings, setMeetings] = useState<MeetingSummary[]>([]);
   const [options, setOptions] = useState<MeetingOptions | null>(null);
@@ -189,6 +191,23 @@ export function MeetingsCard({ role }: { role: UserRole }) {
     } finally {
       setBusyId('');
     }
+  };
+
+  const confirmManagedAction = async (meeting: MeetingSummary, action: 'end'|'cancel') => {
+    const ending = action === 'end';
+    const accepted = await confirm({
+      title:ending ? 'Zakończyć spotkanie?' : 'Anulować spotkanie?',
+      message:ending
+        ? 'Po zakończeniu uczestnicy nie będą mogli ponownie dołączyć.'
+        : 'Spotkanie zostanie oznaczone jako anulowane i nie będzie można go uruchomić.',
+      detail:ending
+        ? 'Aktywna frekwencja zostanie domknięta, a pokój LiveKit zostanie zamknięty.'
+        : 'Uczestnicy zobaczą status „Anulowane”.',
+      confirmLabel:ending ? 'Zakończ spotkanie' : 'Anuluj spotkanie',
+      cancelLabel:'Wróć',
+      tone:'warning'
+    });
+    if (accepted) await perform(meeting.id,action);
   };
 
   const openAttendance = async (meeting: MeetingSummary) => {
@@ -360,10 +379,10 @@ export function MeetingsCard({ role }: { role: UserRole }) {
             <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>beginEdit(meeting)}>Edytuj</button>
             <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>beginReschedule(meeting)}>Zmień termin</button>
             <button className="button primary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'start')}>Rozpocznij spotkanie</button>
-            <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'cancel')}>Anuluj</button>
+            <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void confirmManagedAction(meeting,'cancel')}>Anuluj</button>
           </>}
           {meeting.status === 'LIVE' && (meeting.canManage || meeting.registeredByMe) && <button className="button primary small" disabled={Boolean(busyId)} onClick={()=>setActiveRoom(meeting)}>Otwórz pokój spotkania</button>}
-          {meeting.canManage && meeting.status === 'LIVE' && <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void perform(meeting.id,'end')}>Zakończ</button>}
+          {meeting.canManage && meeting.status === 'LIVE' && <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void confirmManagedAction(meeting,'end')}>Zakończ</button>}
           {!meeting.canManage && meeting.status === 'LIVE' && !meeting.registeredByMe && <span className="meeting-live-note">Zapisz się przed dołączeniem</span>}
           {historical && meeting.canManage && meeting.status === 'ENDED' && <button className="button secondary small" disabled={Boolean(busyId)} onClick={()=>void openAttendance(meeting)}>Frekwencja</button>}
         </div>
