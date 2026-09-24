@@ -66,6 +66,9 @@ interface StoredSession {
 const SESSION_FILE = 'auth-session.json';
 const GOOGLE_OAUTH_USER_WAIT_MS = 10 * 60_000;
 const GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS = 45_000;
+const GOOGLE_GMAIL_AUTOCONNECT_TIMEOUT_MS = 8_000;
+const AUTH_SESSION_RESTORE_TIMEOUT_MS = 12_000;
+const AUTH_LOGOUT_TIMEOUT_MS = 8_000;
 const sessionPath = () => path.join(app.getPath('userData'), SESSION_FILE);
 
 let googleLoginInFlight: Promise<AuthState> | null = null;
@@ -181,7 +184,7 @@ export const getAuthState = async (development: boolean): Promise<AuthState> => 
   if (!stored) return emptyState(development);
 
   try {
-    const payload = await backendMe(stored.apiToken);
+    const payload = await backendMe(stored.apiToken, AbortSignal.timeout(AUTH_SESSION_RESTORE_TIMEOUT_MS));
     return toAuthState(payload, development);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Nie udało się odświeżyć sesji.';
@@ -193,7 +196,7 @@ export const getAuthState = async (development: boolean): Promise<AuthState> => 
 export const logout = async (development: boolean) => {
   const stored = readStoredSession();
   if (stored?.apiToken) {
-    try { await backendLogout(stored.apiToken); } catch {
+    try { await backendLogout(stored.apiToken, AbortSignal.timeout(AUTH_LOGOUT_TIMEOUT_MS)); } catch {
       // Lokalne dane sesji i tak usuwamy. Backend wygaśnie sesję automatycznie.
     }
   }
@@ -350,6 +353,11 @@ const performGoogleLogin = async (development: boolean): Promise<AuthState> => {
           if (!tokens.id_token) throw new Error('Google nie zwrócił tokena tożsamości.');
           payload = await backendGoogleLogin(tokens.id_token, AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS));
 
+          // Sesja użytkownika jest ważniejsza niż opcjonalne spięcie Gmaila.
+          // Zapisujemy ją natychmiast po poprawnym logowaniu, dzięki czemu renderer
+          // może ją odzyskać nawet gdy dalsza integracja Google odpowiada wolno.
+          writeStoredSession({ apiToken: payload.token, provider: 'google', savedAt: new Date().toISOString() });
+
           const role = String(payload.user.role ?? '').toUpperCase();
           const pointId = String(payload.activePointId ?? '').trim();
           const canAutoConnectGmail =
@@ -362,7 +370,7 @@ const performGoogleLogin = async (development: boolean): Promise<AuthState> => {
             try {
               payload.gmail = await backendRequest<NonNullable<BackendAuthPayload['gmail']>>('/integrations/gmail/connect', {
                 method: 'POST',
-                signal: AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS),
+                signal: AbortSignal.timeout(GOOGLE_GMAIL_AUTOCONNECT_TIMEOUT_MS),
                 body: JSON.stringify({
                   pointId: pointId || null,
                   refreshToken: tokens.refresh_token,
