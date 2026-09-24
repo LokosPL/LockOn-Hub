@@ -4493,26 +4493,114 @@ const route = async (request) => {
     const meeting=await loadMeeting(meetingId);
     if(!meeting)return json(request,{error:'NOT_FOUND'},404);
     if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zmieniać tego spotkania.'},403);
-    if(meeting.status!=='SCHEDULED')return json(request,{error:'MEETING_STATE',message:'Termin można zmienić tylko przed rozpoczęciem spotkania.'},409);
+    if(meeting.status!=='SCHEDULED')return json(request,{error:'MEETING_STATE',message:'Spotkanie można edytować tylko przed rozpoczęciem.'},409);
+
     const body=await readJson(request);
-    const startsAtRaw=cleanText(body.startsAt,80),startsAt=new Date(startsAtRaw);
-    if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy nowy termin spotkania.'},400);
+    const title=body.title===undefined?meeting.title:cleanText(body.title,120);
+    const description=body.description===undefined?(meeting.description||''):cleanText(body.description,2000);
+    if(title.length<3)return json(request,{error:'MEETING_TITLE',message:'Tytuł spotkania musi mieć co najmniej 3 znaki.'},400);
+
+    const startsAtRaw=body.startsAt===undefined?new Date(meeting.starts_at).toISOString():cleanText(body.startsAt,80);
+    const startsAt=new Date(startsAtRaw);
+    if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy termin spotkania.'},400);
     if(startsAt.getTime()<Date.now()-10*60_000)return json(request,{error:'MEETING_DATE',message:'Nie można ustawić spotkania w przeszłości.'},400);
+
+    const plannedMinutes=body.plannedMinutes===undefined
+      ? Number(meeting.planned_minutes||60)
+      : Math.max(10,Math.min(480,Math.trunc(Number(body.plannedMinutes)||0)));
+    const maxParticipants=body.maxParticipants===undefined
+      ? Number(meeting.max_participants||50)
+      : Math.max(2,Math.min(500,Math.trunc(Number(body.maxParticipants)||0)));
+    if(body.plannedMinutes!==undefined&&(!Number.isFinite(Number(body.plannedMinutes))||Number(body.plannedMinutes)<10||Number(body.plannedMinutes)>480)){
+      return json(request,{error:'MEETING_DURATION',message:'Przewidywany czas musi mieścić się w zakresie 10–480 minut.'},400);
+    }
+    if(body.maxParticipants!==undefined&&(!Number.isFinite(Number(body.maxParticipants))||Number(body.maxParticipants)<2||Number(body.maxParticipants)>500)){
+      return json(request,{error:'MEETING_LIMIT',message:'Limit uczestników musi mieścić się w zakresie 2–500.'},400);
+    }
+
+    const allowParticipantAudio=body.allowParticipantAudio===undefined?meeting.allow_participant_audio===true:body.allowParticipantAudio===true;
+    const allowParticipantScreenShare=body.allowParticipantScreenShare===undefined?meeting.allow_participant_screen_share===true:body.allowParticipantScreenShare===true;
+
+    let audience=null;
+    if(body.audience!==undefined){
+      const sourceAudience=Array.isArray(body.audience)&&body.audience.length?body.audience:[{type:'ALL'}];
+      audience=[];
+      const seen=new Set();
+      for(const raw of sourceAudience.slice(0,100)){
+        const type=String(raw?.type||'').toUpperCase();
+        if(type==='ALL'){
+          if(!seen.has('ALL')){seen.add('ALL');audience.push({type:'ALL',pointId:null,userId:null});}
+        }else if(type==='POINT'){
+          const pointId=cleanText(raw?.pointId,80);if(!pointId)continue;
+          const key='POINT:'+pointId;if(!seen.has(key)){seen.add(key);audience.push({type:'POINT',pointId,userId:null});}
+        }else if(type==='USER'){
+          const userId=cleanText(raw?.userId,120);if(!userId)continue;
+          const key='USER:'+userId;if(!seen.has(key)){seen.add(key);audience.push({type:'USER',pointId:null,userId});}
+        }
+      }
+      if(!audience.length)audience.push({type:'ALL',pointId:null,userId:null});
+      if(audience.some((item)=>item.type==='ALL'))audience.splice(0,audience.length,{type:'ALL',pointId:null,userId:null});
+    }
+
     const oldStartsAt=new Date(meeting.starts_at).toISOString();
     const newStartsAt=startsAt.toISOString();
-    if(oldStartsAt===newStartsAt){
-      const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
-      return json(request,{ok:true,meeting:view,email:{eligible:0,queued:0,unchanged:true}});
+    const scheduleChanged=oldStartsAt!==newStartsAt;
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      const locked=(await client.query("SELECT status,(SELECT count(*)::int FROM meeting_registrations r WHERE r.meeting_id=meetings.id AND r.status='REGISTERED') AS registered_count FROM meetings WHERE id=$1 FOR UPDATE",[meetingId])).rows[0];
+      if(!locked)throw Object.assign(new Error('Spotkanie już nie istnieje.'),{status:404});
+      if(locked.status!=='SCHEDULED')throw Object.assign(new Error('Stan spotkania zmienił się w międzyczasie.'),{status:409,code:'MEETING_STATE_CHANGED'});
+      if(Number(locked.registered_count||0)>maxParticipants)throw Object.assign(new Error('Nowy limit jest mniejszy niż liczba zapisanych uczestników.'),{status:409,code:'MEETING_LIMIT_REGISTERED'});
+
+      if(audience){
+        for(const item of audience){
+          if(item.type==='POINT'){
+            const exists=(await client.query("SELECT id FROM points WHERE id=$1 AND active=true LIMIT 1",[item.pointId])).rows[0];
+            if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego punktu dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_POINT'});
+          }
+          if(item.type==='USER'){
+            const exists=(await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0];
+            if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_USER'});
+          }
+        }
+      }
+
+      await client.query(
+        "UPDATE meetings SET title=$2,description=NULLIF($3,''),starts_at=$4,planned_minutes=$5,max_participants=$6,allow_participant_audio=$7,allow_participant_screen_share=$8,updated_at=now() WHERE id=$1 AND status='SCHEDULED'",
+        [meetingId,title,description,newStartsAt,plannedMinutes,maxParticipants,allowParticipantAudio,allowParticipantScreenShare]
+      );
+      if(audience){
+        await client.query("DELETE FROM meeting_audience WHERE meeting_id=$1",[meetingId]);
+        for(const item of audience){
+          await client.query(
+            "INSERT INTO meeting_audience(id,meeting_id,audience_type,point_id,user_id) VALUES($1,$2,$3,$4,$5)",
+            [makeId('mau'),meetingId,item.type,item.pointId,item.userId]
+          );
+        }
+      }
+      await client.query(
+        "INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,'EDITED',$4::jsonb)",
+        [makeId('mte'),meetingId,u.id,JSON.stringify({scheduleChanged,titleChanged:title!==meeting.title,audienceChanged:Boolean(audience),plannedMinutes,maxParticipants,allowParticipantAudio,allowParticipantScreenShare})]
+      );
+      if(scheduleChanged){
+        await client.query(
+          "INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,'RESCHEDULED',$4::jsonb)",
+          [makeId('mte'),meetingId,u.id,JSON.stringify({from:oldStartsAt,to:newStartsAt})]
+        );
+      }
+      await client.query('COMMIT');
+    }catch(error){
+      try{await client.query('ROLLBACK');}catch{}
+      throw error;
+    }finally{client.release();}
+
+    await audit(session,'MEETING_UPDATED','meeting',meetingId,null,{scheduleChanged,from:oldStartsAt,to:newStartsAt,plannedMinutes,maxParticipants,audienceChanged:Boolean(audience)});
+    let email={eligible:0,queued:0,unchanged:true};
+    if(scheduleChanged){
+      email=await queueMeetingEmailEvent(meetingId,'RESCHEDULED:'+Date.now()+':'+crypto.randomBytes(4).toString('hex'));
+      await meetingEvent(meetingId,u.id,'EMAIL_RESCHEDULE_QUEUED',email);
     }
-    const updated=(await q(
-      "UPDATE meetings SET starts_at=$2,updated_at=now() WHERE id=$1 AND status='SCHEDULED' RETURNING id",
-      [meetingId,newStartsAt]
-    )).rows[0];
-    if(!updated)return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
-    await meetingEvent(meetingId,u.id,'RESCHEDULED',{from:oldStartsAt,to:newStartsAt});
-    await audit(session,'MEETING_RESCHEDULED','meeting',meetingId,null,{from:oldStartsAt,to:newStartsAt});
-    const email=await queueMeetingEmailEvent(meetingId,'RESCHEDULED:'+Date.now()+':'+crypto.randomBytes(4).toString('hex'));
-    await meetingEvent(meetingId,u.id,'EMAIL_RESCHEDULE_QUEUED',email);
     const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
     return json(request,{ok:true,meeting:view,email});
   }
