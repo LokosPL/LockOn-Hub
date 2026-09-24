@@ -1,0 +1,18 @@
+LockOn ServiceOS 1.0.0.21
+
+Najważniejsze zmiany
+- Spotkania i szkolenia opierają status na stanie backendu. Sama godzina nie uruchamia spotkania.
+- Prowadzący otwiera i kończy pokój świadomie; uczestnik dołącza dopiero po rozpoczęciu.
+- Poprawione połączenie LiveKit, komunikaty błędów, ponawianie i uprawnienia.
+- Szef i koordynator mogą planować spotkania. Koordynator działa w zakresie przypisanych punktów.
+- Pokój, edycja, zmiana terminu i frekwencja spotkań są częścią panelu, a nie nakładanymi kartami.
+- Logowanie Google szybciej kończy właściwą sesję ServiceOS i potrafi odzyskać ją bez restartu aplikacji.
+- Dodatkowe operacje Gmail nie blokują już krytycznej ścieżki logowania.
+- Publiczna strona app.serviceos.pl została przebudowana jako pełny przewodnik po ServiceOS na telefon i laptop.
+- Ekran Start aplikacji Windows został przywrócony do wyglądu sprzed omyłkowej przebudowy prezentacyjnej.
+
+Bezpieczeństwo i zgodność
+- Uprawnienia spotkań są egzekwowane po stronie API i LiveKit.
+- Koordynator nie dostaje globalnego dostępu do punktów ani użytkowników.
+- Portal pracownika WWW nadal łączy urządzenie jednorazowym kodem.
+- Portal klienta oraz dane wewnętrzne serwisu pozostają odseparowane.
