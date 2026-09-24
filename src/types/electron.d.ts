@@ -269,6 +269,7 @@ declare global {
         hands: (meetingId:string) => Promise<MeetingHandsPayload>;
         setHandRaised: (meetingId:string,raised:boolean) => Promise<{ok:true;raised:boolean}>;
         shareOverlay: (source:MeetingScreenSource|null) => Promise<{ok:true;shown:boolean}>;
+        onOpenMeeting: (callback:(meetingId:string)=>void) => () => void;
       };
       service: {
         searchCustomers: (query:string) => Promise<ServiceCustomer[]>;
