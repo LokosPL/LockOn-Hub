@@ -419,7 +419,34 @@ jobs:
           [ "$(api_code "$coordinator_token" GET /meetings/options '{}')" = "200" ] || { echo "::error::COORDINATOR cannot access meeting planning options"; cat meeting-response.json; exit 1; }
           [ "$(api_code "$user_token" GET /meetings/options '{}')" = "403" ] || { echo "::error::USER gained meeting planning options"; cat meeting-response.json; exit 1; }
 
-          starts_at="$(node -e "process.stdout.write(new Date(Date.now()+3600000).toISOString())")"
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings/options" --header "Authorization: Bearer $coordinator_token" > coordinator-meeting-options.json
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings/options" --header "Authorization: Bearer $owner_token" > owner-meeting-options.json
+          node - <<'NODE'
+          const auth=require('./role-COORDINATOR.json');
+          const options=require('./coordinator-meeting-options.json');
+          const allowed=new Set((auth.points||[]).map((point)=>point.id));
+          for(const point of options.points||[]){
+            if(!allowed.has(point.id))throw new Error('COORDINATOR meeting options leaked a point outside assigned scope: '+point.id);
+          }
+          NODE
+
+          starts_at="$(node -e "process.stdout.write(new Date(Date.now()+3600000).toISOString())"
+          )"
+          foreign_point="$(node - <<'NODE'
+          const auth=require('./role-COORDINATOR.json'),options=require('./owner-meeting-options.json');
+          const allowed=new Set((auth.points||[]).map((point)=>point.id));
+          process.stdout.write(String((options.points||[]).find((point)=>!allowed.has(point.id))?.id||''));
+          NODE
+          )"
+          if [ -n "$foreign_point" ]; then
+            foreign_body="$(node - <<'NODE' "$starts_at" "$foreign_point"
+          const [startsAt,pointId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({title:'CI scope denied',description:'scope guard',startsAt,plannedMinutes:20,maxParticipants:4,allowParticipantAudio:false,allowParticipantScreenShare:false,audience:[{type:'POINT',pointId}]}));
+          NODE
+            )"
+            foreign_http="$(api_code "$coordinator_token" POST /meetings "$foreign_body")"
+            [ "$foreign_http" = "403" ] || { echo "::error::COORDINATOR targeted foreign point: HTTP $foreign_http"; cat meeting-response.json; exit 1; }
+          fi
           meeting_body="$(node - <<'NODE' "$starts_at" "$user_id"
           const [startsAt,userId]=process.argv.slice(2);
           process.stdout.write(JSON.stringify({
