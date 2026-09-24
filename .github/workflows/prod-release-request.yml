@@ -17,7 +17,7 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     env:
       GH_TOKEN: ${{ github.token }}
 
@@ -38,8 +38,8 @@ jobs:
           build="$(tr -d '\r\n' < BUILD_VERSION)"
           ready="$(tr -d '\r\n' < RELEASE_READY)"
 
-          if [[ "$request" != "$product|REQUEST_PROD" ]]; then
-            echo "::error::PROD_RELEASE_REQUEST must equal $product|REQUEST_PROD"
+          if [[ "$request" != "$product|REQUEST_PROD" && "$request" != "$product|REQUEST_PROD|"* ]]; then
+            echo "::error::PROD_RELEASE_REQUEST must start with $product|REQUEST_PROD"
             exit 1
           fi
           if [[ "$ready" == "$product|$build" ]]; then
@@ -47,26 +47,25 @@ jobs:
             exit 1
           fi
 
-          release_branch="release/$product"
-          encoded_branch="$(node -p "encodeURIComponent(process.argv[1])" "$release_branch")"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=$encoded_branch&event=push&status=success&per_page=100" > temp-runs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=push&status=success&per_page=100" > temp-runs.json
 
           node - <<'NODE' > selected-temp.json
           const fs=require('fs');
           const product=fs.readFileSync('RELEASE_VERSION','utf8').trim();
-          const branch='release/'+product;
+          const prefix='release/'+product;
           const runs=JSON.parse(fs.readFileSync('temp-runs.json','utf8')).workflow_runs||[];
           const run=runs
-            .filter((item)=>item.name==='Temp Neon integration smoke'&&item.conclusion==='success'&&item.head_branch===branch)
+            .filter((item)=>item.name==='Temp Neon integration smoke'&&item.conclusion==='success'&&String(item.head_branch||'').startsWith(prefix))
             .sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))[0];
-          if(!run)throw new Error('No successful exact TEMP run found for '+branch);
+          if(!run)throw new Error('No successful exact TEMP run found for '+prefix+'*');
           if(!/^[a-f0-9]{40}$/.test(String(run.head_sha||'')))throw new Error('TEMP run has invalid SHA');
           process.stdout.write(JSON.stringify({id:run.id,sha:run.head_sha,branch:run.head_branch}));
           NODE
 
           temp_id="$(node -e "const x=require('./selected-temp.json');process.stdout.write(String(x.id))")"
           temp_sha="$(node -e "const x=require('./selected-temp.json');process.stdout.write(x.sha)")"
-          echo "Selected TEMP run $temp_id at $temp_sha."
+          temp_branch="$(node -e "const x=require('./selected-temp.json');process.stdout.write(x.branch)")"
+          echo "Selected TEMP run $temp_id from $temp_branch at $temp_sha."
 
           git fetch --no-tags origin "$temp_sha"
           if ! git diff --quiet "$temp_sha" HEAD --; then
@@ -78,11 +77,108 @@ jobs:
           echo "run_id=$temp_id" >> "$GITHUB_OUTPUT"
           echo "temp_sha=$temp_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Dispatch existing production gate
+      - name: Dispatch production and wait for success
+        id: prod
         shell: bash
         env:
           TEMP_RUN_ID: ${{ steps.temp.outputs.run_id }}
         run: |
           set -euo pipefail
-          gh workflow run prod-neon-deploy.yml             --ref main             -f "temp_run_id=$TEMP_RUN_ID"             -f "confirmation=DEPLOY_PROD"
-          echo "Production Neon exact deploy dispatched from TEMP run $TEMP_RUN_ID."
+          started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+          gh workflow run prod-neon-deploy.yml \
+            --ref main \
+            -f "temp_run_id=$TEMP_RUN_ID" \
+            -f "confirmation=DEPLOY_PROD"
+
+          prod_id=""
+          for attempt in $(seq 1 120); do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=main&event=workflow_dispatch&per_page=50" > prod-runs.json
+            prod_id="$(STARTED_AT="$started_at" node - <<'NODE'
+          const fs=require('fs');
+          const since=new Date(process.env.STARTED_AT);
+          const runs=JSON.parse(fs.readFileSync('prod-runs.json','utf8')).workflow_runs||[];
+          const run=runs
+            .filter((item)=>item.name==='Production Neon exact deploy'&&item.head_sha===process.env.GITHUB_SHA&&new Date(item.created_at)>=since)
+            .sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))[0];
+          if(run)process.stdout.write(String(run.id));
+          NODE
+          )"
+            if [[ -n "$prod_id" ]]; then
+              status="$(node -e "const d=require('./prod-runs.json');const r=d.workflow_runs.find(x=>String(x.id)===process.argv[1]);process.stdout.write(String(r?.status||''))" "$prod_id")"
+              conclusion="$(node -e "const d=require('./prod-runs.json');const r=d.workflow_runs.find(x=>String(x.id)===process.argv[1]);process.stdout.write(String(r?.conclusion||''))" "$prod_id")"
+              echo "PROD run $prod_id: $status/$conclusion"
+              if [[ "$status" == "completed" ]]; then
+                if [[ "$conclusion" != "success" ]]; then
+                  echo "::error::Production Neon exact deploy failed: $conclusion"
+                  exit 1
+                fi
+                echo "run_id=$prod_id" >> "$GITHUB_OUTPUT"
+                break
+              fi
+            else
+              echo "Waiting for Production Neon exact deploy run to appear..."
+            fi
+            sleep 10
+          done
+
+          if [[ -z "$prod_id" ]]; then
+            echo "::error::Production Neon exact deploy did not appear."
+            exit 1
+          fi
+          final_status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$prod_id" --jq '.status + "/" + (.conclusion // "")')"
+          if [[ "$final_status" != "completed/success" ]]; then
+            echo "::error::Production deploy gate did not finish successfully: $final_status"
+            exit 1
+          fi
+
+      - name: Dispatch production smoke and wait for success
+        id: smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          gh workflow run prod-smoke.yml --ref main
+
+          smoke_id=""
+          for attempt in $(seq 1 90); do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=main&event=workflow_dispatch&per_page=50" > smoke-runs.json
+            smoke_id="$(STARTED_AT="$started_at" node - <<'NODE'
+          const fs=require('fs');
+          const since=new Date(process.env.STARTED_AT);
+          const runs=JSON.parse(fs.readFileSync('smoke-runs.json','utf8')).workflow_runs||[];
+          const run=runs
+            .filter((item)=>item.path==='.github/workflows/prod-smoke.yml'&&item.head_sha===process.env.GITHUB_SHA&&new Date(item.created_at)>=since)
+            .sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))[0];
+          if(run)process.stdout.write(String(run.id));
+          NODE
+          )"
+            if [[ -n "$smoke_id" ]]; then
+              status="$(node -e "const d=require('./smoke-runs.json');const r=d.workflow_runs.find(x=>String(x.id)===process.argv[1]);process.stdout.write(String(r?.status||''))" "$smoke_id")"
+              conclusion="$(node -e "const d=require('./smoke-runs.json');const r=d.workflow_runs.find(x=>String(x.id)===process.argv[1]);process.stdout.write(String(r?.conclusion||''))" "$smoke_id")"
+              echo "PROD smoke $smoke_id: $status/$conclusion"
+              if [[ "$status" == "completed" ]]; then
+                if [[ "$conclusion" != "success" ]]; then
+                  echo "::error::Production API smoke failed: $conclusion"
+                  exit 1
+                fi
+                echo "run_id=$smoke_id" >> "$GITHUB_OUTPUT"
+                break
+              fi
+            else
+              echo "Waiting for Production API smoke run to appear..."
+            fi
+            sleep 10
+          done
+
+          if [[ -z "$smoke_id" ]]; then
+            echo "::error::Production API smoke did not appear."
+            exit 1
+          fi
+          final_status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$smoke_id" --jq '.status + "/" + (.conclusion // "")')"
+          if [[ "$final_status" != "completed/success" ]]; then
+            echo "::error::Production API smoke did not finish successfully: $final_status"
+            exit 1
+          fi
+
+          echo "Production deployment and smoke are green for $GITHUB_SHA."
