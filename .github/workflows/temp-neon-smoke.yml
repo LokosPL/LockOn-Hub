@@ -7,6 +7,16 @@ on:
     paths:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
+      - "src/**"
+      - "electron/**"
+      - "build/**"
+      - "tests/**"
+      - "package.json"
+      - "package-lock.json"
+      - "BUILD_VERSION"
+      - "RELEASE_VERSION"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/release.yml"
       - ".github/workflows/temp-neon-smoke.yml"
       - ".github/workflows/prod-neon-deploy.yml"
   workflow_dispatch:

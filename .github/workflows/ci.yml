@@ -6,6 +6,7 @@ on:
     paths:
       - "src/**"
       - "electron/**"
+      - "build/**"
       - "server/**"
       - "functions/**"
       - "tests/**"
@@ -89,6 +90,18 @@ jobs:
           if ($package -ne $build) { throw "package.json version ($package) must match BUILD_VERSION ($build)." }
           $config = Get-Content electron/appConfig.ts -Raw
           if (-not $config.Contains("productVersion: '$product'")) { throw "Desktop productVersion must match RELEASE_VERSION." }
+
+      - name: Verify ServiceOS app icon contract
+        shell: pwsh
+        run: |
+          $uiIcon = Get-Content src/assets/logo.svg -Raw
+          $buildIcon = Get-Content build/icon.svg -Raw
+          foreach ($icon in @($uiIcon, $buildIcon)) {
+            if (-not $icon.Contains('smartfon otoczony pomarańczową orbitą')) { throw 'Missing ServiceOS phone-orbit icon.' }
+            if (-not $icon.Contains('id="orbit"')) { throw 'Missing orange orbit gradient.' }
+          }
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($pkg.build.win.icon -ne 'build/icon.svg') { throw 'Windows app icon must point to build/icon.svg.' }
 
       - name: Validate backend syntax
         run: node --check server/index.mjs
