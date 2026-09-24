@@ -105,7 +105,7 @@ jobs:
           $smokeResponse = Invoke-RestMethod -Uri $smokeUrl -Headers $headers -Method Get
           $expectedSmokeTitle = "Production API smoke · $prodSha"
           $smoke = $smokeResponse.workflow_runs |
-            Where-Object { $_.name -eq 'Production API smoke' -and $_.conclusion -eq 'success' -and $_.display_title -eq $expectedSmokeTitle } |
+            Where-Object { $_.path -eq '.github/workflows/prod-smoke.yml' -and $_.conclusion -eq 'success' -and $_.display_title -eq $expectedSmokeTitle } |
             Sort-Object created_at -Descending |
             Select-Object -First 1
           if ($null -eq $smoke) {
@@ -125,7 +125,8 @@ jobs:
             'BUILD_VERSION',
             'package.json',
             'package-lock.json',
-            'electron/appConfig.ts'
+            'electron/appConfig.ts',
+            '.github/workflows/release.yml'
           )
           $changed = @(git diff --name-only $prodSha $env:GITHUB_SHA)
           $unexpected = @($changed | Where-Object { $_ -and $_ -notin $allowed })
