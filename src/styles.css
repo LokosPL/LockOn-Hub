@@ -5596,3 +5596,5 @@ input,textarea,select{line-height:1.45}
 @media (prefers-reduced-motion:reduce){
   .meeting-participant-item,.meeting-audio-level i{transition:none!important}
 }
+
+.meeting-row-focused{border-color:rgba(255,122,69,.58)!important;box-shadow:0 0 0 2px rgba(255,122,69,.08),0 18px 46px rgba(0,0,0,.18)}
