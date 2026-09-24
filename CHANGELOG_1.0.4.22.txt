@@ -1,0 +1,18 @@
+LockOn ServiceOS 1.0.4.22
+
+Najważniejsze zmiany
+- Pokój spotkania został uproszczony wizualnie: jeden główny ekran, jeden panel współpracy i jeden kompaktowy pasek transmisji.
+- Usunięto duplikujący kafel „Twoja transmisja”, który powtarzał stan już widoczny na scenie i pasku LIVE.
+- Dodano Tryb kinowy. Spotkanie może przykryć nawigację ServiceOS, zwiększyć powierzchnię ekranu i zachować czat lub uczestników stale po prawej stronie.
+- Tryb kinowy można przełączyć przyciskiem w nagłówku, skrótem na pasku transmisji, podwójnym kliknięciem w scenę, a klawisz Esc wraca do widoku standardowego.
+- Przy udostępnianiu własnego ekranu lokalny mirror nadal jest domyślnie ukryty. Włączenie podglądu jest świadome i opcjonalne.
+- Miniatury pod sceną dotyczą wyłącznie ekranów udostępnianych przez innych uczestników; host może jednym kliknięciem przełączać widok między ekranem uczestnika a własną transmisją.
+- Pasek LIVE pokazuje tylko istotne informacje: źródło, czas, liczbę osób, aktywnego mówcę, jakość i podstawowe akcje.
+- Chat w Trybie kinowym ma osobną, stałą kolumnę i nie jest zasłaniany przez duży ekran.
+- Zachowano trwałą sesję LiveKit, host overlay, działającą przeglądarkę podczas streamu, 4K/60 do 12 Mb/s oraz strojenie mikrofonu z 1.0.3.22.
+
+Bezpieczeństwo i stabilność
+- Tryb kinowy nie zmienia uprawnień spotkania i nie rozszerza dostępu do źródeł ekranu.
+- Screen share nadal wymaga świadomego wyboru źródła.
+- Host-only overlay nadal używa always-on-top, ignore-mouse i content protection.
+- Wyjście ze spotkania i zatrzymanie streamu nadal wykonują cleanup tracków i overlay.
