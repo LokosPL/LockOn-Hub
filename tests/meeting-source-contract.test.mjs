@@ -63,7 +63,9 @@ test('OWNER, BOSS i COORDINATOR mają kontrakt planowania spotkań, a globalne z
   const ui=await read('src/components/MeetingsCard.tsx');
   assert.match(backend,/MEETING_CREATE_ROLES = new Set\(\['OWNER', 'BOSS', 'COORDINATOR'\]\)/);
   assert.match(backend,/MEETING_GLOBAL_MANAGE_ROLES = new Set\(\['OWNER', 'BOSS'\]\)/);
+  assert.match(backend,/scopeMeetingAudience/);
   assert.match(ui,/role === 'OWNER' \|\| role === 'BOSS' \|\| role === 'COORDINATOR'/);
+  assert.match(ui,/Wszyscy w moich punktach/);
 });
 
 test('Pokój, edycja i frekwencja są widokami panelu zamiast modalami nakładanymi na Dashboard', async () => {
