@@ -235,7 +235,18 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.build_version }}
         run: |
           $highlights = ""
-          if ($env:VERSION -eq "1.0.3.22") {
+          if ($env:VERSION -eq "1.0.4.22") {
+            $highlights = @"
+
+          Najważniejsze zmiany:
+          - Pokój spotkania ma uproszczony układ: jedna dominująca scena, stały panel czatu/uczestników i jeden kompaktowy pasek transmisji.
+          - Usunięto duplikujący kafel własnej transmisji.
+          - Dodano Tryb kinowy z dużym ekranem i czatem stale widocznym po prawej.
+          - Tryb kinowy można włączyć przyciskiem, podwójnym kliknięciem sceny i wyłączyć klawiszem Esc.
+          - Miniatury pod sceną pokazują wyłącznie ekrany innych uczestników i pozwalają szybko przełączać główny widok.
+          - Zachowano trwałą sesję LiveKit, host overlay, działającą przeglądarkę podczas streamu, 4K/60 do 12 Mb/s i strojenie mikrofonu z wersji 1.0.3.22.
+          "@
+          } elseif ($env:VERSION -eq "1.0.3.22") {
             $highlights = @"
 
           Najważniejsze zmiany:
