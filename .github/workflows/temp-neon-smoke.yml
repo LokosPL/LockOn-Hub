@@ -407,7 +407,8 @@ jobs:
           user_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.user.id)")"
 
           api_code() {
-            local token="$1" method="$2" path="$3" body="${4:-{}}"
+            local token="$1" method="$2" path="$3" body="${4-}"
+            if [ -z "$body" ]; then body='{}'; fi
             curl --silent --show-error --output meeting-response.json --write-out '%{http_code}'               --request "$method" "$TEMP_API_URL$path"               --header "Authorization: Bearer $token"               --header "Content-Type: application/json"               --data "$body"
           }
 
