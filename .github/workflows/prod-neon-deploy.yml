@@ -136,7 +136,8 @@ jobs:
           zip -j prod-neon-lockonapi.zip central-api-dist/index.mjs
           sha256sum prod-neon-lockonapi.zip central-api-dist/index.mjs
 
-      - name: Apply additive 1.0.0.20 migrations to PROD
+      # ServiceOS 1.0.0.22 exact migration gate: collaboration schema must exist before backend deploy.
+      - name: Apply additive ServiceOS migrations to PROD
         shell: bash
         run: |
           set -euo pipefail
@@ -182,15 +183,17 @@ jobs:
 
           for migration in \
             database/migrations/2026-09-24-v100020-user-gmail-credentials.sql \
-            database/migrations/2026-09-24-v100020-meetings.sql
+            database/migrations/2026-09-24-v100020-meetings.sql \
+            database/migrations/2026-09-24-v100022-meeting-collaboration.sql
           do
             echo "Applying additive PROD migration: $migration"
             psql "$database_url" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
           done
 
-          tables="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT concat_ws(',',to_regclass('public.user_gmail_credentials'),to_regclass('public.meetings'),to_regclass('public.meeting_email_outbox'));")"
-          if [[ "$tables" != *"user_gmail_credentials"* || "$tables" != *"meetings"* || "$tables" != *"meeting_email_outbox"* ]]; then
-            echo "::error::PROD migration verification failed: $tables"
+          tables="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT concat_ws(',',to_regclass('public.user_gmail_credentials'),to_regclass('public.meetings'),to_regclass('public.meeting_email_outbox'),to_regclass('public.meeting_chat_messages'),to_regclass('public.meeting_hand_raises'));")"
+          email_column="$(psql "$database_url" -v ON_ERROR_STOP=1 -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='meetings' AND column_name='email_notifications_enabled';")"
+          if [[ "$tables" != *"user_gmail_credentials"* || "$tables" != *"meetings"* || "$tables" != *"meeting_email_outbox"* || "$tables" != *"meeting_chat_messages"* || "$tables" != *"meeting_hand_raises"* || "$email_column" != "1" ]]; then
+            echo "::error::PROD migration verification failed: tables=$tables email_notifications_enabled=$email_column"
             exit 1
           fi
 
