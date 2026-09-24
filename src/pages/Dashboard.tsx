@@ -28,6 +28,7 @@ import { ROLE_DEFINITIONS, type UserRole } from '../config/roles';
 interface DashboardProps {
   onNavigate: (key: NavigationKey) => void;
   onOpenHelp: () => void;
+  onOpenMeeting: (meetingId: string) => void;
   pointName: string;
   role: UserRole;
   userName: string;
@@ -76,7 +77,7 @@ type Shortcut = {
   action: () => void;
 };
 
-export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, weatherCity }: DashboardProps) {
+export function Dashboard({ onNavigate, onOpenHelp, onOpenMeeting, pointName, role, userName, weatherCity }: DashboardProps) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [update, setUpdate] = useState<UpdateState>(initialUpdate);
   const [updateActionBusy, setUpdateActionBusy] = useState(false);
@@ -277,7 +278,7 @@ export function Dashboard({ onNavigate, onOpenHelp, pointName, role, userName, w
         </aside>
       </section>
 
-      <NextMeetingCard onOpen={() => onNavigate('meetings')} />
+      <NextMeetingCard onOpen={() => onNavigate('meetings')} onOpenMeeting={onOpenMeeting} />
 
       <section className="start-section">
         <div className="start-section-heading">
