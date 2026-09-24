@@ -234,6 +234,7 @@ jobs:
           process.stdout.write(String(d.id ?? ''));
           NODE
           )"
+            echo "TEMP Neon deployment check: expected=$expected current=$id status=$state"
             if [[ "$id" == "$expected" && "$state" == "completed" ]]; then
               ready=1
               break
