@@ -644,7 +644,7 @@ const listMeetingsForUser = async (user) => {
     "EXISTS(SELECT 1 FROM meeting_registrations r WHERE r.meeting_id=m.id AND r.user_id=$1 AND r.status='REGISTERED') AS registered_by_me,"+
     "COALESCE((SELECT json_agg(json_build_object('type',a.audience_type,'pointId',a.point_id,'pointName',p.name,'userId',a.user_id,'userName',operational.name)) FROM meeting_audience a LEFT JOIN points p ON p.id=a.point_id LEFT JOIN LATERAL (SELECT CASE WHEN au.role_code='OWNER' THEN $2 ELSE COALESCE(NULLIF(au.name,''),au.email) END AS name FROM users au WHERE au.id=a.user_id) operational ON true WHERE a.meeting_id=m.id),'[]'::json) AS audience "+
     "FROM meetings m JOIN users cu ON cu.id=m.created_by_user_id JOIN users hu ON hu.id=m.host_user_id WHERE "+visibility+
-    (global?"":" AND m.status<>'CANCELLED'")+
+    (global?"":" AND (m.status<>'CANCELLED' OR m.created_by_user_id=$1 OR m.host_user_id=$1)")+
     " ORDER BY CASE m.status WHEN 'LIVE' THEN 0 WHEN 'SCHEDULED' THEN 1 WHEN 'ENDED' THEN 2 ELSE 3 END,m.starts_at ASC,m.created_at DESC LIMIT 100";
   const rows=(await q(sql,[user.id,OWNER_OPERATIONAL_NAME])).rows;
   return rows.map((row)=>meetingView(row,user));
