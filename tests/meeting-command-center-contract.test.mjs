@@ -4,51 +4,77 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
 
-test('1.0.2.22 keeps meeting collaboration visible outside the room without leaking browser WebContentsView', () => {
+test('1.0.3.22 keeps the live room mounted while navigating through ServiceOS', () => {
   const app = read('src/App.tsx');
-  const dock = read('src/components/MeetingActivityDock.tsx');
-  const browser = read('src/pages/BrowserPage.tsx');
+  const room = read('src/components/MeetingRoom.tsx');
+  const state = read('src/meetingLiveState.ts');
 
-  assert.match(app, /<MeetingActivityDock/);
-  assert.match(app, /meetingDockExpanded/);
-  assert.match(app, /active === 'browser' && !helpOpen && !meetingDockExpanded/);
-  assert.match(dock, /meetings\.chat\(meeting\.id\)/);
-  assert.match(dock, /meetings\.hands\(meeting\.id\)/);
-  assert.match(dock, /meetings\.sendChat\(meeting\.id/);
-  assert.match(dock, /onExpandedChange/);
-  assert.doesNotMatch(dock, /setVisible\(true\)/);
-  assert.doesNotMatch(browser, /setVisible\(true\)/);
+  assert.match(app, /persistent-meetings-host/);
+  assert.match(app, /active === 'meetings' \? 'active' : 'background'/);
+  assert.doesNotMatch(app, /active === 'meetings' && <MeetingsPage/);
+  assert.match(room, /publishMeetingLiveState/);
+  assert.match(state, /lockon:meeting-live-state/);
 });
 
-test('1.0.2.22 shows no fake self screen until the user actually shares', () => {
+test('1.0.3.22 browser remains interactive while the meeting dock is expanded', () => {
+  const app = read('src/App.tsx');
+  const browser = read('src/pages/BrowserPage.tsx');
+  const styles = read('src/styles.css');
+
+  assert.match(app, /active === 'browser' && !helpOpen/);
+  assert.doesNotMatch(app, /active === 'browser' && !helpOpen && !meetingDockExpanded/);
+  assert.match(app, /BrowserPage meetingDockExpanded=\{meetingDockExpanded\}/);
+  assert.match(browser, /meeting-dock-open/);
+  assert.match(styles, /browser-page\.meeting-dock-open \.browser-host-frame/);
+});
+
+test('1.0.3.22 exposes a persistent host-only broadcast overlay for screen and window sharing', () => {
+  const electron = read('electron/main.ts');
+  const preload = read('electron/preload.ts');
   const room = read('src/components/MeetingRoom.tsx');
 
-  assert.match(room, /useState<'empty'\|'self'\|'remote'>\('empty'\)/);
-  assert.match(room, /Nikt nie udostępnia ekranu/);
-  assert.match(room, /screenEnabled && \(/);
-  assert.match(room, /setStageView\('self'\)/);
-  assert.match(room, /setStageView\('remote'\)/);
-  assert.match(room, /remotePreviewHostRef/);
-  assert.doesNotMatch(room, /refreshLocalDesktopPreview/);
-  assert.doesNotMatch(room, /localDesktopPreview/);
+  assert.match(electron, /safe\.kind !== 'screen' && safe\.kind !== 'window'/);
+  assert.match(electron, /setAlwaysOnTop\(true,'screen-saver'\)/);
+  assert.match(electron, /setContentProtection\(true\)/);
+  assert.match(electron, /setVisibleOnAllWorkspaces\(true,\{visibleOnFullScreen:true\}\)/);
+  assert.match(electron, /meetings:updateShareOverlay/);
+  assert.match(preload, /updateShareOverlay/);
+  assert.match(room, /updateShareOverlay/);
+  assert.match(electron, /Mówi:/);
+  assert.match(electron, /latestMessage/);
 });
 
-test('1.0.2.22 prioritizes readable Full HD screen sharing', () => {
+test('1.0.3.22 defaults to a clean broadcast stage instead of a recursive local mirror', () => {
+  const room = read('src/components/MeetingRoom.tsx');
+
+  assert.match(room, /showSelfPreview/);
+  assert.match(room, /TRANSMISJA AKTYWNA/);
+  assert.match(room, /Lokalny podgląd jest domyślnie ukryty/);
+  assert.match(room, /Pokaż lokalny podgląd/);
+  assert.match(room, /Nikt nie udostępnia ekranu/);
+});
+
+test('1.0.3.22 prioritizes high-resolution screen share and low-latency speech', () => {
   const room = read('src/components/MeetingRoom.tsx');
   const electron = read('electron/main.ts');
 
-  assert.match(room, /adaptiveStream:false/);
-  assert.match(room, /dynacast:false/);
   assert.match(room, /maxWidth:3840/);
   assert.match(room, /maxHeight:2160/);
+  assert.match(room, /maxFrameRate:60/);
+  assert.match(room, /contentHint = 'detail'/);
   assert.match(room, /simulcast:false/);
-  assert.match(room, /screenShareEncoding:\{/);
-  assert.match(room, /maxBitrate:8_000_000/);
+  assert.match(room, /maxBitrate:12_000_000/);
+  assert.match(room, /maxFramerate:60/);
   assert.match(room, /degradationPreference:'maintain-resolution'/);
+  assert.match(room, /sampleRate:48_000/);
+  assert.match(room, /latency:\{ideal:0\.01,max:0\.04\}/);
+  assert.match(room, /stopMicTrackOnMute:false/);
+  assert.match(room, /red:true/);
+  assert.match(electron, /backgroundThrottling: false/);
   assert.match(electron, /thumbnailSize:\{width:640,height:360\}/);
 });
 
-test('Start meeting hub is role-aware and no longer exposes management action tiles to technicians', () => {
+test('Start meeting hub remains role-aware and hides management shortcuts from technicians', () => {
   const dashboard = read('src/pages/Dashboard.tsx');
   const card = read('src/components/NextMeetingCard.tsx');
 
@@ -60,18 +86,9 @@ test('Start meeting hub is role-aware and no longer exposes management action ti
   assert.doesNotMatch(card, /Planuj szkolenia/);
 });
 
-test('Start layout receives the selected UI scale', () => {
-  const preferences = read('src/uiPreferences.ts');
-  const styles = read('src/styles.css');
-
-  assert.match(preferences, /document\.documentElement\.dataset\.scale = scale/);
-  assert.match(styles, /:root\[data-scale="compact"\] \.dashboard-start/);
-  assert.match(styles, /\.start-meeting-hub-unified/);
-});
-
-test('1.0.2.22 product and updater versions stay aligned', () => {
-  assert.equal(read('RELEASE_VERSION').trim(), '1.0.2.22');
-  assert.equal(read('BUILD_VERSION').trim(), '1.2.22');
-  assert.equal(JSON.parse(read('package.json')).version, '1.2.22');
-  assert.match(read('electron/appConfig.ts'), /productVersion: '1\.0\.2\.22'/);
+test('1.0.3.22 product and updater versions stay aligned', () => {
+  assert.equal(read('RELEASE_VERSION').trim(), '1.0.3.22');
+  assert.equal(read('BUILD_VERSION').trim(), '1.3.22');
+  assert.equal(JSON.parse(read('package.json')).version, '1.3.22');
+  assert.match(read('electron/appConfig.ts'), /productVersion: '1\.0\.3\.22'/);
 });
