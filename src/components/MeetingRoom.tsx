@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Mic, MicOff, MonitorUp, MonitorX, PhoneOff, RefreshCw, Shield, UserMinus, VolumeX, X } from 'lucide-react';
+import { ArrowLeft, Mic, MicOff, MonitorUp, MonitorX, PhoneOff, RefreshCw, Shield, UserMinus, VolumeX, X } from 'lucide-react';
 import {
   Room,
   RoomEvent,
@@ -409,7 +409,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   };
 
   return (
-    <div className="meeting-room-backdrop" role="dialog" aria-modal="true" aria-label={'Spotkanie: '+meeting.title}>
+    <section className="meeting-room-panel" role="region" aria-label={'Spotkanie: '+meeting.title}>
       <div className="meeting-room-shell">
         <header className="meeting-room-header">
           <div>
@@ -423,7 +423,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
               <span>Uczestnicy: <strong>{connected ? participants.length : 0}</strong></span>
             </div>
           </div>
-          <button className="icon-button" onClick={leave} aria-label="Zamknij spotkanie"><X size={18}/></button>
+          <button className="button secondary small meeting-room-back" onClick={leave}><ArrowLeft size={15}/> Wróć do spotkań</button>
         </header>
 
         {error && (
@@ -503,6 +503,6 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
           </div>
         </div>
       )}
-    </div>
+    </section>
   );
 }
