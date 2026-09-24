@@ -8,6 +8,7 @@ on:
       - "functions/lockon-api.mjs"
       - "database/migrations/**"
       - ".github/workflows/temp-neon-smoke.yml"
+      - ".github/workflows/prod-neon-deploy.yml"
   workflow_dispatch:
 
 permissions:
