@@ -27,6 +27,10 @@ jobs:
       NEON_BRANCH_ID: br-spring-pond-b1hqe48m
       NEON_FUNCTION_SLUG: lockonapi
       TEMP_API_URL: https://br-spring-pond-b1hqe48m-lockonapi.compute.c-5.eu-central-1.aws.neon.tech
+      GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.LOCKON_GOOGLE_CLIENT_SECRET }}
+      LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+      LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+      LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -46,6 +50,24 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
+
+      - name: Validate runtime integration secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const env={
+            LOCKON_GOOGLE_DESKTOP_CLIENT_SECRET:process.env.GOOGLE_DESKTOP_CLIENT_SECRET||'',
+            LIVEKIT_URL:process.env.LIVEKIT_URL||'',
+            LIVEKIT_API_KEY:process.env.LIVEKIT_API_KEY||'',
+            LIVEKIT_API_SECRET:process.env.LIVEKIT_API_SECRET||''
+          };
+          const missing=Object.entries(env).filter(([,v])=>!String(v).trim()).map(([k])=>k);
+          if(missing.length)throw new Error('Missing GitHub runtime secrets for Neon Function: '+missing.join(', '));
+          fs.writeFileSync('runtime-environment.json',JSON.stringify(env),{mode:0o600});
+          console.log('Runtime integration secrets are present.');
+          NODE
 
       - name: Build exact Neon bundle
         shell: bash
@@ -194,7 +216,8 @@ jobs:
           http="$(curl --silent --show-error --output deploy.json --write-out '%{http_code}' \
             --request POST "$endpoint" \
             --header "Authorization: Bearer $NEON_API_KEY" \
-            --form "zip=@temp-neon-lockonapi.zip")"
+            --form "zip=@temp-neon-lockonapi.zip" \
+            --form-string "environment=$(cat runtime-environment.json)")"
           if [[ "$http" -lt 200 || "$http" -ge 300 ]]; then
             echo "::error::Temp Neon deploy HTTP $http"
             cat deploy.json
