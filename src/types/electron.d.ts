@@ -85,6 +85,18 @@ export interface MeetingLiveParticipantTrack { sid:string; source:number; muted:
 export interface MeetingLiveParticipant { identity:string; name:string; metadata:string; joinedAt?:string|null; tracks:MeetingLiveParticipantTrack[]; }
 export interface MeetingParticipantsPayload { configured:boolean; participants:MeetingLiveParticipant[]; }
 export interface MeetingScreenSource { id:string; name:string; displayId?:string|null; kind:'screen'|'window'; thumbnail?:string|null; appIcon?:string|null; }
+export interface MeetingShareOverlayState {
+  meetingId:string;
+  meetingTitle:string;
+  startedAt:string;
+  plannedMinutes:number;
+  elapsedSeconds:number;
+  participantCount:number;
+  speakingNames:string[];
+  micEnabled:boolean;
+  handCount:number;
+  latestMessage?:{authorName:string;body:string}|null;
+}
 export interface MeetingChatMessage { id:string; authorUserId:string; authorName:string; body:string; createdAt:string; mine:boolean; }
 export interface MeetingChatPayload { meetingId:string; messages:MeetingChatMessage[]; }
 export interface MeetingHandRaise { userId:string; name:string; raisedAt:string; position:number; mine:boolean; }
@@ -269,6 +281,7 @@ declare global {
         hands: (meetingId:string) => Promise<MeetingHandsPayload>;
         setHandRaised: (meetingId:string,raised:boolean) => Promise<{ok:true;raised:boolean}>;
         shareOverlay: (source:MeetingScreenSource|null) => Promise<{ok:true;shown:boolean}>;
+        updateShareOverlay: (state:MeetingShareOverlayState) => Promise<{ok:true;shown:boolean}>;
         onOpenMeeting: (callback:(meetingId:string)=>void) => () => void;
       };
       service: {
