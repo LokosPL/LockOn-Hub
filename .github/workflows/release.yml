@@ -235,7 +235,18 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.build_version }}
         run: |
           $highlights = ""
-          if ($env:VERSION -eq "1.0.2.22") {
+          if ($env:VERSION -eq "1.0.3.22") {
+            $highlights = @"
+
+          Najważniejsze zmiany:
+          - Spotkanie, mikrofon i screen share pozostają aktywne po przejściu do Startu, Serwisu, Przeglądarki lub po zminimalizowaniu ServiceOS.
+          - Host widzi stałą półprzezroczystą obramówkę transmisji z czasem, liczbą osób, aktywnym mówcą i podglądem czatu.
+          - Lokalny podgląd streamu jest domyślnie ukryty, więc pełny ekran ServiceOS nie tworzy już agresywnego efektu lustra.
+          - Przeglądarka działa równolegle ze spotkaniem; rozwinięty dock rezerwuje miejsce zamiast wyłączać WebContentsView.
+          - Screen share został podniesiony do maks. 4K / 60 FPS i 12 Mb/s z preferencją utrzymania rozdzielczości.
+          - Mikrofon ma ustawienia niskiej latencji, 48 kHz, ciągły track przy mute i odporniejszą transmisję RED.
+          "@
+          } elseif ($env:VERSION -eq "1.0.2.22") {
             $highlights = @"
 
           Najważniejsze zmiany:
