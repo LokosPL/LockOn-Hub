@@ -430,8 +430,7 @@ jobs:
           }
           NODE
 
-          starts_at="$(node -e "process.stdout.write(new Date(Date.now()+3600000).toISOString())"
-          )"
+          starts_at="$(node -e "process.stdout.write(new Date(Date.now()+3600000).toISOString())")"
           foreign_point="$(node - <<'NODE'
           const auth=require('./role-COORDINATOR.json'),options=require('./owner-meeting-options.json');
           const allowed=new Set((auth.points||[]).map((point)=>point.id));
