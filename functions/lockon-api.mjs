@@ -2762,6 +2762,10 @@ const processMeetingEmail = async (outboxId) => {
     [outboxId]
   )).rows[0];
   if(!item)return {sent:false,reason:'NOT_FOUND'};
+  if(item.email_notifications_enabled!==true){
+    await q("UPDATE meeting_email_outbox SET status='CANCELLED',last_error='Powiadomienia e-mail wyłączone dla spotkania.',updated_at=now() WHERE id=$1",[outboxId]);
+    return {sent:false,reason:'MEETING_EMAIL_DISABLED'};
+  }
   const attempt=Number(item.attempts||0)+1;
   const retryMinutes=Math.min(240,5*Math.pow(2,Math.max(0,attempt-1)));
   const nextAttemptAt=new Date(Date.now()+retryMinutes*60_000);
@@ -3357,7 +3361,7 @@ const route = async (request) => {
     if(!triggerId)return json(request,{error:'TRIGGER_REQUIRED'},403);
     const triggerBody=await readJson(request).catch(()=>({}));
     const {rows}=await q("SELECT id FROM notification_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY available_at ASC,created_at ASC LIMIT 25");
-    const meetingRows=(await q("SELECT id FROM meeting_email_outbox WHERE status IN ('PENDING','FAILED') AND available_at<=now() AND attempts<5 ORDER BY available_at ASC,created_at ASC LIMIT 25")).rows;
+    const meetingRows=(await q("SELECT o.id FROM meeting_email_outbox o JOIN meetings m ON m.id=o.meeting_id WHERE o.status IN ('PENDING','FAILED') AND o.available_at<=now() AND o.attempts<5 AND m.email_notifications_enabled=true ORDER BY o.available_at ASC,o.created_at ASC LIMIT 25")).rows;
     const results=[],meetingResults=[];
     for(const row of rows)results.push({id:row.id,...(await processNotification(row.id))});
     for(const row of meetingRows)meetingResults.push({id:row.id,...(await processMeetingEmail(row.id))});
@@ -4681,7 +4685,10 @@ const route = async (request) => {
       throw error;
     }finally{client.release();}
 
-    await audit(session,'MEETING_UPDATED','meeting',meetingId,null,{scheduleChanged,from:oldStartsAt,to:newStartsAt,plannedMinutes,maxParticipants,audienceChanged:Boolean(audience)});
+    if(!emailNotificationsEnabled){
+      await q("UPDATE meeting_email_outbox SET status='CANCELLED',last_error='Powiadomienia e-mail wyłączone dla spotkania.',updated_at=now() WHERE meeting_id=$1 AND status IN ('PENDING','FAILED')",[meetingId]);
+    }
+    await audit(session,'MEETING_UPDATED','meeting',meetingId,null,{scheduleChanged,from:oldStartsAt,to:newStartsAt,plannedMinutes,maxParticipants,audienceChanged:Boolean(audience),emailNotificationsEnabled});
     if(scheduleChanged){
       await audit(session,'MEETING_RESCHEDULED','meeting',meetingId,null,{from:oldStartsAt,to:newStartsAt});
     }
