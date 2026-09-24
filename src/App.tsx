@@ -80,9 +80,9 @@ export default function App() {
 
   useEffect(() => {
     if (view === 'splash') return;
-    const shouldShowBrowser = active === 'browser' && !helpOpen && !meetingDockExpanded;
+    const shouldShowBrowser = active === 'browser' && !helpOpen;
     void window.lockOn.browser.setVisible(shouldShowBrowser).catch(() => undefined);
-  }, [active, helpOpen, meetingDockExpanded]);
+  }, [active, helpOpen]);
 
   if (view === 'splash') return <SplashScreen />;
 
@@ -193,11 +193,16 @@ export default function App() {
           )}
           {active === 'administration' && <AdministrationPage focusUserId={focusUserId} />}
           {active === 'customers' && <CustomerAccountsPage effectiveRole={effectiveRole!} />}
-          {active === 'meetings' && <MeetingsPage role={effectiveRole!} focusMeetingId={focusMeetingId} />}
+          <div
+            className={'persistent-meetings-host ' + (active === 'meetings' ? 'active' : 'background')}
+            aria-hidden={active !== 'meetings'}
+          >
+            <MeetingsPage role={effectiveRole!} focusMeetingId={focusMeetingId} />
+          </div>
 
           {active === 'service' && <ServicePage auth={auth} effectiveRole={effectiveRole!} focusOrderId={focusOrderId} />}
           {active === 'earnings' && <EarningsPage auth={auth} effectiveRole={effectiveRole!} />}
-          {active === 'browser' && <BrowserPage />}
+          {active === 'browser' && <BrowserPage meetingDockExpanded={meetingDockExpanded} />}
           {active === 'support' && <SupportDesk role={effectiveRole!} supportEnabled={auth.supportEnabled} currentUserId={auth.user?.id} onOpenChat={() => setHelpOpen(true)} />}
           {active === 'settings' && (
             <SettingsPage

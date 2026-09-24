@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, ChevronDown, Hand, MessageSquare, Radio, Send, UsersRound, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, Clock3, Hand, MessageSquare, Mic, MicOff, MonitorUp, Radio, Send, UsersRound, Volume2, X } from 'lucide-react';
 import type { MeetingChatMessage, MeetingHandRaise, MeetingSummary } from '../types/electron';
+import { formatMeetingElapsed, subscribeMeetingLiveState, type MeetingLiveUiState } from '../meetingLiveState';
 import type { NavigationKey } from './Sidebar';
 
 type Props = {
@@ -23,6 +24,15 @@ export function MeetingActivityDock({ activePage, onOpenMeeting, onExpandedChang
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [seenMessageCount, setSeenMessageCount] = useState(-1);
+  const [liveState, setLiveState] = useState<MeetingLiveUiState | null>(null);
+  const [, setClockTick] = useState(0);
+
+  useEffect(() => subscribeMeetingLiveState(setLiveState), []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockTick((value) => value + 1), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -91,6 +101,12 @@ export function MeetingActivityDock({ activePage, onOpenMeeting, onExpandedChang
 
   const unreadCount = Math.max(0, messages.length - Math.max(0, seenMessageCount));
   const latestMessages = useMemo(() => messages.slice(-4), [messages]);
+  const currentLive = liveState?.meetingId === meeting?.id ? liveState : null;
+  const fallbackStart = meeting ? new Date(meeting.startedAt || meeting.startsAt).getTime() : 0;
+  const elapsedSeconds = currentLive?.elapsedSeconds
+    ?? (Number.isFinite(fallbackStart) ? Math.max(0, Math.floor((Date.now() - fallbackStart) / 1000)) : 0);
+  const participantCount = currentLive?.participantCount ?? 0;
+  const speakingNames = currentLive?.speakingNames ?? [];
 
   const send = async () => {
     const body = chatInput.trim();
@@ -123,6 +139,8 @@ export function MeetingActivityDock({ activePage, onOpenMeeting, onExpandedChang
           <span className="meeting-activity-live"><Radio size={13} /> TRWA TERAZ</span>
           <span className="meeting-activity-title">{meeting.title}</span>
           <span className="meeting-activity-counters">
+            <span title="Czas spotkania"><Clock3 size={14} /><b>{formatMeetingElapsed(elapsedSeconds)}</b></span>
+            <span title="Uczestnicy"><UsersRound size={14} /><b>{participantCount}</b></span>
             <span title="Nieprzeczytane wiadomości"><MessageSquare size={14} /><b>{unreadCount}</b></span>
             <span title="Podniesione ręce"><Hand size={14} /><b>{hands.length}</b></span>
           </span>
@@ -133,6 +151,19 @@ export function MeetingActivityDock({ activePage, onOpenMeeting, onExpandedChang
 
       {expanded && (
         <div className="meeting-activity-dock-body">
+          <div className="meeting-activity-livebar">
+            <div>
+              <span><Clock3 size={13}/><b>{formatMeetingElapsed(elapsedSeconds)}</b> / {meeting.plannedMinutes} min</span>
+              <span><UsersRound size={13}/><b>{participantCount}</b> online</span>
+              <span>{currentLive?.micEnabled ? <Mic size={13}/> : <MicOff size={13}/>} {currentLive?.micEnabled ? 'Mikrofon włączony' : 'Mikrofon wyłączony'}</span>
+              {currentLive?.screenEnabled && <span><MonitorUp size={13}/> Udostępniasz ekran</span>}
+            </div>
+            <div className={'meeting-activity-speaking ' + (speakingNames.length ? 'active' : '')}>
+              <Volume2 size={14}/>
+              <span>{speakingNames.length ? <>Mówi <strong>{speakingNames.join(', ')}</strong></> : 'Nikt teraz nie mówi'}</span>
+            </div>
+          </div>
+
           <div className="meeting-activity-dock-section">
             <div className="meeting-activity-section-head">
               <span><MessageSquare size={14} /> Czat</span>

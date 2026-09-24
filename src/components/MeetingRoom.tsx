@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Hand, MessageSquare, Mic, MicOff, Monitor, MonitorUp, MonitorX, PhoneOff, RefreshCw, Send, Shield, UserMinus, UsersRound, VolumeX, X } from 'lucide-react';
+import { ArrowLeft, Clock3, Eye, EyeOff, Hand, MessageSquare, Mic, MicOff, Monitor, MonitorUp, MonitorX, PhoneOff, RefreshCw, Send, Shield, UserMinus, UsersRound, VolumeX, X } from 'lucide-react';
 import {
   Room,
   RoomEvent,
@@ -10,7 +10,8 @@ import {
   type RemoteTrack,
   type RemoteTrackPublication
 } from 'livekit-client';
-import type { MeetingChatMessage, MeetingHandRaise, MeetingLiveParticipant, MeetingScreenSource, MeetingSummary } from '../types/electron';
+import type { MeetingChatMessage, MeetingHandRaise, MeetingLiveParticipant, MeetingScreenSource, MeetingShareOverlayState, MeetingSummary } from '../types/electron';
+import { formatMeetingElapsed, publishMeetingLiveState, type MeetingLiveUiState } from '../meetingLiveState';
 import { useAppDialog } from './AppDialog';
 
 type Props = {
@@ -90,6 +91,8 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const [remoteScreenActive, setRemoteScreenActive] = useState(false);
   const [remoteScreenOwner, setRemoteScreenOwner] = useState('');
   const [stageView, setStageView] = useState<'empty'|'self'|'remote'>('empty');
+  const [showSelfPreview, setShowSelfPreview] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [canMic, setCanMic] = useState(false);
   const [canShare, setCanShare] = useState(false);
   const [canManage, setCanManage] = useState(false);
@@ -221,7 +224,23 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     setStageView('empty');
     setParticipants([]);
 
-    const room = new Room({ adaptiveStream:false, dynacast:false });
+    const room = new Room({
+      adaptiveStream:false,
+      dynacast:false,
+      audioCaptureDefaults:{
+        echoCancellation:true,
+        noiseSuppression:true,
+        autoGainControl:true,
+        channelCount:1,
+        sampleRate:48_000,
+        latency:{ideal:0.01,max:0.04}
+      },
+      publishDefaults:{
+        dtx:false,
+        red:true,
+        stopMicTrackOnMute:false
+      }
+    });
     roomRef.current = room;
 
     const onSubscribed = (track: RemoteTrack, _publication: RemoteTrackPublication, participant: RemoteParticipant) => {
@@ -316,6 +335,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         }
       }
       closeAttendance();
+      publishMeetingLiveState(null);
       void window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
       if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
       if (localStagePreviewRef.current) localStagePreviewRef.current.srcObject = null;
@@ -348,7 +368,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   useEffect(() => {
     if (!connected) return;
     const room=roomRef.current;
-    const timer=window.setInterval(()=>{if(room)refreshParticipants(room);},140);
+    const timer=window.setInterval(()=>{if(room)refreshParticipants(room);},100);
     return () => window.clearInterval(timer);
   }, [connected, meeting.id]);
 
@@ -359,20 +379,64 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   }, [chatMessages.length, sideTab]);
 
   useEffect(() => {
-    if (!screenEnabled || !selectedSource || /LockOn ServiceOS/i.test(selectedSource.name)) return;
+    if (!screenEnabled || !selectedSource || !showSelfPreview || /LockOn ServiceOS/i.test(selectedSource.name)) return;
     const stream = localPreviewStreamRef.current;
-    if (!stream) return;
-    const targets = [localPreviewRef.current, localStagePreviewRef.current].filter(Boolean) as HTMLVideoElement[];
-    for (const preview of targets) {
-      preview.srcObject = stream;
-      void preview.play().catch(() => undefined);
-    }
+    const preview = localStagePreviewRef.current;
+    if (!stream || !preview) return;
+    preview.srcObject = stream;
+    void preview.play().catch(() => undefined);
     return () => {
-      for (const preview of targets) {
-        if (preview.srcObject === stream) preview.srcObject = null;
-      }
+      if (preview.srcObject === stream) preview.srcObject = null;
     };
-  }, [screenEnabled, selectedSource?.id, stageView]);
+  }, [screenEnabled, selectedSource?.id, showSelfPreview, stageView]);
+
+  useEffect(() => {
+    const started = new Date(meeting.startedAt || meeting.startsAt).getTime();
+    const refresh = () => {
+      setElapsedSeconds(Number.isFinite(started) ? Math.max(0, Math.floor((Date.now() - started) / 1000)) : 0);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 1_000);
+    return () => window.clearInterval(timer);
+  }, [meeting.id, meeting.startedAt, meeting.startsAt]);
+
+  useEffect(() => {
+    const speakingNames = participants.filter((item) => item.speaking && !item.muted).map((item) => item.name).slice(0,4);
+    const latest = chatMessages[chatMessages.length - 1] ?? null;
+    const liveState: MeetingLiveUiState = {
+      meetingId:meeting.id,
+      meetingTitle:meeting.title,
+      startedAt:meeting.startedAt || meeting.startsAt,
+      plannedMinutes:meeting.plannedMinutes,
+      elapsedSeconds,
+      participantCount:connected ? participants.length : 0,
+      speakingNames,
+      micEnabled,
+      screenEnabled,
+      sourceName:selectedSource?.name ?? null,
+      handCount:handRaises.length,
+      latestMessage:latest ? {authorName:latest.mine ? 'Ty' : latest.authorName,body:latest.body} : null
+    };
+    publishMeetingLiveState(liveState);
+    if (screenEnabled) {
+      const overlayState: MeetingShareOverlayState = liveState;
+      void window.lockOn.meetings.updateShareOverlay(overlayState).catch(() => undefined);
+    }
+  }, [
+    meeting.id,
+    meeting.title,
+    meeting.startedAt,
+    meeting.startsAt,
+    meeting.plannedMinutes,
+    elapsedSeconds,
+    connected,
+    participants,
+    micEnabled,
+    screenEnabled,
+    selectedSource?.name,
+    handRaises.length,
+    chatMessages
+  ]);
 
   const retryConnection = () => {
     setError('');
@@ -436,18 +500,19 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
           chromeMediaSourceId:source.id,
           maxWidth:3840,
           maxHeight:2160,
-          maxFrameRate:30
+          maxFrameRate:60
         }
       } as unknown as MediaTrackConstraints;
       const stream = await navigator.mediaDevices.getUserMedia({ video:constraints, audio:false });
       const mediaTrack = stream.getVideoTracks()[0];
       if (!mediaTrack) throw new Error('Brak tracka ekranu.');
+      mediaTrack.contentHint = 'detail';
       const publication = await room.localParticipant.publishTrack(mediaTrack, {
         source:Track.Source.ScreenShare,
         simulcast:false,
         screenShareEncoding:{
-          maxBitrate:8_000_000,
-          maxFramerate:30,
+          maxBitrate:12_000_000,
+          maxFramerate:60,
           priority:'high'
         },
         degradationPreference:'maintain-resolution'
@@ -455,21 +520,33 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
       screenPublicationRef.current = publication;
       setSelectedSource(source);
       setScreenEnabled(true);
+      setShowSelfPreview(false);
       setStageView('self');
       setSourcePickerOpen(false);
 
       const mirrorRisk=/LockOn ServiceOS/i.test(source.name);
       localPreviewStreamRef.current = mirrorRisk ? null : new MediaStream([mediaTrack]);
-      if (localPreviewRef.current) {
-        localPreviewRef.current.srcObject = localPreviewStreamRef.current;
-        if (!mirrorRisk) void localPreviewRef.current.play().catch(() => undefined);
-      }
       await window.lockOn.meetings.shareOverlay(source).catch(() => ({ok:true,shown:false}));
+      const speakingNames = participants.filter((item) => item.speaking && !item.muted).map((item) => item.name).slice(0,4);
+      const latest = chatMessages[chatMessages.length - 1] ?? null;
+      await window.lockOn.meetings.updateShareOverlay({
+        meetingId:meeting.id,
+        meetingTitle:meeting.title,
+        startedAt:meeting.startedAt || meeting.startsAt,
+        plannedMinutes:meeting.plannedMinutes,
+        elapsedSeconds,
+        participantCount:participants.length,
+        speakingNames,
+        micEnabled,
+        handCount:handRaises.length,
+        latestMessage:latest ? {authorName:latest.mine ? 'Ty' : latest.authorName,body:latest.body} : null
+      }).catch(() => ({ok:true,shown:false}));
 
       mediaTrack.addEventListener('ended', () => {
         if (screenPublicationRef.current?.track !== publication.track) return;
         screenPublicationRef.current = null;
         setScreenEnabled(false);
+        setShowSelfPreview(false);
         setSelectedSource(null);
         setStageView((current) => current === 'self'
           ? (remoteScreenOwnersRef.current.size > 0 ? 'remote' : 'empty')
@@ -499,6 +576,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     if (!room || !publication?.track) {
       await window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
       setScreenEnabled(false);
+      setShowSelfPreview(false);
       setSelectedSource(null);
       setStageView((current) => current === 'self'
         ? (remoteScreenOwnersRef.current.size > 0 ? 'remote' : 'empty')
@@ -516,6 +594,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
       await window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
       setSelectedSource(null);
       setScreenEnabled(false);
+      setShowSelfPreview(false);
       setStageView((current) => current === 'self'
         ? (remoteScreenOwnersRef.current.size > 0 ? 'remote' : 'empty')
         : current);
@@ -619,7 +698,11 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
             </div>
             <div className="meeting-room-header-meta">
               <span>Prowadzący: <strong>{meeting.hostName}</strong></span>
-              <span><strong>{connected ? participants.length : 0}</strong> {participants.length === 1 ? 'uczestnik' : 'uczestników'}</span>
+              <span><Clock3 size={12}/> <strong>{formatMeetingElapsed(elapsedSeconds)}</strong> / {meeting.plannedMinutes} min</span>
+              <span><UsersRound size={12}/> <strong>{connected ? participants.length : 0}</strong> {participants.length === 1 ? 'uczestnik' : 'uczestników'}</span>
+              {participants.some((item)=>item.speaking&&!item.muted) && (
+                <span className="meeting-speaking-meta"><i /> Mówi: <strong>{participants.filter((item)=>item.speaking&&!item.muted).slice(0,2).map((item)=>item.name).join(', ')}</strong></span>
+              )}
             </div>
           </div>
           <button className="button secondary small meeting-room-back" onClick={leave}><ArrowLeft size={15}/> Wróć do spotkań</button>
@@ -663,14 +746,23 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
 
                   <div className="meeting-screen-main">
                     {stageView === 'self' && (
-                      /LockOn ServiceOS/i.test(selectedSource?.name || '') ? (
-                        <div className="meeting-stage-status meeting-stage-hint">
-                          <Monitor size={31}/>
-                          <strong>Udostępniasz ServiceOS</strong>
-                          <span>Podgląd lokalny jest ukryty, aby nie tworzyć efektu lustra.</span>
-                        </div>
-                      ) : (
+                      showSelfPreview && !/LockOn ServiceOS/i.test(selectedSource?.name || '') ? (
                         <video ref={localStagePreviewRef} className="meeting-local-stage-video" muted playsInline autoPlay />
+                      ) : (
+                        <div className="meeting-broadcast-stage">
+                          <span className="meeting-broadcast-live"><i /> TRANSMISJA AKTYWNA</span>
+                          <div className="meeting-broadcast-icon"><MonitorUp size={38}/></div>
+                          <strong>{selectedSource?.name || 'Udostępniany ekran'}</strong>
+                          <span>Obraz jest wysyłany uczestnikom. Lokalny podgląd jest domyślnie ukryty, żeby nie tworzyć efektu lustra.</span>
+                          <div className="meeting-broadcast-metrics">
+                            <b>{formatMeetingElapsed(elapsedSeconds)}</b>
+                            <span>{participants.length} {participants.length===1?'uczestnik':'uczestników'}</span>
+                            <span>do 4K · 60 FPS</span>
+                          </div>
+                          {!/LockOn ServiceOS/i.test(selectedSource?.name || '') && (
+                            <button type="button" onClick={()=>setShowSelfPreview(true)}><Eye size={15}/> Pokaż lokalny podgląd</button>
+                          )}
+                        </div>
                       )
                     )}
                     <div className="meeting-screen-host" ref={videoHostRef} aria-hidden={stageView!=='remote'} />
@@ -685,12 +777,11 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
               <div className="meeting-screen-filmstrip" aria-label="Udostępniane ekrany">
                 {screenEnabled && (
                   <button type="button" className={'meeting-screen-tile '+(stageView==='self'?'selected':'')} onClick={()=>setStageView('self')}>
-                    <div className="meeting-screen-tile-preview">
-                      {/LockOn ServiceOS/i.test(selectedSource?.name || '')
-                        ? <Monitor size={24}/>
-                        : <video ref={localPreviewRef} muted playsInline autoPlay />}
+                    <div className="meeting-screen-tile-preview meeting-screen-tile-live">
+                      <MonitorUp size={24}/>
+                      <span>LIVE</span>
                     </div>
-                    <div><strong>Twój ekran</strong><span>{selectedSource?.name || 'Udostępnianie aktywne'}</span></div>
+                    <div><strong>Twoja transmisja</strong><span>{selectedSource?.name || 'Udostępnianie aktywne'}</span></div>
                   </button>
                 )}
 
@@ -713,14 +804,24 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
             )}
 
             {screenEnabled && selectedSource && (
-              <div className="meeting-local-share-preview">
-                <div><span>● Udostępniasz ekran</span><strong>{selectedSource.name}</strong></div>
-                <p>{/LockOn ServiceOS/i.test(selectedSource.name)
-                  ? 'Podgląd lokalny ServiceOS jest ukryty, aby uniknąć efektu lustra. Uczestnicy nadal widzą wybrane źródło.'
-                  : 'Udostępnianie jest aktywne w wysokiej jakości. Możesz zmienić źródło albo je zatrzymać.'}</p>
+              <div className="meeting-broadcast-strip">
+                <div className="meeting-broadcast-strip-source">
+                  <span><i /> UDOSTĘPNIASZ</span>
+                  <strong>{selectedSource.name}</strong>
+                </div>
+                <div className="meeting-broadcast-strip-stats">
+                  <span><Clock3 size={13}/><b>{formatMeetingElapsed(elapsedSeconds)}</b></span>
+                  <span><UsersRound size={13}/><b>{participants.length}</b></span>
+                  {participants.some((item)=>item.speaking&&!item.muted) && <span className="speaking"><i/> {participants.filter((item)=>item.speaking&&!item.muted)[0]?.name}</span>}
+                </div>
                 <div className="meeting-local-share-actions">
-                  <button onClick={()=>void openScreenPicker()}><RefreshCw size={14}/> Zmień ekran / okno</button>
-                  <button onClick={()=>void stopScreenShare()}><MonitorX size={14}/> Zatrzymaj udostępnianie</button>
+                  {!/LockOn ServiceOS/i.test(selectedSource.name) && (
+                    <button onClick={()=>setShowSelfPreview((value)=>!value)}>
+                      {showSelfPreview?<EyeOff size={14}/>:<Eye size={14}/>} {showSelfPreview?'Ukryj podgląd':'Podgląd'}
+                    </button>
+                  )}
+                  <button onClick={()=>void openScreenPicker()}><RefreshCw size={14}/> Zmień źródło</button>
+                  <button className="danger" onClick={()=>void stopScreenShare()}><MonitorX size={14}/> Zatrzymaj</button>
                 </div>
               </div>
             )}

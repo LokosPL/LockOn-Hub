@@ -1,0 +1,17 @@
+LockOn ServiceOS 1.0.3.22
+
+Najważniejsze zmiany
+- Spotkanie działa jako trwała sesja: przejście na Start, Serwis, Przeglądarkę albo inny moduł nie rozłącza LiveKit, mikrofonu ani aktywnego screen share.
+- Po zminimalizowaniu ServiceOS renderer spotkania nie jest throttlowany, dzięki czemu stream, mikrofon, zegar i status hosta pozostają aktywne, dopóki aplikacja działa.
+- Host dostaje stałą, półprzezroczystą obramówkę transmisji nad pulpitem także przy udostępnianiu okna, nie tylko pełnego ekranu.
+- Overlay hosta pokazuje tytuł spotkania, czas trwania, planowany czas, liczbę uczestników, stan mikrofonu, podniesione ręce, aktualnie mówiące osoby i ostatnią wiadomość z czatu.
+- Overlay ma content protection i ignore-mouse, więc jest przeznaczony dla hosta i nie powinien zasłaniać ani przechwytywać kliknięć w udostępnianej aplikacji.
+- Lokalny podgląd własnego streamu jest domyślnie ukryty. Zamiast efektu lustra host widzi czysty stan „TRANSMISJA AKTYWNA”; podgląd można włączyć świadomie.
+- Przeglądarka pozostaje aktywna podczas streamu. Po rozwinięciu panelu spotkania WebContentsView jest zmniejszany, a nie wyłączany.
+- Persistent meeting dock pokazuje czas spotkania, liczbę osób, mikrofon, screen share i aktywnego mówcę, obok czatu i podniesionych rąk.
+- Screen share został podniesiony do maks. 3840×2160 / 60 FPS, 12 Mb/s, contentHint=detail, bez simulcastu i z preferencją utrzymania rozdzielczości.
+- Mikrofon używa 48 kHz, krótkiego bufora wejściowego, echo cancellation, noise suppression, AGC, RED oraz nie zatrzymuje tracka przy mute, aby ograniczyć opóźnienia i ponowne rozgrzewanie urządzenia.
+
+Ograniczenia
+- Udostępnianie działa podczas minimalizacji i pracy w innych aplikacjach, ale kończy się po faktycznym zamknięciu procesu ServiceOS.
+- Przy bardzo słabym uploadzie WebRTC nadal może obniżyć płynność, aby utrzymać połączenie; konfiguracja preferuje czytelność obrazu i ciągłość audio.

@@ -19,7 +19,7 @@ const initialState: BrowserState = {
   loading: false
 };
 
-export function BrowserPage() {
+export function BrowserPage({ meetingDockExpanded = false }: { meetingDockExpanded?: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [browser, setBrowser] = useState<BrowserState>(initialState);
   const [input, setInput] = useState(initialState.url);
@@ -70,6 +70,21 @@ export function BrowserPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const host = hostRef.current;
+      if (!host) return;
+      const rect = host.getBoundingClientRect();
+      void window.lockOn.browser.setBounds({
+        x:rect.left,
+        y:rect.top,
+        width:rect.width,
+        height:rect.height
+      });
+    }, 40);
+    return () => window.clearTimeout(timer);
+  }, [meetingDockExpanded]);
+
   const runAction = async (action: () => Promise<unknown>, fallback: string) => {
     if (actionBusyRef.current) return;
     actionBusyRef.current = true;
@@ -92,7 +107,7 @@ export function BrowserPage() {
   };
 
   return (
-    <div className="browser-page page-enter">
+    <div className={'browser-page page-enter ' + (meetingDockExpanded ? 'meeting-dock-open' : '')}>
       <div className="browser-topline">
         <div>
           <span className="eyebrow"><span className="live-dot" /> PRZEGLĄDARKA</span>

@@ -377,8 +377,9 @@ jobs:
             "sendChat",
             "ActiveSpeakersChanged",
             "audioLevel",
-            "meeting-local-share-preview",
-            "Zmień ekran / okno",
+            "meeting-broadcast-strip",
+            "Zmień źródło",
+            "updateShareOverlay",
             "shareOverlay(null)"
           ) | ForEach-Object {
             if (-not $room.Contains($_)) { throw "Missing live meeting UI contract: $_" }
@@ -408,7 +409,7 @@ jobs:
           }
 
           $electron = Get-Content electron/main.ts -Raw
-          @("permission === 'media'","isTrustedRendererUrl","setPermissionCheckHandler","meetings:shareOverlay","setIgnoreMouseEvents","setContentProtection","meetings:open-deep-link") | ForEach-Object {
+          @("permission === 'media'","isTrustedRendererUrl","setPermissionCheckHandler","meetings:shareOverlay","meetings:updateShareOverlay","setIgnoreMouseEvents","setContentProtection","setVisibleOnAllWorkspaces","meetings:open-deep-link") | ForEach-Object {
             if (-not $electron.Contains($_)) { throw "Missing trusted meeting media permission contract: $_" }
           }
 
