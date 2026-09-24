@@ -1,7 +1,7 @@
 import { MeetingsCard } from '../components/MeetingsCard';
 import type { UserRole } from '../types/electron';
 
-export function MeetingsPage({ role }: { role: UserRole }) {
+export function MeetingsPage({ role, focusMeetingId }: { role: UserRole; focusMeetingId?: string | null }) {
   return (
     <div className="meetings-page page-enter">
       <header className="meetings-page-hero">
@@ -11,7 +11,7 @@ export function MeetingsPage({ role }: { role: UserRole }) {
           <p>Terminy, zapisy, prowadzenie spotkania, chat, udostępnianie ekranu, zgłoszenia do głosu i frekwencja są w jednym module.</p>
         </div>
       </header>
-      <MeetingsCard role={role} />
+      <MeetingsCard role={role} focusMeetingId={focusMeetingId} />
     </div>
   );
 }
