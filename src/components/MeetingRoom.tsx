@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Clock3, Eye, EyeOff, Hand, MessageSquare, Mic, MicOff, Monitor, MonitorUp, MonitorX, PhoneOff, RefreshCw, Send, Shield, UserMinus, UsersRound, VolumeX, X } from 'lucide-react';
+import { ArrowLeft, Clock3, Eye, EyeOff, Hand, Maximize2, MessageSquare, Mic, MicOff, Minimize2, Monitor, MonitorUp, MonitorX, PhoneOff, RefreshCw, Send, Shield, UserMinus, UsersRound, VolumeX, X } from 'lucide-react';
 import {
   Room,
   RoomEvent,
@@ -77,7 +77,6 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const videoHostRef = useRef<HTMLDivElement | null>(null);
   const remotePreviewHostRef = useRef<HTMLDivElement | null>(null);
   const remoteScreenOwnersRef = useRef<Map<string,string>>(new Map());
-  const localPreviewRef = useRef<HTMLVideoElement | null>(null);
   const localStagePreviewRef = useRef<HTMLVideoElement | null>(null);
   const localPreviewStreamRef = useRef<MediaStream | null>(null);
   const chatMessagesRef = useRef<HTMLDivElement | null>(null);
@@ -92,6 +91,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const [remoteScreenOwner, setRemoteScreenOwner] = useState('');
   const [stageView, setStageView] = useState<'empty'|'self'|'remote'>('empty');
   const [showSelfPreview, setShowSelfPreview] = useState(false);
+  const [theaterMode, setTheaterMode] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [canMic, setCanMic] = useState(false);
   const [canShare, setCanShare] = useState(false);
@@ -337,7 +337,6 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
       closeAttendance();
       publishMeetingLiveState(null);
       void window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
-      if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
       if (localStagePreviewRef.current) localStagePreviewRef.current.srcObject = null;
       localPreviewStreamRef.current = null;
       const localScreen = screenPublicationRef.current?.track;
@@ -438,6 +437,17 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     chatMessages
   ]);
 
+  const toggleTheaterMode = () => {
+    setTheaterMode((current) => {
+      const next = !current;
+      if (next) {
+        setSideTab('chat');
+        setMobileView('meeting');
+      }
+      return next;
+    });
+  };
+
   const retryConnection = () => {
     setError('');
     setConnectionFailed(false);
@@ -491,7 +501,6 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         previous.track.stop();
       }
       await window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
-      if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
       localPreviewStreamRef.current = null;
 
       const constraints = {
@@ -551,8 +560,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         setStageView((current) => current === 'self'
           ? (remoteScreenOwnersRef.current.size > 0 ? 'remote' : 'empty')
           : current);
-        if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
-        if (localStagePreviewRef.current) localStagePreviewRef.current.srcObject = null;
+          if (localStagePreviewRef.current) localStagePreviewRef.current.srcObject = null;
         localPreviewStreamRef.current = null;
         void room.localParticipant.unpublishTrack(mediaTrack).catch(() => undefined);
         void window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
@@ -588,7 +596,6 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
       screenPublicationRef.current = null;
       await room.localParticipant.unpublishTrack(publication.track).catch(() => undefined);
       publication.track.stop();
-      if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
       if (localStagePreviewRef.current) localStagePreviewRef.current.srcObject = null;
       localPreviewStreamRef.current = null;
       await window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
@@ -688,7 +695,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   };
 
   return (
-    <section className="meeting-room-panel" role="region" aria-label={'Spotkanie: '+meeting.title}>
+    <section className={'meeting-room-panel '+(theaterMode?'theater-mode':'')} role="region" aria-label={'Spotkanie: '+meeting.title}>
       <div className="meeting-room-shell">
         <header className="meeting-room-header">
           <div>
@@ -705,7 +712,18 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
               )}
             </div>
           </div>
-          <button className="button secondary small meeting-room-back" onClick={leave}><ArrowLeft size={15}/> Wróć do spotkań</button>
+          <div className="meeting-room-header-actions">
+            <button
+              className={'button secondary small meeting-theater-toggle '+(theaterMode?'active':'')}
+              type="button"
+              onClick={toggleTheaterMode}
+              title={theaterMode?'Wróć do standardowego widoku':'Powiększ ekran spotkania i zostaw czat po prawej'}
+            >
+              {theaterMode?<Minimize2 size={15}/>:<Maximize2 size={15}/>}
+              {theaterMode?'Widok standardowy':'Tryb kinowy'}
+            </button>
+            <button className="button secondary small meeting-room-back" onClick={leave}><ArrowLeft size={15}/> Wróć do spotkań</button>
+          </div>
         </header>
 
         {error && (
@@ -736,15 +754,17 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
                 </div>
               ) : (
                 <>
-                  <div className="meeting-screen-stage-header">
-                    <div>
-                      <Monitor size={15}/>
-                      <strong>{stageView === 'self' ? 'Udostępniasz ekran' : (remoteScreenOwner || 'Udostępniany ekran')}</strong>
+                  {stageView === 'remote' && (
+                    <div className="meeting-screen-stage-header">
+                      <div>
+                        <Monitor size={15}/>
+                        <strong>{remoteScreenOwner || 'Udostępniany ekran'}</strong>
+                      </div>
+                      <small>Udostępniany ekran uczestnika</small>
                     </div>
-                    <small>{stageView === 'self' ? (selectedSource?.name || 'Twój ekran') : 'Kliknij miniaturę, aby zmienić widok'}</small>
-                  </div>
+                  )}
 
-                  <div className="meeting-screen-main">
+                  <div className={'meeting-screen-main '+(stageView==='self'?'self-stage':'remote-stage')}>
                     {stageView === 'self' && (
                       showSelfPreview && !/LockOn ServiceOS/i.test(selectedSource?.name || '') ? (
                         <video ref={localStagePreviewRef} className="meeting-local-stage-video" muted playsInline autoPlay />
@@ -754,11 +774,6 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
                           <div className="meeting-broadcast-icon"><MonitorUp size={38}/></div>
                           <strong>{selectedSource?.name || 'Udostępniany ekran'}</strong>
                           <span>Obraz jest wysyłany uczestnikom. Lokalny podgląd jest domyślnie ukryty, żeby nie tworzyć efektu lustra.</span>
-                          <div className="meeting-broadcast-metrics">
-                            <b>{formatMeetingElapsed(elapsedSeconds)}</b>
-                            <span>{participants.length} {participants.length===1?'uczestnik':'uczestników'}</span>
-                            <span>do 4K · 60 FPS</span>
-                          </div>
                           {!/LockOn ServiceOS/i.test(selectedSource?.name || '') && (
                             <button type="button" onClick={()=>setShowSelfPreview(true)}><Eye size={15}/> Pokaż lokalny podgląd</button>
                           )}
@@ -773,31 +788,25 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
               )}
             </div>
 
-            {(screenEnabled || remoteScreenActive) && (
-              <div className="meeting-screen-filmstrip" aria-label="Udostępniane ekrany">
+            {remoteScreenActive && (
+              <div className="meeting-screen-filmstrip" aria-label="Udostępniane ekrany uczestników">
+                <button
+                  type="button"
+                  className={'meeting-screen-tile '+(stageView==='remote'?'selected':'')}
+                  onClick={()=>setStageView('remote')}
+                >
+                  <div className="meeting-screen-tile-preview">
+                    <div className="meeting-remote-preview-host" ref={remotePreviewHostRef} />
+                  </div>
+                  <div>
+                    <strong>{(remoteScreenOwner || 'Uczestnik')+' udostępnia'}</strong>
+                    <span>Kliknij, aby pokazać na głównym ekranie</span>
+                  </div>
+                </button>
                 {screenEnabled && (
-                  <button type="button" className={'meeting-screen-tile '+(stageView==='self'?'selected':'')} onClick={()=>setStageView('self')}>
-                    <div className="meeting-screen-tile-preview meeting-screen-tile-live">
-                      <MonitorUp size={24}/>
-                      <span>LIVE</span>
-                    </div>
-                    <div><strong>Twoja transmisja</strong><span>{selectedSource?.name || 'Udostępnianie aktywne'}</span></div>
-                  </button>
-                )}
-
-                {remoteScreenActive && (
-                  <button
-                    type="button"
-                    className={'meeting-screen-tile '+(stageView==='remote'?'selected':'')}
-                    onClick={()=>setStageView('remote')}
-                  >
-                    <div className="meeting-screen-tile-preview">
-                      <div className="meeting-remote-preview-host" ref={remotePreviewHostRef} />
-                    </div>
-                    <div>
-                      <strong>{(remoteScreenOwner || 'Uczestnik')+' udostępnia'}</strong>
-                      <span>Kliknij, aby pokazać na głównym ekranie</span>
-                    </div>
+                  <button type="button" className="meeting-screen-self-return" onClick={()=>setStageView('self')}>
+                    <MonitorUp size={15}/>
+                    <span>Wróć do swojej transmisji</span>
                   </button>
                 )}
               </div>
@@ -813,6 +822,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
                   <span><Clock3 size={13}/><b>{formatMeetingElapsed(elapsedSeconds)}</b></span>
                   <span><UsersRound size={13}/><b>{participants.length}</b></span>
                   {participants.some((item)=>item.speaking&&!item.muted) && <span className="speaking"><i/> {participants.filter((item)=>item.speaking&&!item.muted)[0]?.name}</span>}
+                  <span className="quality"><Monitor size={13}/> 4K / 60</span>
                 </div>
                 <div className="meeting-local-share-actions">
                   {!/LockOn ServiceOS/i.test(selectedSource.name) && (
@@ -820,6 +830,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
                       {showSelfPreview?<EyeOff size={14}/>:<Eye size={14}/>} {showSelfPreview?'Ukryj podgląd':'Podgląd'}
                     </button>
                   )}
+                  <button onClick={toggleTheaterMode}>{theaterMode?<Minimize2 size={14}/>:<Maximize2 size={14}/>} {theaterMode?'Standardowy':'Kinowy'}</button>
                   <button onClick={()=>void openScreenPicker()}><RefreshCw size={14}/> Zmień źródło</button>
                   <button className="danger" onClick={()=>void stopScreenShare()}><MonitorX size={14}/> Zatrzymaj</button>
                 </div>
