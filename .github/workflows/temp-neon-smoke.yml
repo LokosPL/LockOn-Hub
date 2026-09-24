@@ -467,13 +467,14 @@ jobs:
           meeting_body="$(node - <<'NODE' "$starts_at" "$user_id"
           const [startsAt,userId]=process.argv.slice(2);
           process.stdout.write(JSON.stringify({
-            title:'CI szkolenie 1.0.0.20',
+            title:'CI szkolenie 1.0.0.22',
             description:'TEMP E2E spotkań ServiceOS',
             startsAt,
             plannedMinutes:30,
             maxParticipants:4,
             allowParticipantAudio:false,
             allowParticipantScreenShare:false,
+            emailNotificationsEnabled:true,
             audience:[{type:'USER',userId}]
           }));
           NODE
@@ -484,7 +485,7 @@ jobs:
           [ "$user_create_http" = "403" ] || { echo "::error::USER created a meeting: HTTP $user_create_http"; cat meeting-response.json; exit 1; }
 
           curl --silent --show-error --fail-with-body             --request POST "$TEMP_API_URL/meetings"             --header "Authorization: Bearer $owner_token"             --header "Content-Type: application/json"             --data "$meeting_body" > meeting-created.json
-          meeting_id="$(node -e "const d=require('./meeting-created.json');if(!d.meeting?.id)throw new Error('Meeting create failed');process.stdout.write(d.meeting.id)")"
+          meeting_id="$(node -e "const d=require('./meeting-created.json');if(!d.meeting?.id)throw new Error('Meeting create failed');if(d.meeting.emailNotificationsEnabled!==true)throw new Error('Explicit e-mail opt-in was not persisted');process.stdout.write(d.meeting.id)")"
 
           rescheduled_at="$(node -e "process.stdout.write(new Date(Date.now()+7200000).toISOString())")"
           reschedule_body="$(node -e "process.stdout.write(JSON.stringify({startsAt:process.argv[1]}))" "$rescheduled_at")"
