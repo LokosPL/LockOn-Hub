@@ -26,7 +26,7 @@ export function NextMeetingCard({ onOpen, onOpenMeeting }: Props) {
   }, []);
 
   const meeting = useMemo(() => meetings
-    .filter((item) => item.status === 'LIVE' || item.status === 'SCHEDULED')
+    .filter((item) => item.status === 'SCHEDULED' || (item.status === 'LIVE' && (item.canManage || item.registeredByMe)))
     .sort((a, b) => a.status === b.status
       ? new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
       : a.status === 'LIVE' ? -1 : 1)[0] ?? null, [meetings]);
