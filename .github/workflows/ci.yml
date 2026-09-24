@@ -8,6 +8,7 @@ on:
       - "electron/**"
       - "server/**"
       - "functions/**"
+      - "tests/**"
       - "database/migrations/**"
       - "RELEASE_VERSION"
       - "BUILD_VERSION"
@@ -31,6 +32,7 @@ on:
       - "electron/**"
       - "server/**"
       - "functions/**"
+      - "tests/**"
       - "database/migrations/**"
       - "RELEASE_VERSION"
       - "BUILD_VERSION"
@@ -319,6 +321,9 @@ jobs:
             "meeting_email_sender",
             "meeting_email_outbox",
             "queueMeetingEmailEvent",
+            "normalizeLiveKitUrls",
+            "canJoinMeeting(meeting.status)",
+            "getMeetingTransition(meeting.status,action)",
             "LIVEKIT_URL",
             "LIVEKIT_API_KEY",
             "LIVEKIT_API_SECRET"
@@ -334,7 +339,10 @@ jobs:
             "meetings.moderate",
             "attendanceAction",
             "Mikrofon zablokowany",
-            "Udostępnij ekran"
+            "Udostępnij ekran",
+            "Spróbuj ponownie",
+            "CONNECTION_ERROR_MESSAGE",
+            "room.connect(serverUrl, credentials.token"
           ) | ForEach-Object {
             if (-not $room.Contains($_)) { throw "Missing live meeting UI contract: $_" }
           }
@@ -342,11 +350,25 @@ jobs:
           $meetings = Get-Content src/components/MeetingsCard.tsx -Raw
           @(
             "Zaplanuj spotkanie",
-            "Jesteś zapisany ✓",
-            "meetingCountdown",
+            "✓ Jesteś zapisany",
+            "meetingScheduleHint",
+            "Termin minął · oczekiwanie na prowadzącego",
+            "Brak zaplanowanych spotkań.",
+            "Rozpocznij spotkanie",
+            "Dołącz do spotkania",
             "Frekwencja"
           ) | ForEach-Object {
             if (-not $meetings.Contains($_)) { throw "Missing meeting scheduling UX contract: $_" }
+          }
+
+          $index = Get-Content index.html -Raw
+          @("https://*.livekit.cloud","wss://*.livekit.cloud") | ForEach-Object {
+            if (-not $index.Contains($_)) { throw "Missing LiveKit CSP contract: $_" }
+          }
+
+          $electron = Get-Content electron/main.ts -Raw
+          @("permission === 'media'","isTrustedRendererUrl","setPermissionCheckHandler") | ForEach-Object {
+            if (-not $electron.Contains($_)) { throw "Missing trusted meeting media permission contract: $_" }
           }
 
           $settings = Get-Content src/pages/SettingsPage.tsx -Raw
@@ -426,14 +448,22 @@ jobs:
       - name: Typecheck renderer
         run: npm run typecheck
 
-      - name: Compile Electron
-        run: npm run build:electron
-
       - name: Build renderer
         run: npm run build:web
 
+      - name: Compile Electron
+        run: npm run build:electron
+
+      - name: Check central backend
+        run: |
+          node --check functions/meeting-policy.mjs
+          node --check functions/lockon-api.mjs
+
       - name: Build self-contained packaged API
         run: npm run build:server
+
+      - name: Run regression tests
+        run: npm test
 
       - name: Package smoke build
         run: npx electron-builder --win --dir

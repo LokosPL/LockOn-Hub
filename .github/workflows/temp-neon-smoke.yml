@@ -407,7 +407,8 @@ jobs:
           user_id="$(node -e "const d=require('./role-USER.json');process.stdout.write(d.user.id)")"
 
           api_code() {
-            local token="$1" method="$2" path="$3" body="${4:-{}}"
+            local token="$1" method="$2" path="$3" body="${4-}"
+            if [ -z "$body" ]; then body='{}'; fi
             curl --silent --show-error --output meeting-response.json --write-out '%{http_code}'               --request "$method" "$TEMP_API_URL$path"               --header "Authorization: Bearer $token"               --header "Content-Type: application/json"               --data "$body"
           }
 
@@ -447,6 +448,7 @@ jobs:
           node - <<'NODE' "$rescheduled_at"
           const d=require('./meeting-rescheduled.json'), expected=process.argv[2];
           if(d.meeting?.startsAt!==expected)throw new Error('Meeting reschedule did not persist exact startsAt');
+          if(d.meeting?.status!=='SCHEDULED')throw new Error('Reschedule changed backend status away from SCHEDULED');
           if(!d.email||Number(d.email.eligible)<1||Number(d.email.queued)<1)throw new Error('Meeting reschedule did not queue a fresh invitation event');
           NODE
 
@@ -466,6 +468,74 @@ jobs:
 
           curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/register" --header "Authorization: Bearer $user_token" --header "Content-Type: application/json" --data '{}' > /dev/null
 
+          prestart_join_http="$(api_code "$user_token" POST "/meetings/$meeting_id/join-token" '{}')"
+          [ "$prestart_join_http" = "409" ] || { echo "::error::join-token was available before LIVE: HTTP $prestart_join_http"; cat meeting-response.json; exit 1; }
+          node -e "const d=require('./meeting-response.json');if(d.error!=='MEETING_NOT_LIVE')throw new Error('Pre-start join did not fail as MEETING_NOT_LIVE')"
+
+          prestart_attendance_http="$(api_code "$user_token" POST "/meetings/$meeting_id/attendance" '{"action":"JOIN"}')"
+          [ "$prestart_attendance_http" = "409" ] || { echo "::error::attendance JOIN was available before LIVE: HTTP $prestart_attendance_http"; cat meeting-response.json; exit 1; }
+
+          edit_body="$(node - <<'NODE' "$rescheduled_at" "$user_id"
+          const [startsAt,userId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            title:'CI szkolenie lifecycle',
+            description:'TEMP E2E pełnej edycji spotkania',
+            startsAt,
+            plannedMinutes:45,
+            maxParticipants:6,
+            allowParticipantAudio:false,
+            allowParticipantScreenShare:false,
+            audience:[{type:'USER',userId}]
+          }));
+          NODE
+          )"
+          curl --silent --show-error --fail-with-body --request PATCH "$TEMP_API_URL/meetings/$meeting_id" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data "$edit_body" > meeting-edited.json
+          node - <<'NODE'
+          const d=require('./meeting-edited.json'),m=d.meeting;
+          if(m?.status!=='SCHEDULED'||m?.title!=='CI szkolenie lifecycle'||m?.plannedMinutes!==45||m?.maxParticipants!==6)throw new Error('Full scheduled meeting edit failed or changed lifecycle status');
+          NODE
+
+          # Regressja: sam upływ startsAt nie może uruchomić spotkania.
+          past_starts_at="$(node -e "process.stdout.write(new Date(Date.now()-5*60000).toISOString())")"
+          past_body="$(node - <<'NODE' "$past_starts_at" "$user_id"
+          const [startsAt,userId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({
+            title:'CI spotkanie po terminie',
+            description:'Musi pozostać SCHEDULED do jawnego startu hosta',
+            startsAt,
+            plannedMinutes:20,
+            maxParticipants:4,
+            allowParticipantAudio:false,
+            allowParticipantScreenShare:false,
+            audience:[{type:'USER',userId}]
+          }));
+          NODE
+          )"
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data "$past_body" > meeting-past-created.json
+          past_meeting_id="$(node -e "const d=require('./meeting-past-created.json');if(d.meeting?.status!=='SCHEDULED')throw new Error('Past startsAt auto-promoted meeting');process.stdout.write(d.meeting.id)")"
+          curl --silent --show-error --fail-with-body "$TEMP_API_URL/meetings" --header "Authorization: Bearer $owner_token" > owner-meetings-after-past.json
+          node - <<'NODE' "$past_meeting_id"
+          const d=require('./owner-meetings-after-past.json'),id=process.argv[2],m=d.meetings?.find(x=>x.id===id);
+          if(!m||m.status!=='SCHEDULED')throw new Error('SCHEDULED + startsAt <= now did not remain SCHEDULED');
+          NODE
+          past_join_http="$(api_code "$user_token" POST "/meetings/$past_meeting_id/join-token" '{}')"
+          [ "$past_join_http" = "409" ] || { echo "::error::Past SCHEDULED meeting exposed join-token: HTTP $past_join_http"; cat meeting-response.json; exit 1; }
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$past_meeting_id/cancel" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > meeting-past-cancelled.json
+          node -e "const d=require('./meeting-past-cancelled.json');if(d.meeting?.status!=='CANCELLED')throw new Error('Meeting cancellation failed')"
+          cancelled_start_http="$(api_code "$owner_token" POST "/meetings/$past_meeting_id/start" '{}')"
+          [ "$cancelled_start_http" = "409" ] || { echo "::error::Cancelled meeting could start: HTTP $cancelled_start_http"; cat meeting-response.json; exit 1; }
+
+          # BOSS zachowuje prawo tworzenia spotkań.
+          boss_starts_at="$(node -e "process.stdout.write(new Date(Date.now()+10800000).toISOString())")"
+          boss_body="$(node - <<'NODE' "$boss_starts_at" "$user_id"
+          const [startsAt,userId]=process.argv.slice(2);
+          process.stdout.write(JSON.stringify({title:'CI BOSS meeting',description:'role smoke',startsAt,plannedMinutes:20,maxParticipants:4,allowParticipantAudio:false,allowParticipantScreenShare:false,audience:[{type:'USER',userId}]}));
+          NODE
+          )"
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings" --header "Authorization: Bearer $boss_token" --header "Content-Type: application/json" --data "$boss_body" > meeting-boss-created.json
+          boss_meeting_id="$(node -e "const d=require('./meeting-boss-created.json');if(d.meeting?.status!=='SCHEDULED')throw new Error('BOSS could not create scheduled meeting');process.stdout.write(d.meeting.id)")"
+          curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$boss_meeting_id/cancel" --header "Authorization: Bearer $boss_token" --header "Content-Type: application/json" --data '{}' > /dev/null
+
           user_start_http="$(api_code "$user_token" POST "/meetings/$meeting_id/start" '{}')"
           [ "$user_start_http" = "403" ] || { echo "::error::USER could start meeting: HTTP $user_start_http"; cat meeting-response.json; exit 1; }
 
@@ -478,8 +548,13 @@ jobs:
           node - <<'NODE'
           const d=require('./user-join-token.json');
           if(!d.token||!d.serverUrl)throw new Error('Participant join token missing');
+          if(!/^wss:\/\/[^/]+\.livekit\.cloud$/i.test(d.serverUrl))throw new Error('LiveKit serverUrl is not canonical wss://*.livekit.cloud');
           if(d.canManage!==false)throw new Error('USER got host privileges');
           if(d.permissions?.microphone!==false||d.permissions?.screenShare!==false)throw new Error('Meeting publish restrictions were not enforced');
+          const payload=JSON.parse(Buffer.from(d.token.split('.')[1],'base64url').toString('utf8'));
+          if(payload.sub!==d.identity)throw new Error('LiveKit token identity mismatch');
+          if(payload.video?.room!==d.roomName||payload.video?.roomJoin!==true||payload.video?.canSubscribe!==true)throw new Error('LiveKit room grant mismatch');
+          if(!payload.exp||payload.exp*1000<=Date.now())throw new Error('LiveKit token is already expired');
           NODE
 
           curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/join-token" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > host-join-token.json
@@ -504,8 +579,10 @@ jobs:
 
           curl --silent --show-error --fail-with-body --request POST "$TEMP_API_URL/meetings/$meeting_id/end" --header "Authorization: Bearer $owner_token" --header "Content-Type: application/json" --data '{}' > meeting-end.json
           node -e "const d=require('./meeting-end.json');if(d.meeting?.status!=='ENDED')throw new Error('Meeting did not enter ENDED')"
+          ended_join_http="$(api_code "$user_token" POST "/meetings/$meeting_id/join-token" '{}')"
+          [ "$ended_join_http" = "409" ] || { echo "::error::ENDED meeting exposed join-token: HTTP $ended_join_http"; cat meeting-response.json; exit 1; }
 
-          echo "Meetings TEMP E2E passed: roles, visibility, reschedule mail event, register/unregister, host/participant grants, attendance, end."
+          echo "Meetings TEMP E2E passed: backend lifecycle source-of-truth, OWNER/BOSS/USER roles, full edit/reschedule, pre/post-live join gates, canonical LiveKit token/grants, attendance, cancellation and end."
 
       - name: Temp USER front-desk service E2E
         shell: bash

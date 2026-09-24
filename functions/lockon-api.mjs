@@ -6,6 +6,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import pdfMake from 'pdfmake/build/pdfmake.js';
 import pdfFonts from 'pdfmake/build/vfs_fonts.js';
 import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
+import { buildLiveKitGrant, canJoinMeeting, getMeetingTransition, normalizeLiveKitUrls, resolveMeetingPublishPermissions } from './meeting-policy.mjs';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
 pool.on('error', (error) => console.error('[postgres idle client]', error));
@@ -24,14 +25,25 @@ const SITE_ORIGINS = new Set(
 const GMAIL_TOKEN_KEY = String(process.env.LOCKON_GMAIL_TOKEN_KEY || '');
 const PUBLIC_PORTAL_URL = String(process.env.LOCKON_SITE_ORIGIN || 'https://app.serviceos.pl').trim().replace(/\/$/,'') || 'https://app.serviceos.pl';
 const ALLOW_DEV_LOGIN = process.env.LOCKON_ALLOW_DEV_LOGIN === '1';
-const LIVEKIT_URL = String(process.env.LIVEKIT_URL || '').trim().replace(/\/$/,'');
+const LIVEKIT_URL = String(process.env.LIVEKIT_URL || '').trim();
 const LIVEKIT_API_KEY = String(process.env.LIVEKIT_API_KEY || '').trim();
 const LIVEKIT_API_SECRET = String(process.env.LIVEKIT_API_SECRET || '').trim();
-const LIVEKIT_SERVER_URL = LIVEKIT_URL.replace(/^wss:/i,'https:').replace(/^ws:/i,'http:');
-const LIVEKIT_CLIENT_URL = LIVEKIT_URL.replace(/^https:/i,'wss:').replace(/^http:/i,'ws:');
-const livekitConfigured = () => Boolean(LIVEKIT_SERVER_URL && LIVEKIT_API_KEY && LIVEKIT_API_SECRET);
+let LIVEKIT_CONFIG = null;
+let LIVEKIT_CONFIG_ERROR = '';
+try {
+  LIVEKIT_CONFIG = normalizeLiveKitUrls(LIVEKIT_URL);
+} catch (error) {
+  LIVEKIT_CONFIG_ERROR = error instanceof Error ? error.message : 'Nieprawidłowa konfiguracja LIVEKIT_URL.';
+  console.error('[livekit config]', { message:LIVEKIT_CONFIG_ERROR });
+}
+const LIVEKIT_SERVER_URL = LIVEKIT_CONFIG?.serverUrl || '';
+const LIVEKIT_CLIENT_URL = LIVEKIT_CONFIG?.clientUrl || '';
+const livekitConfigured = () => Boolean(LIVEKIT_CONFIG && LIVEKIT_API_KEY && LIVEKIT_API_SECRET);
 const livekitRooms = () => {
-  if (!livekitConfigured()) throw Object.assign(new Error('Usługa spotkań audio nie jest jeszcze skonfigurowana.'),{status:503,code:'LIVEKIT_NOT_CONFIGURED'});
+  if (!livekitConfigured()) {
+    if (LIVEKIT_CONFIG_ERROR) console.error('[livekit unavailable]', { message:LIVEKIT_CONFIG_ERROR });
+    throw Object.assign(new Error('Usługa spotkań audio nie jest jeszcze skonfigurowana.'),{status:503,code:'LIVEKIT_NOT_CONFIGURED'});
+  }
   return new RoomServiceClient(LIVEKIT_SERVER_URL,LIVEKIT_API_KEY,LIVEKIT_API_SECRET);
 };
 
@@ -646,16 +658,50 @@ const meetingEvent = async (meetingId, actorUserId, eventType, metadata={}) =>
   ]);
 
 const meetingRoomName = (meetingId) => 'lockon-' + String(meetingId).replace(/[^A-Za-z0-9_-]/g,'').slice(0,100);
+const closeLiveKitRoom = async (meetingId) => {
+  if(!livekitConfigured())return {closed:false,reason:'not-configured'};
+  const room=meetingRoomName(meetingId),client=livekitRooms();
+  try{
+    await client.deleteRoom(room);
+    return {closed:true,mode:'delete-room'};
+  }catch(error){
+    console.error('[livekit room close]',{
+      meetingId,
+      roomName:room,
+      stage:'deleteRoom',
+      message:error instanceof Error?error.message:String(error)
+    });
+  }
+  try{
+    const participants=await client.listParticipants(room);
+    const results=await Promise.allSettled(participants.map((participant)=>client.removeParticipant(room,participant.identity)));
+    const failed=results.filter((item)=>item.status==='rejected').length;
+    if(failed)console.error('[livekit room close]',{meetingId,roomName:room,stage:'removeParticipants',failed,total:participants.length});
+    return {closed:failed===0,mode:'remove-participants',participants:participants.length,failed};
+  }catch(error){
+    console.error('[livekit room close]',{
+      meetingId,
+      roomName:room,
+      stage:'listParticipants',
+      message:error instanceof Error?error.message:String(error)
+    });
+    return {closed:false,reason:'livekit-error'};
+  }
+};
 const meetingParticipantIdentity = (meetingId,userId) =>
   'p_' + crypto.createHash('sha256').update(meetingId+':'+userId).digest('hex').slice(0,28);
 
 const meetingPublishSources = (meeting,user,isManager,control=null) => {
-  if (isManager) return [TrackSource.MICROPHONE,TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO];
+  const permissions=resolveMeetingPublishPermissions({
+    isManager,
+    allowParticipantAudio:meeting.allow_participant_audio===true,
+    allowParticipantScreenShare:meeting.allow_participant_screen_share===true,
+    microphoneAllowed:control?.microphone_allowed ?? null
+  });
   const sources=[];
-  const microphoneAllowed=control?.microphone_allowed===true || (control?.microphone_allowed!==false && meeting.allow_participant_audio===true);
-  if(microphoneAllowed)sources.push(TrackSource.MICROPHONE);
-  if(meeting.allow_participant_screen_share===true)sources.push(TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO);
-  return sources;
+  if(permissions.microphone)sources.push(TrackSource.MICROPHONE);
+  if(permissions.screenShare)sources.push(TrackSource.SCREEN_SHARE,TrackSource.SCREEN_SHARE_AUDIO);
+  return { sources, permissions };
 };
 
 const createMeetingJoinToken = async (meeting,user) => {
@@ -663,7 +709,7 @@ const createMeetingJoinToken = async (meeting,user) => {
   const isManager=meetingCanManage(user,meeting);
   const control=isManager?null:(await q("SELECT microphone_allowed,removed_at FROM meeting_participant_controls WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meeting.id,user.id])).rows[0]||null;
   if(control?.removed_at)throw Object.assign(new Error('Prowadzący usunął Cię z tego spotkania.'),{status:403,code:'MEETING_REMOVED'});
-  const sources=meetingPublishSources(meeting,user,isManager,control);
+  const {sources,permissions}=meetingPublishSources(meeting,user,isManager,control);
   const room=meetingRoomName(meeting.id);
   const identity=meetingParticipantIdentity(meeting.id,user.id);
   const token=new AccessToken(LIVEKIT_API_KEY,LIVEKIT_API_SECRET,{
@@ -672,24 +718,25 @@ const createMeetingJoinToken = async (meeting,user) => {
     metadata:JSON.stringify({serviceOsUserId:user.id,role:user.role_code||null,meetingId:meeting.id,manager:isManager}),
     ttl:'10m'
   });
-  token.addGrant({
-    roomJoin:true,
-    room,
-    canSubscribe:true,
-    canPublish:sources.length>0,
-    canPublishData:false,
-    canPublishSources:sources
+  token.addGrant(buildLiveKitGrant(room,sources));
+  const jwt=await token.toJwt();
+  console.info('[meeting join-token]', {
+    meetingId:meeting.id,
+    roomName:room,
+    identity,
+    livekitHost:LIVEKIT_CONFIG?.hostname || null,
+    livekitCloud:LIVEKIT_CONFIG?.isCloud === true,
+    microphone:permissions.microphone,
+    screenShare:permissions.screenShare,
+    manager:isManager
   });
   return {
     serverUrl:LIVEKIT_CLIENT_URL,
-    token:await token.toJwt(),
+    token:jwt,
     roomName:room,
     identity,
     canManage:isManager,
-    permissions:{
-      microphone:sources.includes(TrackSource.MICROPHONE),
-      screenShare:sources.includes(TrackSource.SCREEN_SHARE)
-    }
+    permissions
   };
 };
 
@@ -4476,26 +4523,117 @@ const route = async (request) => {
     const meeting=await loadMeeting(meetingId);
     if(!meeting)return json(request,{error:'NOT_FOUND'},404);
     if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zmieniać tego spotkania.'},403);
-    if(meeting.status!=='SCHEDULED')return json(request,{error:'MEETING_STATE',message:'Termin można zmienić tylko przed rozpoczęciem spotkania.'},409);
+    if(meeting.status!=='SCHEDULED')return json(request,{error:'MEETING_STATE',message:'Spotkanie można edytować tylko przed rozpoczęciem.'},409);
+
     const body=await readJson(request);
-    const startsAtRaw=cleanText(body.startsAt,80),startsAt=new Date(startsAtRaw);
-    if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy nowy termin spotkania.'},400);
+    const title=body.title===undefined?meeting.title:cleanText(body.title,120);
+    const description=body.description===undefined?(meeting.description||''):cleanText(body.description,2000);
+    if(title.length<3)return json(request,{error:'MEETING_TITLE',message:'Tytuł spotkania musi mieć co najmniej 3 znaki.'},400);
+
+    const startsAtRaw=body.startsAt===undefined?new Date(meeting.starts_at).toISOString():cleanText(body.startsAt,80);
+    const startsAt=new Date(startsAtRaw);
+    if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy termin spotkania.'},400);
     if(startsAt.getTime()<Date.now()-10*60_000)return json(request,{error:'MEETING_DATE',message:'Nie można ustawić spotkania w przeszłości.'},400);
+
+    const plannedMinutes=body.plannedMinutes===undefined
+      ? Number(meeting.planned_minutes||60)
+      : Math.max(10,Math.min(480,Math.trunc(Number(body.plannedMinutes)||0)));
+    const maxParticipants=body.maxParticipants===undefined
+      ? Number(meeting.max_participants||50)
+      : Math.max(2,Math.min(500,Math.trunc(Number(body.maxParticipants)||0)));
+    if(body.plannedMinutes!==undefined&&(!Number.isFinite(Number(body.plannedMinutes))||Number(body.plannedMinutes)<10||Number(body.plannedMinutes)>480)){
+      return json(request,{error:'MEETING_DURATION',message:'Przewidywany czas musi mieścić się w zakresie 10–480 minut.'},400);
+    }
+    if(body.maxParticipants!==undefined&&(!Number.isFinite(Number(body.maxParticipants))||Number(body.maxParticipants)<2||Number(body.maxParticipants)>500)){
+      return json(request,{error:'MEETING_LIMIT',message:'Limit uczestników musi mieścić się w zakresie 2–500.'},400);
+    }
+
+    const allowParticipantAudio=body.allowParticipantAudio===undefined?meeting.allow_participant_audio===true:body.allowParticipantAudio===true;
+    const allowParticipantScreenShare=body.allowParticipantScreenShare===undefined?meeting.allow_participant_screen_share===true:body.allowParticipantScreenShare===true;
+
+    let audience=null;
+    if(body.audience!==undefined){
+      const sourceAudience=Array.isArray(body.audience)&&body.audience.length?body.audience:[{type:'ALL'}];
+      audience=[];
+      const seen=new Set();
+      for(const raw of sourceAudience.slice(0,100)){
+        const type=String(raw?.type||'').toUpperCase();
+        if(type==='ALL'){
+          if(!seen.has('ALL')){seen.add('ALL');audience.push({type:'ALL',pointId:null,userId:null});}
+        }else if(type==='POINT'){
+          const pointId=cleanText(raw?.pointId,80);if(!pointId)continue;
+          const key='POINT:'+pointId;if(!seen.has(key)){seen.add(key);audience.push({type:'POINT',pointId,userId:null});}
+        }else if(type==='USER'){
+          const userId=cleanText(raw?.userId,120);if(!userId)continue;
+          const key='USER:'+userId;if(!seen.has(key)){seen.add(key);audience.push({type:'USER',pointId:null,userId});}
+        }
+      }
+      if(!audience.length)audience.push({type:'ALL',pointId:null,userId:null});
+      if(audience.some((item)=>item.type==='ALL'))audience.splice(0,audience.length,{type:'ALL',pointId:null,userId:null});
+    }
+
     const oldStartsAt=new Date(meeting.starts_at).toISOString();
     const newStartsAt=startsAt.toISOString();
-    if(oldStartsAt===newStartsAt){
-      const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
-      return json(request,{ok:true,meeting:view,email:{eligible:0,queued:0,unchanged:true}});
+    const scheduleChanged=oldStartsAt!==newStartsAt;
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      const locked=(await client.query("SELECT status,(SELECT count(*)::int FROM meeting_registrations r WHERE r.meeting_id=meetings.id AND r.status='REGISTERED') AS registered_count FROM meetings WHERE id=$1 FOR UPDATE",[meetingId])).rows[0];
+      if(!locked)throw Object.assign(new Error('Spotkanie już nie istnieje.'),{status:404});
+      if(locked.status!=='SCHEDULED')throw Object.assign(new Error('Stan spotkania zmienił się w międzyczasie.'),{status:409,code:'MEETING_STATE_CHANGED'});
+      if(Number(locked.registered_count||0)>maxParticipants)throw Object.assign(new Error('Nowy limit jest mniejszy niż liczba zapisanych uczestników.'),{status:409,code:'MEETING_LIMIT_REGISTERED'});
+
+      if(audience){
+        for(const item of audience){
+          if(item.type==='POINT'){
+            const exists=(await client.query("SELECT id FROM points WHERE id=$1 AND active=true LIMIT 1",[item.pointId])).rows[0];
+            if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego punktu dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_POINT'});
+          }
+          if(item.type==='USER'){
+            const exists=(await client.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' AND blocked_at IS NULL LIMIT 1",[item.userId])).rows[0];
+            if(!exists)throw Object.assign(new Error('Nie znaleziono aktywnego użytkownika dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_USER'});
+          }
+        }
+      }
+
+      await client.query(
+        "UPDATE meetings SET title=$2,description=NULLIF($3,''),starts_at=$4,planned_minutes=$5,max_participants=$6,allow_participant_audio=$7,allow_participant_screen_share=$8,updated_at=now() WHERE id=$1 AND status='SCHEDULED'",
+        [meetingId,title,description,newStartsAt,plannedMinutes,maxParticipants,allowParticipantAudio,allowParticipantScreenShare]
+      );
+      if(audience){
+        await client.query("DELETE FROM meeting_audience WHERE meeting_id=$1",[meetingId]);
+        for(const item of audience){
+          await client.query(
+            "INSERT INTO meeting_audience(id,meeting_id,audience_type,point_id,user_id) VALUES($1,$2,$3,$4,$5)",
+            [makeId('mau'),meetingId,item.type,item.pointId,item.userId]
+          );
+        }
+      }
+      await client.query(
+        "INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,'EDITED',$4::jsonb)",
+        [makeId('mte'),meetingId,u.id,JSON.stringify({scheduleChanged,titleChanged:title!==meeting.title,audienceChanged:Boolean(audience),plannedMinutes,maxParticipants,allowParticipantAudio,allowParticipantScreenShare})]
+      );
+      if(scheduleChanged){
+        await client.query(
+          "INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,'RESCHEDULED',$4::jsonb)",
+          [makeId('mte'),meetingId,u.id,JSON.stringify({from:oldStartsAt,to:newStartsAt})]
+        );
+      }
+      await client.query('COMMIT');
+    }catch(error){
+      try{await client.query('ROLLBACK');}catch{}
+      throw error;
+    }finally{client.release();}
+
+    await audit(session,'MEETING_UPDATED','meeting',meetingId,null,{scheduleChanged,from:oldStartsAt,to:newStartsAt,plannedMinutes,maxParticipants,audienceChanged:Boolean(audience)});
+    if(scheduleChanged){
+      await audit(session,'MEETING_RESCHEDULED','meeting',meetingId,null,{from:oldStartsAt,to:newStartsAt});
     }
-    const updated=(await q(
-      "UPDATE meetings SET starts_at=$2,updated_at=now() WHERE id=$1 AND status='SCHEDULED' RETURNING id",
-      [meetingId,newStartsAt]
-    )).rows[0];
-    if(!updated)return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
-    await meetingEvent(meetingId,u.id,'RESCHEDULED',{from:oldStartsAt,to:newStartsAt});
-    await audit(session,'MEETING_RESCHEDULED','meeting',meetingId,null,{from:oldStartsAt,to:newStartsAt});
-    const email=await queueMeetingEmailEvent(meetingId,'RESCHEDULED:'+Date.now()+':'+crypto.randomBytes(4).toString('hex'));
-    await meetingEvent(meetingId,u.id,'EMAIL_RESCHEDULE_QUEUED',email);
+    let email={eligible:0,queued:0,unchanged:true};
+    if(scheduleChanged){
+      email=await queueMeetingEmailEvent(meetingId,'RESCHEDULED:'+Date.now()+':'+crypto.randomBytes(4).toString('hex'));
+      await meetingEvent(meetingId,u.id,'EMAIL_RESCHEDULE_QUEUED',email);
+    }
     const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
     return json(request,{ok:true,meeting:view,email});
   }
@@ -4505,7 +4643,7 @@ const route = async (request) => {
     const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingJoinToken[1],120);
     const meeting=await loadMeeting(meetingId);
     if(!meeting)return json(request,{error:'NOT_FOUND'},404);
-    if(meeting.status!=='LIVE')return json(request,{error:'MEETING_NOT_LIVE',message:'Do pokoju można dołączyć dopiero po rozpoczęciu spotkania.'},409);
+    if(!canJoinMeeting(meeting.status))return json(request,{error:'MEETING_NOT_LIVE',message:'Do pokoju można dołączyć dopiero po rozpoczęciu spotkania.'},409);
     if(!await meetingEligible(u,meetingId)&&!meetingCanManage(u,meeting))return json(request,{error:'MEETING_NOT_ELIGIBLE',message:'To spotkanie nie jest przeznaczone dla Twojego konta.'},403);
     if(!meetingCanManage(u,meeting)){
       const registration=(await q("SELECT status FROM meeting_registrations WHERE meeting_id=$1 AND user_id=$2 LIMIT 1",[meetingId,u.id])).rows[0];
@@ -4523,6 +4661,7 @@ const route = async (request) => {
     if(!meeting)return json(request,{error:'NOT_FOUND'},404);
     if(!await meetingEligible(u,meetingId)&&!meetingCanManage(u,meeting))return json(request,{error:'MEETING_NOT_ELIGIBLE'},403);
     const body=await readJson(request),action=String(body.action||'').toUpperCase();
+    if(action==='JOIN'&&!canJoinMeeting(meeting.status))return json(request,{error:'MEETING_NOT_LIVE',message:'Obecność można rozpocząć dopiero po uruchomieniu spotkania.'},409);
     if(action==='JOIN'){
       await q(
         "INSERT INTO meeting_attendance(meeting_id,user_id,first_joined_at,last_joined_at,join_count,updated_at) VALUES($1,$2,now(),now(),1,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET first_joined_at=COALESCE(meeting_attendance.first_joined_at,now()),last_joined_at=now(),join_count=meeting_attendance.join_count+1,updated_at=now()",
@@ -4672,9 +4811,8 @@ const route = async (request) => {
     }
 
     if(!meetingCanManage(u,meeting))return json(request,{error:'MEETING_MANAGE_FORBIDDEN',message:'Nie możesz zarządzać tym spotkaniem.'},403);
-    const target=action==='start'?'LIVE':action==='end'?'ENDED':'CANCELLED';
-    const allowed=action==='start'?['SCHEDULED']:action==='end'?['LIVE']:['SCHEDULED','LIVE'];
-    if(!allowed.includes(meeting.status))return json(request,{error:'MEETING_STATE',message:'Ta zmiana etapu spotkania nie jest teraz dostępna.'},409);
+    const target=getMeetingTransition(meeting.status,action);
+    if(!target)return json(request,{error:'MEETING_STATE',message:'Ta zmiana etapu spotkania nie jest teraz dostępna.'},409);
     if(action==='start'){
       const client=livekitRooms();
       const room=meetingRoomName(meetingId);
@@ -4686,8 +4824,8 @@ const route = async (request) => {
       [meetingId,target,meeting.status]
     );
     if(!result.rows[0])return json(request,{error:'MEETING_STATE_CHANGED',message:'Stan spotkania zmienił się w międzyczasie.'},409);
-    if((target==='ENDED'||target==='CANCELLED')&&livekitConfigured()){
-      await livekitRooms().deleteRoom(meetingRoomName(meetingId)).catch(()=>undefined);
+    if(target==='ENDED'||(target==='CANCELLED'&&meeting.status==='LIVE')){
+      await closeLiveKitRoom(meetingId);
     }
     await meetingEvent(meetingId,u.id,target,{});
     if(target==='ENDED'||target==='CANCELLED'){
