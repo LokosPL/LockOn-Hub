@@ -609,6 +609,13 @@ const meetingTargetUserInScope = async (user, scope, targetUserId) => {
   )).rows[0]||null;
 };
 
+const scopeMeetingAudience = (audience, scope) => {
+  if(!audience.some((item)=>item.type==='ALL'))return audience;
+  if(scope.global)return [{type:'ALL',pointId:null,userId:null}];
+  if(!scope.pointIds.length)throw Object.assign(new Error('Koordynator nie ma przypisanego aktywnego punktu dla odbiorców spotkania.'),{status:409,code:'MEETING_AUDIENCE_SCOPE'});
+  return scope.pointIds.map((pointId)=>({type:'POINT',pointId,userId:null}));
+};
+
 const meetingCanManage = (user, meeting) =>
   MEETING_GLOBAL_MANAGE_ROLES.has(user.role_code) ||
   meeting?.created_by_user_id === user.id ||
@@ -4499,7 +4506,8 @@ const route = async (request) => {
       }
     }
     if(!audience.length)audience.push({type:'ALL',pointId:null,userId:null});
-    if(audience.some((item)=>item.type==='ALL'))audience.splice(0,audience.length,{type:'ALL',pointId:null,userId:null});
+    const scopedAudience=scopeMeetingAudience(audience,scope);
+    audience.splice(0,audience.length,...scopedAudience);
 
     const meetingId=makeId('mtg');
     const client=await pool.connect();
@@ -4595,7 +4603,8 @@ const route = async (request) => {
         }
       }
       if(!audience.length)audience.push({type:'ALL',pointId:null,userId:null});
-      if(audience.some((item)=>item.type==='ALL'))audience.splice(0,audience.length,{type:'ALL',pointId:null,userId:null});
+      const scopedAudience=scopeMeetingAudience(audience,scope);
+      audience.splice(0,audience.length,...scopedAudience);
     }
 
     const oldStartsAt=new Date(meeting.starts_at).toISOString();
