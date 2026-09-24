@@ -235,7 +235,18 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.build_version }}
         run: |
           $highlights = ""
-          if ($env:VERSION -eq "1.0.1.22") {
+          if ($env:VERSION -eq "1.0.2.22") {
+            $highlights = @"
+
+          Najważniejsze zmiany:
+          - Start ma nowy, spójny panel Spotkania i szkolenia z osobnym stanem szkoleń oraz aktywnego spotkania.
+          - Serwisant nie widzi akcji zarządzających przeznaczonych dla OWNER/BOSS/COORDINATOR.
+          - Pokój spotkania jest większy i prostszy; własny ekran jest pokazywany dopiero po faktycznym rozpoczęciu udostępniania.
+          - Screen share priorytetyzuje wysoką rozdzielczość i czytelność obrazu do 4K / 30 fps przy 8 Mb/s.
+          - Naprawiono nakładanie natywnej przeglądarki po przejściu do Serwisu podczas aktywnego spotkania.
+          - Persistent meeting dock nadal utrzymuje czat i podniesione ręce dostępne podczas pracy w innych modułach.
+          "@
+          } elseif ($env:VERSION -eq "1.0.1.22") {
             $highlights = @"
 
           Najważniejsze zmiany:
