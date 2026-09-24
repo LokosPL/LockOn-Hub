@@ -641,6 +641,9 @@ const meetingView = (row, user) => ({
   maxParticipants:Number(row.max_participants||50),
   allowParticipantAudio:row.allow_participant_audio===true,
   allowParticipantScreenShare:row.allow_participant_screen_share===true,
+  emailNotificationsEnabled:row.email_notifications_enabled===true,
+  meetingUrl:PUBLIC_PORTAL_URL+'/?spotkanie='+encodeURIComponent(row.id),
+  desktopDeepLink:'lockon-serviceos://meeting/'+encodeURIComponent(row.id),
   registeredCount:Number(row.registered_count||0),
   registeredByMe:row.registered_by_me===true,
   canManage:meetingCanManage(user,row),
@@ -2706,6 +2709,8 @@ const meetingEmailRecipients = async (meetingId) => {
 };
 
 const queueMeetingEmailEvent = async (meetingId,eventKey) => {
+  const preference=(await q("SELECT email_notifications_enabled FROM meetings WHERE id=$1 LIMIT 1",[meetingId])).rows[0];
+  if(preference?.email_notifications_enabled!==true)return {eligible:0,queued:0,disabled:true};
   const recipients=await meetingEmailRecipients(meetingId);
   let queued=0;
   for(const recipient of recipients){
@@ -2734,8 +2739,10 @@ const meetingEmailContent = (meeting,eventKey) => {
     : changed
       ? 'Termin spotkania został zmieniony.'
       : 'Zapraszamy na wewnętrzne spotkanie zespołu w LockOn ServiceOS.';
-  const action=cancelled?'Nie musisz nic robić.':'Otwórz ServiceOS i zapisz się na spotkanie na ekranie Start.';
-  const text=[intro,'','Spotkanie: '+title,'Termin: '+starts,description?('Opis: '+description):'', '',action].filter((line)=>line!==null).join('\n');
+  const meetingUrl=PUBLIC_PORTAL_URL+'/?spotkanie='+encodeURIComponent(meeting.meeting_id||meeting.id);
+  const action=cancelled?'Zobacz szczegóły spotkania.':'Otwórz spotkanie w ServiceOS. Spotkanie rozpoczyna prowadzący.';
+  const cta=cancelled?'ZOBACZ SZCZEGÓŁY':(meeting.status==='LIVE'||meeting.meeting_status==='LIVE'?'DOŁĄCZ DO SPOTKANIA':'OTWÓRZ SPOTKANIE W SERVICEOS');
+  const text=[intro,'','Spotkanie: '+title,'Termin: '+starts,description?('Opis: '+description):'', '',action,meetingUrl].filter((line)=>line!==null).join('\n');
   const html='<!doctype html><html lang="pl"><body style="margin:0;background:#0b0e12;color:#edf1f4;font-family:Arial,sans-serif">'+
     '<div style="max-width:600px;margin:auto;padding:30px 16px"><div style="font-size:13px;font-weight:850">LockOn <span style="color:#7e8994">ServiceOS</span></div>'+
     '<div style="margin-top:18px;padding:24px;border:1px solid #293039;border-radius:18px;background:#12171d">'+
@@ -2744,13 +2751,14 @@ const meetingEmailContent = (meeting,eventKey) => {
     '<p style="font-size:14px;color:#d9dfe5"><strong>'+escapeHtml(starts)+'</strong></p>'+
     (description?'<p style="font-size:13px;color:#aeb8c1;line-height:1.55">'+escapeHtml(description)+'</p>':'')+
     '<p style="margin-top:20px;font-size:13px;color:#d9dfe5">'+escapeHtml(action)+'</p>'+
+    '<a href="'+escapeHtml(meetingUrl)+'" style="display:inline-block;margin-top:14px;padding:12px 18px;border-radius:11px;background:#ff7a45;color:#111;text-decoration:none;font-size:12px;font-weight:900;letter-spacing:.035em">'+escapeHtml(cta)+'</a>'+
     '</div><p style="font-size:10px;color:#66717b;text-align:center">Wiadomość organizacyjna LockOn ServiceOS.</p></div></body></html>';
   return {subject,text,html};
 };
 
 const processMeetingEmail = async (outboxId) => {
   const item=(await q(
-    "SELECT o.*,m.title,m.description,m.starts_at,m.status AS meeting_status FROM meeting_email_outbox o JOIN meetings m ON m.id=o.meeting_id WHERE o.id=$1 LIMIT 1",
+    "SELECT o.*,m.title,m.description,m.starts_at,m.status AS meeting_status,m.email_notifications_enabled FROM meeting_email_outbox o JOIN meetings m ON m.id=o.meeting_id WHERE o.id=$1 LIMIT 1",
     [outboxId]
   )).rows[0];
   if(!item)return {sent:false,reason:'NOT_FOUND'};
@@ -4266,6 +4274,8 @@ const route = async (request) => {
         deleted[table]=Number(result.rowCount||0);
       };
       await remove('meeting_email_outbox');
+      await remove('meeting_chat_messages');
+      await remove('meeting_hand_raises');
       await remove('meeting_email_sender');
       await remove('meeting_events');
       await remove('meeting_attendance');
@@ -4487,6 +4497,7 @@ const route = async (request) => {
     const startsAtRaw=cleanText(body.startsAt,80),startsAt=new Date(startsAtRaw);
     const plannedMinutes=Math.max(10,Math.min(480,Math.trunc(Number(body.plannedMinutes)||60)));
     const maxParticipants=Math.max(2,Math.min(500,Math.trunc(Number(body.maxParticipants)||50)));
+    const emailNotificationsEnabled=body.emailNotificationsEnabled===true;
     if(title.length<3)return json(request,{error:'MEETING_TITLE',message:'Tytuł spotkania musi mieć co najmniej 3 znaki.'},400);
     if(!startsAtRaw||Number.isNaN(startsAt.getTime()))return json(request,{error:'MEETING_DATE',message:'Podaj prawidłowy termin spotkania.'},400);
     if(startsAt.getTime()<Date.now()-10*60_000)return json(request,{error:'MEETING_DATE',message:'Nie można zaplanować spotkania w przeszłości.'},400);
@@ -4520,8 +4531,8 @@ const route = async (request) => {
     try{
       await client.query('BEGIN');
       await client.query(
-        "INSERT INTO meetings(id,created_by_user_id,host_user_id,title,description,starts_at,planned_minutes,max_participants,allow_participant_audio,allow_participant_screen_share) VALUES($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8,$9,$10)",
-        [meetingId,u.id,hostUserId,title,description,startsAt.toISOString(),plannedMinutes,maxParticipants,body.allowParticipantAudio!==false,body.allowParticipantScreenShare===true]
+        "INSERT INTO meetings(id,created_by_user_id,host_user_id,title,description,starts_at,planned_minutes,max_participants,allow_participant_audio,allow_participant_screen_share,email_notifications_enabled) VALUES($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8,$9,$10,$11)",
+        [meetingId,u.id,hostUserId,title,description,startsAt.toISOString(),plannedMinutes,maxParticipants,body.allowParticipantAudio!==false,body.allowParticipantScreenShare===true,emailNotificationsEnabled]
       );
       for(const item of audience){
         if(item.type==='POINT'){
@@ -4590,6 +4601,7 @@ const route = async (request) => {
 
     const allowParticipantAudio=body.allowParticipantAudio===undefined?meeting.allow_participant_audio===true:body.allowParticipantAudio===true;
     const allowParticipantScreenShare=body.allowParticipantScreenShare===undefined?meeting.allow_participant_screen_share===true:body.allowParticipantScreenShare===true;
+    const emailNotificationsEnabled=body.emailNotificationsEnabled===undefined?meeting.email_notifications_enabled===true:body.emailNotificationsEnabled===true;
 
     let audience=null;
     if(body.audience!==undefined){
@@ -4641,8 +4653,8 @@ const route = async (request) => {
       }
 
       await client.query(
-        "UPDATE meetings SET title=$2,description=NULLIF($3,''),starts_at=$4,planned_minutes=$5,max_participants=$6,allow_participant_audio=$7,allow_participant_screen_share=$8,updated_at=now() WHERE id=$1 AND status='SCHEDULED'",
-        [meetingId,title,description,newStartsAt,plannedMinutes,maxParticipants,allowParticipantAudio,allowParticipantScreenShare]
+        "UPDATE meetings SET title=$2,description=NULLIF($3,''),starts_at=$4,planned_minutes=$5,max_participants=$6,allow_participant_audio=$7,allow_participant_screen_share=$8,email_notifications_enabled=$9,updated_at=now() WHERE id=$1 AND status='SCHEDULED'",
+        [meetingId,title,description,newStartsAt,plannedMinutes,maxParticipants,allowParticipantAudio,allowParticipantScreenShare,emailNotificationsEnabled]
       );
       if(audience){
         await client.query("DELETE FROM meeting_audience WHERE meeting_id=$1",[meetingId]);
@@ -4655,7 +4667,7 @@ const route = async (request) => {
       }
       await client.query(
         "INSERT INTO meeting_events(id,meeting_id,actor_user_id,event_type,metadata) VALUES($1,$2,$3,'EDITED',$4::jsonb)",
-        [makeId('mte'),meetingId,u.id,JSON.stringify({scheduleChanged,titleChanged:title!==meeting.title,audienceChanged:Boolean(audience),plannedMinutes,maxParticipants,allowParticipantAudio,allowParticipantScreenShare})]
+        [makeId('mte'),meetingId,u.id,JSON.stringify({scheduleChanged,titleChanged:title!==meeting.title,audienceChanged:Boolean(audience),plannedMinutes,maxParticipants,allowParticipantAudio,allowParticipantScreenShare,emailNotificationsEnabled})]
       );
       if(scheduleChanged){
         await client.query(
@@ -4680,6 +4692,64 @@ const route = async (request) => {
     }
     const view=(await listMeetingsForUser(u)).find((item)=>item.id===meetingId)||null;
     return json(request,{ok:true,meeting:view,email});
+  }
+
+  const meetingChat=url.pathname.match(/^\/meetings\/([^/]+)\/chat$/);
+  if(meetingChat&&method==='GET'){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingChat[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!await meetingEligible(u,meetingId)&&!meetingCanManage(u,meeting))return json(request,{error:'MEETING_NOT_ELIGIBLE'},403);
+    const {rows}=await q(
+      "SELECT m.id,m.author_user_id,u.name,u.email,u.role_code,m.body,m.created_at FROM meeting_chat_messages m JOIN users u ON u.id=m.author_user_id WHERE m.meeting_id=$1 AND m.deleted_at IS NULL ORDER BY m.created_at ASC LIMIT 300",
+      [meetingId]
+    );
+    return json(request,{meetingId,messages:rows.map((row)=>({
+      id:row.id,authorUserId:row.author_user_id,authorName:operationalIdentityName(row.name,row.email,row.role_code)||'Uczestnik',
+      body:row.body,createdAt:row.created_at,mine:row.author_user_id===u.id
+    }))});
+  }
+  if(meetingChat&&method==='POST'){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingChat[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!canJoinMeeting(meeting.status))return json(request,{error:'MEETING_NOT_LIVE',message:'Chat jest aktywny podczas trwającego spotkania.'},409);
+    if(!await meetingEligible(u,meetingId)&&!meetingCanManage(u,meeting))return json(request,{error:'MEETING_NOT_ELIGIBLE'},403);
+    const body=await readJson(request),message=cleanText(body.message,2000);
+    if(!message)return json(request,{error:'MEETING_CHAT_EMPTY',message:'Wpisz wiadomość.'},400);
+    const id=makeId('mcm');
+    const row=(await q("INSERT INTO meeting_chat_messages(id,meeting_id,author_user_id,body) VALUES($1,$2,$3,$4) RETURNING created_at",[id,meetingId,u.id,message])).rows[0];
+    await meetingEvent(meetingId,u.id,'CHAT_MESSAGE',{messageId:id});
+    return json(request,{ok:true,message:{id,authorUserId:u.id,authorName:operationalIdentityName(u.name,u.email,u.role_code)||'Uczestnik',body:message,createdAt:row.created_at,mine:true}},201);
+  }
+
+  const meetingHands=url.pathname.match(/^\/meetings\/([^/]+)\/hands$/);
+  if(meetingHands&&method==='GET'){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingHands[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!await meetingEligible(u,meetingId)&&!meetingCanManage(u,meeting))return json(request,{error:'MEETING_NOT_ELIGIBLE'},403);
+    const {rows}=await q(
+      "SELECT h.user_id,h.raised_at,u.name,u.email,u.role_code FROM meeting_hand_raises h JOIN users u ON u.id=h.user_id WHERE h.meeting_id=$1 AND (h.lowered_at IS NULL OR h.lowered_at<h.raised_at) ORDER BY h.raised_at ASC",
+      [meetingId]
+    );
+    return json(request,{meetingId,hands:rows.map((row,index)=>({userId:row.user_id,name:operationalIdentityName(row.name,row.email,row.role_code)||'Uczestnik',raisedAt:row.raised_at,position:index+1,mine:row.user_id===u.id}))});
+  }
+  if(meetingHands&&method==='POST'){
+    const session=await requireActive(request),u=session.user,meetingId=cleanText(meetingHands[1],120);
+    const meeting=await loadMeeting(meetingId);
+    if(!meeting)return json(request,{error:'NOT_FOUND'},404);
+    if(!canJoinMeeting(meeting.status))return json(request,{error:'MEETING_NOT_LIVE'},409);
+    if(!await meetingEligible(u,meetingId)&&!meetingCanManage(u,meeting))return json(request,{error:'MEETING_NOT_ELIGIBLE'},403);
+    const body=await readJson(request),raised=body.raised===true;
+    if(raised){
+      await q("INSERT INTO meeting_hand_raises(meeting_id,user_id,raised_at,lowered_at,updated_at) VALUES($1,$2,now(),NULL,now()) ON CONFLICT(meeting_id,user_id) DO UPDATE SET raised_at=CASE WHEN meeting_hand_raises.lowered_at IS NULL OR meeting_hand_raises.lowered_at<meeting_hand_raises.raised_at THEN meeting_hand_raises.raised_at ELSE now() END,lowered_at=NULL,updated_at=now()",[meetingId,u.id]);
+      await meetingEvent(meetingId,u.id,'HAND_RAISED',{});
+    }else{
+      await q("UPDATE meeting_hand_raises SET lowered_at=now(),updated_at=now() WHERE meeting_id=$1 AND user_id=$2",[meetingId,u.id]);
+      await meetingEvent(meetingId,u.id,'HAND_LOWERED',{});
+    }
+    return json(request,{ok:true,raised});
   }
 
   const meetingJoinToken=url.pathname.match(/^\/meetings\/([^/]+)\/join-token$/);
