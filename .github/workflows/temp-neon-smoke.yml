@@ -621,7 +621,7 @@ jobs:
           ended_join_http="$(api_code "$user_token" POST "/meetings/$meeting_id/join-token" '{}')"
           [ "$ended_join_http" = "409" ] || { echo "::error::ENDED meeting exposed join-token: HTTP $ended_join_http"; cat meeting-response.json; exit 1; }
 
-          echo "Meetings TEMP E2E passed: backend lifecycle source-of-truth, OWNER/BOSS/COORDINATOR/USER roles, full edit/reschedule, pre/post-live join gates, canonical LiveKit token/grants, attendance, cancellation and end."
+          echo "Meetings TEMP E2E passed: lifecycle source-of-truth, scoped OWNER/BOSS/COORDINATOR/USER permissions, full edit/reschedule, pre/post-live join gates, LiveKit grants, attendance, cancellation and end."
 
       - name: Temp USER front-desk service E2E
         shell: bash
