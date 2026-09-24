@@ -229,7 +229,17 @@ jobs:
         shell: pwsh
         run: |
           $dashboard = Get-Content src/pages/Dashboard.tsx -Raw
-          @("start-clock","start-weather-card","data.getWeather","weatherCity") | ForEach-Object {
+          @(
+            "showcase-today-card",
+            "showcase-today-head",
+            "data.getWeather",
+            "weatherCity",
+            "Tak wygląda pełna wizyta klienta",
+            "Powstaje zlecenie i karta serwisowa",
+            "SPOTKANIA I SZKOLENIA",
+            "ROLE W ZESPOLE",
+            "DLA SZEFA"
+          ) | ForEach-Object {
             if (-not $dashboard.Contains($_)) { throw "Missing Start dashboard contract: $_" }
           }
           if ($dashboard.Contains("Pulpit wykorzystuje całe dostępne miejsce")) {
@@ -247,6 +257,11 @@ jobs:
           $electron = Get-Content electron/main.ts -Raw
           @("fetchStartWeather","geocoding-api.open-meteo.com","api.open-meteo.com/v1/forecast","AbortSignal.timeout(8_000)") | ForEach-Object {
             if (-not $electron.Contains($_)) { throw "Missing weather safety contract: $_" }
+          }
+
+          $styles = Get-Content src/styles.css -Raw
+          @("dashboard-showcase","service-journey","capability-grid","role-showcase-grid","@media(max-width:720px)","position:fixed") | ForEach-Object {
+            if (-not $styles.Contains($_)) { throw "Missing responsive Start contract: $_" }
           }
 
           $browser = Get-Content electron/browser.ts -Raw
