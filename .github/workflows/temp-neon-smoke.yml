@@ -1,5 +1,5 @@
 name: Temp Neon integration smoke
-# Final exact-candidate marker: ServiceOS 1.0.0.22 meetings collaboration with explicit production smoke gate.
+# Final release-candidate marker: ServiceOS 1.0.0.22 meetings collaboration, e-mail opt-in and exact production gate.
 
 on:
   push:
