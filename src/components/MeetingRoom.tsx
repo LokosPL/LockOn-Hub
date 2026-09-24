@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Mic, MicOff, MonitorUp, MonitorX, PhoneOff, RefreshCw, Shield, UserMinus, VolumeX, X } from 'lucide-react';
+import { ArrowLeft, Hand, MessageSquare, Mic, MicOff, MonitorUp, MonitorX, PhoneOff, RefreshCw, Send, Shield, UserMinus, VolumeX, X } from 'lucide-react';
 import {
   Room,
   RoomEvent,
@@ -10,7 +10,7 @@ import {
   type RemoteTrack,
   type RemoteTrackPublication
 } from 'livekit-client';
-import type { MeetingLiveParticipant, MeetingScreenSource, MeetingSummary } from '../types/electron';
+import type { MeetingChatMessage, MeetingHandRaise, MeetingLiveParticipant, MeetingScreenSource, MeetingSummary } from '../types/electron';
 import { useAppDialog } from './AppDialog';
 
 type Props = {
@@ -26,6 +26,8 @@ type ParticipantView = {
   userId:string|null;
   muted:boolean;
   host:boolean;
+  speaking:boolean;
+  audioLevel:number;
 };
 
 const CONNECTION_ERROR_MESSAGE = 'Nie udało się połączyć ze spotkaniem. Sprawdź połączenie z internetem i spróbuj ponownie.';
@@ -50,7 +52,9 @@ const participantView = (participant: Participant, meeting: MeetingSummary, loca
     local,
     userId,
     muted:!micPublication || micPublication.isMuted,
-    host:userId === meeting.hostUserId
+    host:userId === meeting.hostUserId,
+    speaking:participant.isSpeaking === true,
+    audioLevel:Number.isFinite(participant.audioLevel) ? participant.audioLevel : 0
   };
 };
 
@@ -70,6 +74,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const attendanceOpenRef = useRef(false);
   const audioHostRef = useRef<HTMLDivElement | null>(null);
   const videoHostRef = useRef<HTMLDivElement | null>(null);
+  const localPreviewRef = useRef<HTMLVideoElement | null>(null);
   const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [joining, setJoining] = useState(true);
   const [connected, setConnected] = useState(false);
@@ -85,6 +90,12 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const [moderation, setModeration] = useState<MeetingLiveParticipant[]>([]);
   const [sources, setSources] = useState<MeetingScreenSource[]>([]);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
+  const [selectedSource, setSelectedSource] = useState<MeetingScreenSource | null>(null);
+  const [chatMessages, setChatMessages] = useState<MeetingChatMessage[]>([]);
+  const [handRaises, setHandRaises] = useState<MeetingHandRaise[]>([]);
+  const [handRaised, setHandRaised] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [sideTab, setSideTab] = useState<'participants'|'chat'>('participants');
   const [busy, setBusy] = useState('');
 
   const closeAttendance = () => {
@@ -126,6 +137,20 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     }
   };
 
+  const loadCollaboration = async () => {
+    try {
+      const [chat,hands] = await Promise.all([
+        window.lockOn.meetings.chat(meeting.id),
+        window.lockOn.meetings.hands(meeting.id)
+      ]);
+      setChatMessages(chat.messages ?? []);
+      setHandRaises(hands.hands ?? []);
+      setHandRaised(Boolean((hands.hands ?? []).some((item) => item.mine)));
+    } catch (err) {
+      console.warn('[meeting collaboration refresh]', {meetingId:meeting.id,message:err instanceof Error?err.message:String(err)});
+    }
+  };
+
   const loadModeration = async () => {
     if (!canManage) return;
     try {
@@ -163,6 +188,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     };
     const onParticipantChanged = () => refreshParticipants(room);
     const onTrackStateChanged = () => refreshParticipants(room);
+    const onActiveSpeakersChanged = () => refreshParticipants(room);
     const onDisconnected = () => {
       closeAttendance();
       if (!disposed) {
@@ -183,6 +209,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
       .on(RoomEvent.ParticipantConnected, onParticipantChanged)
       .on(RoomEvent.ParticipantDisconnected, onParticipantChanged)
       .on(RoomEvent.ParticipantNameChanged, onParticipantChanged)
+      .on(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged)
       .on(RoomEvent.Disconnected, onDisconnected);
 
     void (async () => {
@@ -211,6 +238,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         });
         attendanceOpenRef.current = true;
         refreshParticipants(room);
+        void loadCollaboration();
         for (const participant of room.remoteParticipants.values()) {
           for (const publication of participant.trackPublications.values()) {
             if (publication.track) attachTrack(publication.track);
@@ -242,6 +270,8 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         }
       }
       closeAttendance();
+      void window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
+      if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
       const localScreen = screenPublicationRef.current?.track;
       if (localScreen) {
         void room.localParticipant.unpublishTrack(localScreen);
@@ -259,6 +289,13 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     const timer = window.setInterval(() => void loadModeration(), 4_000);
     return () => window.clearInterval(timer);
   }, [canManage, connected, meeting.id]);
+
+  useEffect(() => {
+    if (!connected) return;
+    void loadCollaboration();
+    const timer = window.setInterval(() => void loadCollaboration(), 1_750);
+    return () => window.clearInterval(timer);
+  }, [connected, meeting.id]);
 
   const retryConnection = () => {
     setError('');
@@ -306,6 +343,15 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     setBusy('screen');
     setError('');
     try {
+      const previous = screenPublicationRef.current;
+      if (previous?.track) {
+        screenPublicationRef.current = null;
+        await room.localParticipant.unpublishTrack(previous.track).catch(() => undefined);
+        previous.track.stop();
+      }
+      await window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
+      if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
+
       const constraints = {
         mandatory: {
           chromeMediaSource:'desktop',
@@ -323,11 +369,25 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         simulcast:true
       });
       screenPublicationRef.current = publication;
+      setSelectedSource(source);
       setScreenEnabled(true);
       setSourcePickerOpen(false);
+
+      const mirrorRisk=/LockOn ServiceOS/i.test(source.name);
+      if (localPreviewRef.current) {
+        localPreviewRef.current.srcObject = mirrorRisk ? null : new MediaStream([mediaTrack]);
+        if (!mirrorRisk) void localPreviewRef.current.play().catch(() => undefined);
+      }
+      await window.lockOn.meetings.shareOverlay(source).catch(() => ({ok:true,shown:false}));
+
       mediaTrack.addEventListener('ended', () => {
-        setScreenEnabled(false);
+        if (screenPublicationRef.current?.track !== publication.track) return;
         screenPublicationRef.current = null;
+        setScreenEnabled(false);
+        setSelectedSource(null);
+        if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
+        void room.localParticipant.unpublishTrack(publication.track).catch(() => undefined);
+        void window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
       }, { once:true });
     } catch (err) {
       console.error('[meeting screen share]', {
@@ -336,6 +396,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
         message:err instanceof Error ? err.message : String(err)
       });
       setError('Nie udało się udostępnić wybranego ekranu.');
+      await window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
     } finally {
       setBusy('');
     }
@@ -344,13 +405,51 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
   const stopScreenShare = async () => {
     const room = roomRef.current;
     const publication = screenPublicationRef.current;
-    if (!room || !publication?.track) return;
+    if (!room || !publication?.track) {
+      await window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
+      setScreenEnabled(false);
+      setSelectedSource(null);
+      return;
+    }
     setBusy('screen');
     try {
-      await room.localParticipant.unpublishTrack(publication.track);
-      publication.track.stop();
       screenPublicationRef.current = null;
+      await room.localParticipant.unpublishTrack(publication.track).catch(() => undefined);
+      publication.track.stop();
+      if (localPreviewRef.current) localPreviewRef.current.srcObject = null;
+      await window.lockOn.meetings.shareOverlay(null).catch(() => undefined);
+      setSelectedSource(null);
       setScreenEnabled(false);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const toggleHand = async () => {
+    if (!connected || busy) return;
+    setBusy('hand');
+    try {
+      await window.lockOn.meetings.setHandRaised(meeting.id,!handRaised);
+      setHandRaised(!handRaised);
+      await loadCollaboration();
+    } catch (err) {
+      setError('Nie udało się zmienić stanu podniesionej ręki.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const sendChat = async () => {
+    const message=chatInput.trim();
+    if (!message || !connected || busy) return;
+    setBusy('chat');
+    try {
+      await window.lockOn.meetings.sendChat(meeting.id,message);
+      setChatInput('');
+      setSideTab('chat');
+      await loadCollaboration();
+    } catch (err) {
+      setError('Nie udało się wysłać wiadomości.');
     } finally {
       setBusy('');
     }
@@ -389,6 +488,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
     setBusy('end');
     setError('');
     try {
+      await stopScreenShare();
       await window.lockOn.meetings.action(meeting.id,'end');
       closeAttendance();
       roomRef.current?.disconnect();
@@ -404,6 +504,7 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
 
   const leave = () => {
     closeAttendance();
+    void stopScreenShare();
     roomRef.current?.disconnect();
     onClose();
   };
@@ -433,6 +534,10 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
           </div>
         )}
 
+        <div className="meeting-room-mobile-tabs" role="tablist" aria-label="Widok spotkania">
+          <button className={sideTab==='participants'?'active':''} onClick={()=>setSideTab('participants')}>Uczestnicy</button>
+          <button className={sideTab==='chat'?'active':''} onClick={()=>setSideTab('chat')}>Chat {chatMessages.length>0&&<b>{chatMessages.length}</b>}</button>
+        </div>
         <div className="meeting-room-layout">
           <main className="meeting-stage">
             <div className="meeting-screen-host" ref={videoHostRef}>
@@ -440,41 +545,70 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
               {!joining && !connected && <div className="meeting-stage-empty">Połączenie nie jest aktywne.</div>}
               {connected && !remoteScreenActive && <div className="meeting-stage-empty meeting-stage-hint"><MonitorUp size={30}/><strong>Nikt nie udostępnia ekranu</strong><span>Udostępniany ekran prowadzącego lub uczestnika pojawi się tutaj.</span></div>}
             </div>
+            {screenEnabled && selectedSource && (
+              <div className="meeting-local-share-preview">
+                <div><span>● Udostępniasz ekran</span><strong>{selectedSource.name}</strong></div>
+                {/LockOn ServiceOS/i.test(selectedSource.name)
+                  ? <p>Podgląd ukryty, aby uniknąć efektu nieskończonego lustra. Uczestnicy nadal widzą wybrane źródło.</p>
+                  : <video ref={localPreviewRef} muted playsInline autoPlay />}
+                <div className="meeting-local-share-actions">
+                  <button onClick={()=>void openScreenPicker()}><RefreshCw size={14}/> Zmień ekran / okno</button>
+                  <button onClick={()=>void stopScreenShare()}><MonitorX size={14}/> Zatrzymaj udostępnianie</button>
+                </div>
+              </div>
+            )}
             <div className="meeting-audio-host" ref={audioHostRef} />
           </main>
 
-          <aside className="meeting-participants-panel">
-            <div className="meeting-participants-heading"><h3>Uczestnicy</h3><span>{participants.length}</span></div>
-            <div className="meeting-participant-list">
-              {participants.map((item)=>(
-                <div key={item.identity} className="meeting-participant-item">
-                  <div>
-                    <span>{item.name}</span>
-                    <small>{item.host ? 'Prowadzący' : item.local ? 'Ty' : 'Uczestnik'}</small>
-                  </div>
-                  <span className={'meeting-participant-mic '+(item.muted?'muted':'active')} title={item.muted?'Mikrofon wyciszony':'Mikrofon włączony'}>
-                    {item.muted?<MicOff size={14}/>:<Mic size={14}/>}
-                  </span>
-                </div>
-              ))}
+          <aside className={'meeting-participants-panel meeting-side-'+sideTab}>
+            <div className="meeting-side-tabs" role="tablist">
+              <button className={sideTab==='participants'?'active':''} onClick={()=>setSideTab('participants')}><Shield size={14}/> Uczestnicy</button>
+              <button className={sideTab==='chat'?'active':''} onClick={()=>setSideTab('chat')}><MessageSquare size={14}/> Chat</button>
             </div>
-            {canManage && moderation.length>0 && (
-              <div className="meeting-moderation">
-                <h3><Shield size={14}/> Moderacja</h3>
-                {moderation.filter((item)=>item.identity!==roomRef.current?.localParticipant.identity).map((item)=>{
-                  const userId=parseMetadataUserId(item.metadata);
-                  return <div className="meeting-moderation-row" key={item.identity}>
-                    <div><strong>{item.name}</strong>{userId&&<small>{userId===meeting.hostUserId?'Prowadzący':userId.slice(0,18)}</small>}</div>
+            {sideTab==='participants' ? <>
+              <div className="meeting-participants-heading"><h3>Uczestnicy</h3><span>{participants.length}</span></div>
+              {canManage && handRaises.length>0 && <div className="meeting-hand-queue"><strong><Hand size={14}/> Chcą zabrać głos</strong>{handRaises.map((item)=><span key={item.userId}><b>{item.position}</b>{item.name}</span>)}</div>}
+              <div className="meeting-participant-list">
+                {participants.map((item)=>{
+                  const hand=handRaises.find((raised)=>raised.userId===item.userId);
+                  return <div key={item.identity} className={'meeting-participant-item '+(item.speaking?'speaking':'')}>
                     <div>
-                      <button title="Wycisz" disabled={Boolean(busy)} onClick={()=>void moderate(item.identity,'MUTE')}><VolumeX size={13}/></button>
-                      <button title="Zablokuj mikrofon" disabled={Boolean(busy)} onClick={()=>void moderate(item.identity,'BLOCK_MIC')}><MicOff size={13}/></button>
-                      <button title="Pozwól mówić" disabled={Boolean(busy)} onClick={()=>void moderate(item.identity,'ALLOW_MIC')}><Mic size={13}/></button>
-                      <button title="Usuń ze spotkania" disabled={Boolean(busy)} onClick={()=>void moderate(item.identity,'REMOVE')}><UserMinus size={13}/></button>
+                      <span>{item.name} {hand&&<em title="Podniesiona ręka">✋</em>}</span>
+                      <small>{item.speaking?'Mówi':item.host?'Prowadzący':item.local?'Ty':'Uczestnik'}</small>
+                      {!item.muted&&<span className="meeting-audio-level"><i style={{width:(Math.max(6,Math.min(100,item.audioLevel*140)))+'%'}} /></span>}
                     </div>
+                    <span className={'meeting-participant-mic '+(item.muted?'muted':'active')} title={item.muted?'Mikrofon wyciszony':'Mikrofon włączony'}>
+                      {item.muted?<MicOff size={14}/>:<Mic size={14}/>}
+                    </span>
                   </div>;
                 })}
               </div>
-            )}
+              {canManage && moderation.length>0 && (
+                <div className="meeting-moderation">
+                  <h3><Shield size={14}/> Moderacja</h3>
+                  {moderation.filter((item)=>item.identity!==roomRef.current?.localParticipant.identity).map((item)=>{
+                    const userId=parseMetadataUserId(item.metadata);
+                    return <div className="meeting-moderation-row" key={item.identity}>
+                      <div><strong>{item.name}</strong>{userId&&<small>{userId===meeting.hostUserId?'Prowadzący':userId.slice(0,18)}</small>}</div>
+                      <div>
+                        <button title="Wycisz" disabled={Boolean(busy)} onClick={()=>void moderate(item.identity,'MUTE')}><VolumeX size={13}/></button>
+                        <button title="Zablokuj mikrofon" disabled={Boolean(busy)} onClick={()=>void moderate(item.identity,'BLOCK_MIC')}><MicOff size={13}/></button>
+                        <button title="Pozwól mówić" disabled={Boolean(busy)} onClick={()=>void moderate(item.identity,'ALLOW_MIC')}><Mic size={13}/></button>
+                        <button title="Usuń ze spotkania" disabled={Boolean(busy)} onClick={()=>void moderate(item.identity,'REMOVE')}><UserMinus size={13}/></button>
+                      </div>
+                    </div>;
+                  })}
+                </div>
+              )}
+            </> : <div className="meeting-chat-panel">
+              <div className="meeting-chat-messages">
+                {chatMessages.length===0?<div className="meeting-chat-empty">Brak wiadomości. Napisz pierwszą.</div>:chatMessages.map((message)=><article key={message.id} className={message.mine?'mine':''}><div><strong>{message.authorName}</strong><time>{new Date(message.createdAt).toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})}</time></div><p>{message.body}</p></article>)}
+              </div>
+              <div className="meeting-chat-compose">
+                <input value={chatInput} maxLength={2000} placeholder="Napisz wiadomość…" onChange={(e)=>setChatInput(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void sendChat();}}} />
+                <button disabled={!chatInput.trim()||Boolean(busy)} onClick={()=>void sendChat()} aria-label="Wyślij wiadomość"><Send size={16}/></button>
+              </div>
+            </div>}
           </aside>
         </div>
 
@@ -482,9 +616,11 @@ export function MeetingRoom({ meeting, onClose, onMeetingEnded }: Props) {
           <button className={'meeting-control '+(micEnabled?'active':'')} disabled={!connected||!canMic||Boolean(busy)} onClick={()=>void toggleMic()}>
             {micEnabled?<Mic size={18}/>:<MicOff size={18}/>} {canMic?(micEnabled?'Wyłącz mikrofon':'Włącz mikrofon'):'Mikrofon zablokowany'}
           </button>
-          <button className={'meeting-control '+(screenEnabled?'active':'')} disabled={!connected||!canShare||Boolean(busy)} onClick={()=>void (screenEnabled?stopScreenShare():openScreenPicker())}>
-            {screenEnabled?<MonitorX size={18}/>:<MonitorUp size={18}/>} {canShare?(screenEnabled?'Zatrzymaj udostępnianie ekranu':'Udostępnij ekran'):'Udostępnianie zablokowane'}
+          <button className={'meeting-control '+(screenEnabled?'active':'')} disabled={!connected||!canShare||Boolean(busy)} onClick={()=>void (screenEnabled?openScreenPicker():openScreenPicker())}>
+            {screenEnabled?<RefreshCw size={18}/>:<MonitorUp size={18}/>} {canShare?(screenEnabled?'Zmień ekran / okno':'Udostępnij ekran'):'Udostępnianie zablokowane'}
           </button>
+          <button className={'meeting-control '+(handRaised?'active':'')} disabled={!connected||Boolean(busy)} onClick={()=>void toggleHand()}><Hand size={18}/> {handRaised?'Opuść rękę':'Podnieś rękę'}</button>
+          {screenEnabled&&<button className="meeting-control" disabled={Boolean(busy)} onClick={()=>void stopScreenShare()}><MonitorX size={18}/> Zatrzymaj</button>}
           {canManage && <button className="meeting-control danger" disabled={Boolean(busy)} onClick={()=>void endForEveryone()}><PhoneOff size={18}/> Zakończ dla wszystkich</button>}
           <button className="meeting-control danger" disabled={busy==='end'} onClick={leave}><PhoneOff size={18}/> Opuść spotkanie</button>
         </footer>
