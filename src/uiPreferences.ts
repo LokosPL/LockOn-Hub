@@ -27,6 +27,7 @@ export const applyTheme = (theme: UiTheme) => {
 };
 
 export const applyScale = async (scale: UiScale) => {
+  document.documentElement.dataset.scale = scale;
   localStorage.setItem(SCALE_KEY, scale);
   await window.lockOn.ui.setScale(scale);
 };

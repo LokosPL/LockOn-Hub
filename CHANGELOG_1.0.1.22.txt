@@ -1,0 +1,18 @@
+LockOn ServiceOS 1.0.1.22
+
+Najważniejsze zmiany
+- Ekran Start ma bardziej kompaktowy, skalowalny układ i reaguje na tryb widzenia Auto, Kompakt, Wygodny i Duży.
+- Sekcja „Spotkania i szkolenia” na Start została przebudowana jako pełny hub z czytelnym stanem aktywnego spotkania.
+- Prowadzący zachowuje panel aktywnego spotkania po przejściu do innych modułów: widzi czat, nieprzeczytane wiadomości i kolejkę podniesionych rąk oraz może odpisać bez wracania do pokoju.
+- Pokój spotkania domyślnie pokazuje lokalny podgląd własnego ekranu zamiast pustego komunikatu.
+- Ekran udostępniany przez uczestnika pozostaje dostępny jako miniatura i można jednym kliknięciem przełączyć go na główny podgląd, a następnie wrócić do własnego ekranu.
+- Chat spotkania jest domyślnym panelem bocznym, ma czytelniejszą hierarchię wiadomości oraz widoczną kolejkę podniesionych rąk dla prowadzącego.
+- Sterowanie spotkaniem i lista uczestników zostały ujednolicone wizualnie z pozostałym interfejsem ServiceOS.
+- Nadal obowiązują istniejące zabezpieczenia LiveKit, role, zakresy punktów, opt-in e-mail i bezpieczne deep-linki.
+
+Bezpieczeństwo i stabilność
+- Globalny panel spotkania korzysta wyłącznie z istniejących, autoryzowanych endpointów spotkania; nie przechowuje tokenów LiveKit.
+- Lokalny podgląd pulpitu korzysta z bezpiecznych miniatur desktopCapturer, bez automatycznego publikowania ekranu.
+- Wejście do pokoju nadal wymaga statusu LIVE i uprawnień zweryfikowanych przez backend.
+- Udostępnianie ekranu zachowuje świadomy wybór źródła, cleanup tracków i ochronę przed efektem lustra ServiceOS.
+- Release 1.0.1.22 pozostaje zablokowany przez Verify, CodeQL oraz wymagane bramki TEMP/PROD przed ustawieniem RELEASE_READY.
