@@ -231,6 +231,11 @@ jobs:
           console.log('deployment_id='+id);
           NODE
 
+      - name: Remove runtime secret staging file
+        if: always()
+        shell: bash
+        run: rm -f runtime-environment.json
+
       - name: Wait for deployed revision
         if: steps.neon_credential.outputs.available == 'true'
         shell: bash
