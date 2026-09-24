@@ -58,10 +58,11 @@ test('Daty formularza są wysyłane jako jednoznaczne ISO i wyświetlane lokalni
 });
 
 
-test('OWNER, BOSS i COORDINATOR mają kontrakt planowania spotkań po obu stronach', async () => {
+test('OWNER, BOSS i COORDINATOR mają kontrakt planowania spotkań, a globalne zarządzanie zostaje przy OWNER/BOSS', async () => {
   const backend=await read('functions/lockon-api.mjs');
   const ui=await read('src/components/MeetingsCard.tsx');
-  assert.match(backend,/MEETING_MANAGE_ROLES = new Set\(\['OWNER', 'BOSS', 'COORDINATOR'\]\)/);
+  assert.match(backend,/MEETING_CREATE_ROLES = new Set\(\['OWNER', 'BOSS', 'COORDINATOR'\]\)/);
+  assert.match(backend,/MEETING_GLOBAL_MANAGE_ROLES = new Set\(\['OWNER', 'BOSS'\]\)/);
   assert.match(ui,/role === 'OWNER' \|\| role === 'BOSS' \|\| role === 'COORDINATOR'/);
 });
 
