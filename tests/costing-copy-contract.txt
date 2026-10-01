@@ -1,6 +1,0 @@
-Legacy costing copy migration reference:
-Mam FV zakupu
-Kwota za robociznę
-Marża informacyjna
-
-Current UI intentionally replaces these labels with clearer customer-price and internal-cost wording.
