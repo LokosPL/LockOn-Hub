@@ -131,6 +131,24 @@ const parseRequestBody = (body: BodyInit | null | undefined) => {
   catch { return null; }
 };
 
+const coreRequestOptions = (path: string, options: RequestInit): RequestInit => {
+  if (path !== '/service/orders' || String(options.method || 'GET').toUpperCase() !== 'POST') return options;
+  const original = parseRequestBody(options.body);
+  if (!original || !('unlockType' in original) && !('unlockSecret' in original)) return options;
+
+  const type = String(original.unlockType || 'NONE').toUpperCase() as DeviceUnlockType;
+  const { unlockType: _unlockType, unlockSecret: _unlockSecret, ...core } = original;
+  const originalNotes = String(core.deviceNotes || '').trim();
+  const lockInfo = type === 'PIN'
+    ? 'Blokada ekranu: PIN — kod zapisany w chronionych danych ServiceOS.'
+    : type === 'PATTERN'
+      ? 'Blokada ekranu: wzór — wzór zapisany w chronionych danych ServiceOS.'
+      : 'Blokada ekranu: brak.';
+  core.deviceNotes = [originalNotes && originalNotes !== 'Brak uwag' ? originalNotes : '', lockInfo].filter(Boolean).join('\n');
+
+  return { ...options, body: JSON.stringify(core) };
+};
+
 const enrichCreatedOrderWithUnlock = async (path: string, options: RequestInit, token: string | undefined, data: unknown) => {
   if (!token || path !== '/service/orders' || String(options.method || 'GET').toUpperCase() !== 'POST') return data;
   const input = parseRequestBody(options.body);
@@ -190,15 +208,16 @@ export async function backendRequest<T>(
   options: RequestInit = {},
   token?: string
 ): Promise<T> {
-  const headers = new Headers(options.headers);
+  const coreOptions = coreRequestOptions(path, options);
+  const headers = new Headers(coreOptions.headers);
   headers.set('Accept', 'application/json');
-  if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (coreOptions.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
   let response: Response;
   try {
     response = await fetch(endpoint(path), {
-      ...options,
+      ...coreOptions,
       headers,
       redirect: 'error',
       cache: 'no-store'
