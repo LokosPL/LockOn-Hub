@@ -1,0 +1,74 @@
+name: Verify protected device unlock
+
+on:
+  push:
+    branches: ["main", "release/**"]
+    paths:
+      - "functions/device-unlock.mjs"
+      - "database/migrations/2026-10-01-v106023-device-unlock.sql"
+      - "electron/backendApi.ts"
+      - "src/pages/ServicePage.tsx"
+      - "src/types/electron.d.ts"
+      - ".github/workflows/device-unlock-verify.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "functions/device-unlock.mjs"
+      - "database/migrations/2026-10-01-v106023-device-unlock.sql"
+      - "electron/backendApi.ts"
+      - "src/pages/ServicePage.tsx"
+      - "src/types/electron.d.ts"
+      - ".github/workflows/device-unlock-verify.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Verify source and migration contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check functions/device-unlock.mjs
+          grep -Fq "aes-256-gcm" functions/device-unlock.mjs
+          grep -Fq "LOCKON_DEVICE_UNLOCK_KEY" functions/device-unlock.mjs
+          grep -Fq "READ_SECRET_ROLES" functions/device-unlock.mjs
+          grep -Fq "DEVICE_UNLOCK_UPDATED" functions/device-unlock.mjs
+          ! grep -Fq "unlockSecret" functions/device-unlock.mjs
+          grep -Fq "service_order_device_unlock" database/migrations/2026-10-01-v106023-device-unlock.sql
+          grep -Fq "secret_ciphertext" database/migrations/2026-10-01-v106023-device-unlock.sql
+          grep -Fq "deviceUnlockBaseUrl" electron/backendApi.ts
+          grep -Fq "unlockSecret: _unlockSecret" electron/backendApi.ts
+      - name: Install isolated bundle dependencies
+        run: npm install --no-save --package-lock=false pg@8.16.3 esbuild@0.25.12
+      - name: Build Neon function bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p device-unlock-dist
+          npx esbuild functions/device-unlock.mjs \
+            --bundle \
+            --platform=node \
+            --target=node24 \
+            --format=esm \
+            --banner:js="import{createRequire as ___cr}from'module';const require=___cr(import.meta.url);" \
+            --outfile=device-unlock-dist/index.mjs
+          zip -j device-unlock-neon.zip device-unlock-dist/index.mjs
+          sha256sum device-unlock-neon.zip device-unlock-dist/index.mjs
+      - name: Upload verified device unlock bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: device-unlock-neon
+          path: device-unlock-neon.zip
+          if-no-files-found: error
+          retention-days: 3

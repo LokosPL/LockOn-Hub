@@ -1,0 +1,117 @@
+.workplan-calendar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -2px 0 14px;
+  color: rgba(235, 239, 246, 0.72);
+  font-size: 11px;
+}
+
+.workplan-calendar-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.workplan-calendar-legend span::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.12);
+}
+
+.workplan-calendar-legend .calendar-legend-holiday::before {
+  background: rgb(255, 116, 76);
+  box-shadow: 0 0 12px rgba(255, 116, 76, 0.35);
+}
+
+.workplan-calendar-legend .calendar-legend-trading::before {
+  background: rgb(68, 210, 139);
+  box-shadow: 0 0 12px rgba(68, 210, 139, 0.3);
+}
+
+.workplan-calendar-legend .calendar-legend-off::before {
+  background: rgb(126, 142, 172);
+}
+
+.workplan-calendar-legend .calendar-legend-weekend::before {
+  background: rgb(83, 154, 238);
+  box-shadow: 0 0 12px rgba(83, 154, 238, 0.24);
+}
+
+.workplan-days > button {
+  min-height: 112px;
+}
+
+.workplan-days > button.calendar-holiday {
+  border-color: rgba(255, 116, 76, 0.3);
+  background: linear-gradient(180deg, rgba(255, 116, 76, 0.085), rgba(255, 116, 76, 0.025));
+}
+
+.workplan-days > button.calendar-trading {
+  border-color: rgba(68, 210, 139, 0.28);
+  background: linear-gradient(180deg, rgba(68, 210, 139, 0.075), rgba(68, 210, 139, 0.02));
+}
+
+.workplan-days > button.calendar-off {
+  border-color: rgba(132, 146, 174, 0.2);
+  background: linear-gradient(180deg, rgba(116, 129, 155, 0.065), rgba(116, 129, 155, 0.018));
+}
+
+.workplan-days > button.calendar-weekend {
+  border-color: rgba(83, 154, 238, 0.2);
+}
+
+.workplan-days > button.active.calendar-holiday,
+.workplan-days > button.active.calendar-trading,
+.workplan-days > button.active.calendar-off,
+.workplan-days > button.active.calendar-weekend {
+  border-color: rgba(255, 145, 61, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(255, 145, 61, 0.15), 0 12px 30px rgba(0, 0, 0, 0.18);
+}
+
+.workplan-day-info {
+  display: block;
+  max-width: 100%;
+  margin: 2px 0 1px;
+  overflow: hidden;
+  color: rgba(236, 240, 247, 0.68);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-holiday .workplan-day-info {
+  color: rgb(255, 157, 127);
+}
+
+.calendar-trading .workplan-day-info {
+  color: rgb(97, 223, 158);
+}
+
+.calendar-off .workplan-day-info {
+  color: rgba(190, 199, 216, 0.7);
+}
+
+.calendar-weekend .workplan-day-info {
+  color: rgb(125, 181, 245);
+}
+
+@media (max-width: 1100px) {
+  .workplan-days > button {
+    min-height: 104px;
+  }
+
+  .workplan-day-info {
+    font-size: 8px;
+  }
+}

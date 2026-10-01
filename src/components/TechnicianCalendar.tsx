@@ -4,8 +4,12 @@ import {
   RefreshCw, Smartphone, Wrench
 } from 'lucide-react';
 import type { ServiceOrderSummary, TechnicianWorkspace } from '../types/electron';
+import './TechnicianCalendar.css';
 
 interface Props { onOpenOrder:(order:ServiceOrderSummary)=>void; }
+
+type CalendarTone = 'holiday' | 'trading' | 'off' | 'weekend';
+type CalendarInfo = { label:string; tone:CalendarTone };
 
 const pad=(value:number)=>String(value).padStart(2,'0');
 const dayKey=(value:Date)=>`${value.getFullYear()}-${pad(value.getMonth()+1)}-${pad(value.getDate())}`;
@@ -15,12 +19,102 @@ const startOfWeek=(source=new Date())=>{
   date.setDate(date.getDate()-((date.getDay()+6)%7));
   return date;
 };
+const addDays=(source:Date,amount:number)=>{
+  const date=new Date(source);
+  date.setDate(date.getDate()+amount);
+  return date;
+};
 const device=(order:ServiceOrderSummary)=>[order.brand,order.model].filter(Boolean).join(' ')||'Telefon';
 const statusTone=(order:ServiceOrderSummary)=>{
   if(order.workflow?.flags.includes('OVERDUE'))return 'danger';
   if(order.workflow?.flags.includes('DUE_SOON'))return 'warning';
   if(order.workflow?.flags.includes('READY_FOR_PICKUP'))return 'ready';
   return 'default';
+};
+
+// Algorytm Meeusa/Jonesa/Butchera — wyłącznie do wyznaczenia polskich świąt ruchomych.
+const easterSunday=(year:number)=>{
+  const a=year%19;
+  const b=Math.floor(year/100);
+  const c=year%100;
+  const d=Math.floor(b/4);
+  const e=b%4;
+  const f=Math.floor((b+8)/25);
+  const g=Math.floor((b-f+1)/3);
+  const h=(19*a+b-d-g+15)%30;
+  const i=Math.floor(c/4);
+  const k=c%4;
+  const l=(32+2*e+2*i-h-k)%7;
+  const m=Math.floor((a+11*h+22*l)/451);
+  const month=Math.floor((h+l-7*m+114)/31);
+  const day=((h+l-7*m+114)%31)+1;
+  return new Date(year,month-1,day);
+};
+
+const polishHoliday=(date:Date):string|null=>{
+  const year=date.getFullYear();
+  const key=dayKey(date);
+  const fixed:Record<string,string>={
+    [`${year}-01-01`]:'Nowy Rok',
+    [`${year}-01-06`]:'Trzech Króli',
+    [`${year}-05-01`]:'Święto Pracy',
+    [`${year}-05-03`]:'Święto Konstytucji 3 Maja',
+    [`${year}-08-15`]:'Wniebowzięcie NMP',
+    [`${year}-11-01`]:'Wszystkich Świętych',
+    [`${year}-11-11`]:'Święto Niepodległości',
+    [`${year}-12-24`]:'Wigilia',
+    [`${year}-12-25`]:'Boże Narodzenie',
+    [`${year}-12-26`]:'Drugi dzień Świąt'
+  };
+  if(fixed[key])return fixed[key];
+
+  const easter=easterSunday(year);
+  const movable=new Map<string,string>([
+    [dayKey(easter),'Wielkanoc'],
+    [dayKey(addDays(easter,1)),'Poniedziałek Wielkanocny'],
+    [dayKey(addDays(easter,49)),'Zielone Świątki'],
+    [dayKey(addDays(easter,60)),'Boże Ciało']
+  ]);
+  return movable.get(key)??null;
+};
+
+const lastSundayOfMonth=(year:number,month:number)=>{
+  const date=new Date(year,month,0);
+  date.setDate(date.getDate()-date.getDay());
+  return dayKey(date);
+};
+
+const tradingSundaysForYear=(year:number)=>{
+  const easter=easterSunday(year);
+  const result=new Set<string>([
+    lastSundayOfMonth(year,1),
+    lastSundayOfMonth(year,4),
+    lastSundayOfMonth(year,6),
+    lastSundayOfMonth(year,8),
+    dayKey(addDays(easter,-7))
+  ]);
+
+  // Obowiązują trzy kolejne niedziele poprzedzające Wigilię.
+  const christmasEve=new Date(year,11,24);
+  let cursor=addDays(christmasEve,-1);
+  while(cursor.getDay()!==0)cursor=addDays(cursor,-1);
+  for(let index=0;index<3;index+=1){
+    result.add(dayKey(cursor));
+    cursor=addDays(cursor,-7);
+  }
+  return result;
+};
+
+const calendarInfo=(date:Date):CalendarInfo|null=>{
+  const holiday=polishHoliday(date);
+  if(holiday)return {label:holiday,tone:'holiday'};
+  if(date.getDay()===0){
+    return tradingSundaysForYear(date.getFullYear()).has(dayKey(date))
+      ? {label:'Niedziela handlowa',tone:'trading'}
+      : {label:'Niedziela niehandlowa',tone:'off'};
+  }
+  if(date.getDay()===6)return {label:'Sobota',tone:'weekend'};
+  return null;
 };
 
 export function TechnicianCalendar({onOpenOrder}:Props){
@@ -63,6 +157,7 @@ export function TechnicianCalendar({onOpenOrder}:Props){
   },[data]);
 
   const selectedDate=days.find((day)=>dayKey(day)===selected)??days[0];
+  const selectedInfo=calendarInfo(selectedDate);
   const selectedOrders=byDay.get(selected)??[];
   const backlog=(data?.orders??[]).filter((order)=>!order.estimatedCompletionAt);
   const waitingParts=(data?.orders??[]).filter((order)=>order.status==='WAITING_PARTS');
@@ -189,8 +284,8 @@ export function TechnicianCalendar({onOpenOrder}:Props){
     <header className="workplan-head">
       <div>
         <span className="eyebrow"><CalendarDays size={13}/> PLAN PRACY</span>
-        <h2>Twój tydzień — dokładnie w Twojej kolejności.</h2>
-        <p>Układaj kolejność w obrębie dnia albo przeciągaj telefon na późniejszy termin. Ustalonego terminu nie można cofnąć ani usunąć; każda zmiana dnia aktualizuje datę i informuje klienta e-mailem.</p>
+        <h2>Twój tydzień — z dniami wolnymi i niedzielami handlowymi.</h2>
+        <p>Święta, dni ustawowo wolne i niedziele są oznaczone od razu. Kolejność zleceń nadal układasz przeciąganiem, bez zmiany dotychczasowego sposobu pracy.</p>
       </div>
       <div className="workplan-head-actions">
         <button className="button small secondary" onClick={()=>shiftWeek(-7)} title="Poprzedni tydzień"><ChevronLeft size={15}/></button>
@@ -199,6 +294,13 @@ export function TechnicianCalendar({onOpenOrder}:Props){
         <button className="button small secondary" disabled={busy} onClick={()=>void load()} title="Odśwież"><RefreshCw size={14} className={busy?'spin':''}/></button>
       </div>
     </header>
+
+    <div className="workplan-calendar-legend" aria-label="Legenda kalendarza">
+      <span className="calendar-legend-holiday">Święto / dzień wolny</span>
+      <span className="calendar-legend-trading">Niedziela handlowa</span>
+      <span className="calendar-legend-off">Niedziela niehandlowa</span>
+      <span className="calendar-legend-weekend">Sobota</span>
+    </div>
 
     {error&&<div className="service-inline-error">{error}</div>}
     {notice&&<div className="service-inline-success workplan-notice"><MailCheck size={15}/>{notice}</div>}
@@ -214,9 +316,11 @@ export function TechnicianCalendar({onOpenOrder}:Props){
       {days.map((day)=>{
         const key=dayKey(day), count=(byDay.get(key)??[]).length, isToday=key===todayKey, active=key===selected;
         const blocked=Boolean(draggedOrder)&&!canDropOn(key,draggedOrder);
-        return <button key={key} className={(active?'active ':'')+(isToday?'today ':'')+(dropTarget===key&&dropIndex===null?'drop-target ':'')+(blocked?'drop-blocked':'')} onClick={()=>setSelected(key)} {...dropHandlers(key)}>
+        const info=calendarInfo(day);
+        return <button key={key} className={(active?'active ':'')+(isToday?'today ':'')+(info?`calendar-${info.tone} `:'')+(dropTarget===key&&dropIndex===null?'drop-target ':'')+(blocked?'drop-blocked':'')} onClick={()=>setSelected(key)} {...dropHandlers(key)}>
           <span>{day.toLocaleDateString('pl-PL',{weekday:'short'})}</span>
           <strong>{day.toLocaleDateString('pl-PL',{day:'2-digit'})}</strong>
+          {info&&<em className="workplan-day-info">{info.label}</em>}
           <small>{count} {count===1?'zlecenie':'zleceń'}</small>
         </button>;
       })}
@@ -224,7 +328,10 @@ export function TechnicianCalendar({onOpenOrder}:Props){
 
     <div className="workplan-focus">
       <div className="workplan-focus-head">
-        <div><span>WYBRANY DZIEŃ · PRZECIĄGNIJ, ABY UŁOŻYĆ KOLEJNOŚĆ</span><h3>{selectedDate.toLocaleDateString('pl-PL',{weekday:'long',day:'2-digit',month:'long'})}</h3></div>
+        <div>
+          <span>WYBRANY DZIEŃ · PRZECIĄGNIJ, ABY UŁOŻYĆ KOLEJNOŚĆ{selectedInfo?' · '+selectedInfo.label.toUpperCase():''}</span>
+          <h3>{selectedDate.toLocaleDateString('pl-PL',{weekday:'long',day:'2-digit',month:'long'})}</h3>
+        </div>
         <b>{selectedOrders.length}</b>
       </div>
       <div className="workplan-list" {...dropHandlers(selected)}>
@@ -238,7 +345,7 @@ export function TechnicianCalendar({onOpenOrder}:Props){
           </button>
         </div>)}
         {dragging&&selectedOrders.length>0&&<div className={dropIndex===selectedOrders.length?'workplan-drop-end active':'workplan-drop-end'} onDragOver={(event)=>{if(!canDropOn(selected))return;event.preventDefault();event.stopPropagation();setDropTarget(selected);setDropIndex(selectedOrders.length);}} onDrop={(event)=>{const id=event.dataTransfer.getData('text/service-order')||dragging;const order=(data?.orders??[]).find((item)=>item.id===id);if(!order||!canDropOn(selected,order))return;event.preventDefault();event.stopPropagation();void moveOrder(id,selected,selectedOrders.length);}}>Upuść tutaj, aby zrobić na końcu</div>}
-        {!selectedOrders.length&&<div className="workplan-empty"><CalendarDays size={25}/><strong>Ten dzień jest wolny</strong><span>Upuść tutaj zlecenie albo wybierz inny dzień.</span></div>}
+        {!selectedOrders.length&&<div className="workplan-empty"><CalendarDays size={25}/><strong>{selectedInfo?.label||'Ten dzień jest wolny'}</strong><span>{selectedInfo?.tone==='holiday'||selectedInfo?.tone==='off'?'To dzień wolny — zlecenie możesz zaplanować świadomie mimo oznaczenia.':'Upuść tutaj zlecenie albo wybierz inny dzień.'}</span></div>}
       </div>
     </div>
 
