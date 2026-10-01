@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { AppDialogProvider } from './components/AppDialog';
 import './styles.css';
+import './meeting-editor-polish.css';
 
 const view = new URLSearchParams(window.location.search).get('view');
 if (view === 'splash') document.documentElement.classList.add('splash-mode');
