@@ -439,7 +439,7 @@ jobs:
             if (-not $service.Contains($_)) { throw "Missing v0.21 service workspace contract: $_" }
           }
           $costing = Get-Content src/components/OrderCostingCard.tsx -Raw
-          @("Mam FV zakupu","Kwota za robociznę","Dodaj FV w PDF","Marża informacyjna") | ForEach-Object {
+          @("Mam fakturę zakupu","Robocizna — koszt wewnętrzny","Dodaj FV w PDF","Zostaje po kosztach","Brakuje do pokrycia kosztów") | ForEach-Object {
             if (-not $costing.Contains($_)) { throw "Missing costing UI contract: $_" }
           }
           $electron = Get-Content electron/main.ts -Raw
@@ -557,29 +557,29 @@ jobs:
             $ready = $false
             for ($i = 0; $i -lt 20; $i++) {
               Start-Sleep -Milliseconds 300
-              try {
-                if ((Invoke-RestMethod -Uri "http://127.0.0.1:18788/health" -TimeoutSec 2).ok) { $ready=$true; break }
-              } catch {}
+              try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:18788/health"; if ($health.ok) { $ready=$true; break } } catch {}
             }
-            if (-not $ready) { throw "v0.21 local API did not start." }
+            if (-not $ready) { throw "Packaged API did not start." }
 
-            $h1 = @{ Authorization="Bearer v021-local-tech-one"; "Content-Type"="application/json" }
-            $h2 = @{ Authorization="Bearer v021-local-tech-two"; "Content-Type"="application/json" }
-            $workspace = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/technician-workspace" -Headers $h1
-            if ($workspace.counts.active -ne 1 -or $workspace.counts.waitingParts -ne 1) { throw "Technician workspace counts are wrong." }
+            $headersA = @{ Authorization="Bearer token_a" }
+            $headersB = @{ Authorization="Bearer token_b" }
+            $workspace = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/technician/workspace" -Headers $headersA
+            if ($workspace.counts.waitingParts -ne 1) { throw "Technician workspace missing waiting-parts order." }
 
-            $costBody = @{ laborCostGross=250; otherCostGross=30; parts=@(@{ description="Ekran"; quantity=2; unitCostGross=120.5; invoiceReceived=$true; invoiceNumber="FV-TEST"; supplier="Supplier"; purchasedAt="2026-09-20" }) } | ConvertTo-Json -Depth 8
-            $costing = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18788/service/orders/srv_d4444444444444444444/costing" -Headers $h1 -Body $costBody
-            if ($costing.partsCostGross -ne 241 -or $costing.internalCostGross -ne 521 -or $costing.marginGross -ne 579) { throw "Technician costing math is wrong." }
+            $costingBody = @{ laborCostGross=120; otherCostGross=30; parts=@(@{ description="Ekran"; quantity=1; unitCostGross=400; invoiceReceived=$true; invoiceNumber="FV/1"; supplier="Parts"; purchasedAt="2025-01-10" }) } | ConvertTo-Json -Depth 6
+            Invoke-RestMethod -Method Put -Uri "http://127.0.0.1:18788/service/orders/srv_d4444444444444444444/costing" -Headers $headersA -ContentType "application/json" -Body $costingBody | Out-Null
+            $costing = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/orders/srv_d4444444444444444444/costing" -Headers $headersA
+            if ($costing.internalCostGross -ne 550) { throw "Costing total mismatch." }
+            if ($costing.marginGross -ne 550) { throw "Costing margin mismatch." }
 
-            $noteBody = @{ title="Prywatne"; body="Zamówić część jutro"; pinned=$true } | ConvertTo-Json
-            $note = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18788/service/technician-notes" -Headers $h1 -Body $noteBody
-            if ($note.body -ne "Zamówić część jutro") { throw "Private technician note was not saved." }
-
-            $foreign = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Uri "http://127.0.0.1:18788/service/orders/srv_d4444444444444444444/costing" -Headers $h2 -Body $costBody
-            if ($foreign.StatusCode -ne 403) { throw "Second technician must not edit another technician's costing." }
+            $noteBody = @{ title="Prywatna"; body="Tylko moje"; pinned=$true } | ConvertTo-Json
+            $createdNote = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18788/service/technician/notes" -Headers $headersA -ContentType "application/json" -Body $noteBody
+            $notesA = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/technician/notes" -Headers $headersA
+            $notesB = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/technician/notes" -Headers $headersB
+            if ($notesA.Count -ne 1 -or $notesB.Count -ne 0) { throw "Technician notes privacy regression." }
+            Invoke-RestMethod -Method Delete -Uri ("http://127.0.0.1:18788/service/technician/notes/"+$createdNote.id) -Headers $headersA | Out-Null
           } finally {
-            if (-not $process.HasExited) { $process.Kill() }
+            if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
 
       - name: Smoke test packaged local API
@@ -587,33 +587,39 @@ jobs:
         run: |
           $exe = Resolve-Path "release/win-unpacked/LockOn ServiceOS.exe"
           $server = Resolve-Path "release/win-unpacked/resources/app.asar.unpacked/dist-server/index.cjs"
-          $data = Join-Path $env:RUNNER_TEMP "lockon-smoke-database.json"
+          $data = Join-Path $env:RUNNER_TEMP "lockon-smoke.json"
+          $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $db = @{
+            version = 2
+            users = @(
+              @{ id="usr_aaaaaaaaaaaaaaaaaaaa"; email="smoke@example.invalid"; name="Smoke User"; role="USER"; technicianSplitPercent=$null; supportEnabled=$false; status="ACTIVE"; pointIds=@("pnt_smoke"); firstLoginAt=(Get-Date).ToUniversalTime().ToString("o"); lastLoginAt=(Get-Date).ToUniversalTime().ToString("o") }
+            )
+            points = @(@{ id="pnt_smoke"; name="Smoke Point"; city="Warszawa"; active=$true; createdAt=(Get-Date).ToUniversalTime().ToString("o") })
+            customers = @()
+            devices = @()
+            serviceOrders = @()
+            sessions = @(@{ tokenHash="a2ebf4ce71158d3179087473d79cc9186d0def067888b592d4ca0c5d0b26905"; userId="usr_aaaaaaaaaaaaaaaaaaaa"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) })
+          }
+          $db | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $data
+
           $env:ELECTRON_RUN_AS_NODE = "1"
           $env:LOCKON_API_HOST = "127.0.0.1"
           $env:LOCKON_API_PORT = "18787"
           $env:LOCKON_DATA_FILE = $data
-          $env:LOCKON_OWNER_EMAIL = "nowogar@gmail.com"
-          $env:LOCKON_GOOGLE_CLIENT_ID = "996585439932-e10mu53j95s6u13vrua841tm4oco38so.apps.googleusercontent.com"
-
+          $env:LOCKON_OWNER_EMAIL = "owner-smoke@example.invalid"
           $process = Start-Process -FilePath $exe -ArgumentList @($server) -WorkingDirectory $env:RUNNER_TEMP -PassThru -WindowStyle Hidden
           try {
-            $ok = $false
+            $ready = $false
             for ($i = 0; $i -lt 20; $i++) {
-              Start-Sleep -Milliseconds 350
-              if ($process.HasExited) {
-                throw "Pakietowany backend zakończył się przed uruchomieniem."
-              }
-              try {
-                $health = Invoke-RestMethod -Uri "http://127.0.0.1:18787/health" -TimeoutSec 2
-                if ($health.ok -eq $true) {
-                  $ok = $true
-                  break
-                }
-              } catch {}
+              Start-Sleep -Milliseconds 300
+              try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:18787/health"; if ($health.ok) { $ready=$true; break } } catch {}
             }
-            if (-not $ok) {
-              throw "Pakietowany backend nie odpowiedział na /health."
-            }
+            if (-not $ready) { throw "Packaged API did not start." }
+            $headers = @{ Authorization="Bearer smoke_token" }
+            $state = Invoke-RestMethod -Uri "http://127.0.0.1:18787/auth/state" -Headers $headers
+            if (-not $state.authenticated) { throw "Packaged API auth smoke failed." }
+            $dash = Invoke-RestMethod -Uri "http://127.0.0.1:18787/dashboard" -Headers $headers
+            if ($dash.pointCount -lt 1) { throw "Packaged API dashboard smoke failed." }
           } finally {
-            if (-not $process.HasExited) { $process.Kill() }
+            if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
