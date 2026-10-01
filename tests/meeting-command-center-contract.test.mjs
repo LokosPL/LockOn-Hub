@@ -98,11 +98,11 @@ test('1.0.5.22 retains high-resolution screen share and low-latency speech', () 
   assert.match(electron, /backgroundThrottling: false/);
 });
 
-test('1.0.5.25 product and updater versions stay aligned', () => {
-  assert.equal(read('RELEASE_VERSION').trim(), '1.0.5.25');
-  assert.equal(read('BUILD_VERSION').trim(), '1.5.25');
-  assert.equal(JSON.parse(read('package.json')).version, '1.5.25');
-  assert.match(read('electron/appConfig.ts'), /productVersion: '1\.0\.5\.25'/);
+test('1.0.5.26 product and updater versions stay aligned', () => {
+  assert.equal(read('RELEASE_VERSION').trim(), '1.0.5.26');
+  assert.equal(read('BUILD_VERSION').trim(), '1.5.26');
+  assert.equal(JSON.parse(read('package.json')).version, '1.5.26');
+  assert.match(read('electron/appConfig.ts'), /productVersion: '1\.0\.5\.26'/);
 });
 
 test('1.0.5.25 ships the polished meeting editor layer', () => {
