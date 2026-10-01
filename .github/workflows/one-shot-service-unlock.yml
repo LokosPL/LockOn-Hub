@@ -1,4 +1,5 @@
 name: Apply service unlock intake patch
+# One-shot branch patcher. It removes itself after a successful source update.
 
 on:
   push:
