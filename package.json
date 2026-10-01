@@ -1,6 +1,6 @@
 {
   "name": "lockon-serviceos",
-  "version": "1.5.25",
+  "version": "1.5.26",
   "private": true,
   "description": "LockOn ServiceOS — centralny system serwisowy z klientami, naprawami, historią statusów, Google OAuth, bezpiecznymi powiadomieniami Gmail i pomocą per konto.",
   "author": "Bartłomiej Motłoch",
@@ -76,8 +76,9 @@
       "icon": "build/icon.svg"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "LockOn ServiceOS"

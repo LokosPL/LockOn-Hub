@@ -31,20 +31,20 @@ const sendState = (state: UpdateState) => {
 export const getUpdateState = () => currentState;
 
 export const configureUpdater = () => {
-  // Aktualizacja ma działać jak zwykły program desktopowy: sprawdź w tle,
-  // pobierz bez pytania, a instalację zaproponuj użytkownikowi.
+  // Pobieramy aktualizację automatycznie, ale samą instalację uruchamiamy
+  // wyłącznie po świadomym kliknięciu użytkownika. To zapobiega wyścigowi
+  // między zwykłym zamknięciem aplikacji a procesem NSIS na Windows.
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowPrerelease = false;
 
-  // Na Windowsie aktualizacja ma wrócić dokładnie do katalogu, z którego działa
-  // aktualna instalacja (również gdy użytkownik wybrał własny dysk/folder).
+  // Na Windowsie aktualizacja ma nadpisać dokładnie bieżącą instalację,
+  // również wtedy, gdy starsza wersja była zainstalowana w niestandardowym katalogu.
   if (process.platform === 'win32' && app.isPackaged) {
     (autoUpdater as typeof autoUpdater & { installDirectory?: string }).installDirectory =
       path.dirname(process.execPath);
   }
 
-  // Ustawiamy feed jawnie, dzięki czemu konfigurację GitHub zmieniasz w jednym miejscu.
   autoUpdater.setFeedURL({
     provider: 'github',
     owner: APP_CONFIG.updateRepository.owner,
@@ -146,9 +146,8 @@ export const installUpdate = () => {
     throw new Error('Aktualizacja nie jest jeszcze gotowa do instalacji.');
   }
 
-  // isSilent=true dodaje /S do instalatora NSIS, więc użytkownik nie widzi
-  // kreatora "dla kogo zainstalować" ani wyboru katalogu podczas aktualizacji.
-  // isForceRunAfter=true uruchamia ServiceOS ponownie po zakończeniu.
+  // Instalator od 1.5.26 jest one-click NSIS. /S jest więc obsługiwane natywnie,
+  // a --force-run ponownie uruchamia aplikację dopiero po zakończeniu nadpisania plików.
   autoUpdater.quitAndInstall(true, true);
   return currentState;
 };
@@ -159,8 +158,6 @@ let startupCheckTimer: NodeJS.Timeout | null = null;
 export const startAutomaticUpdateChecks = () => {
   if (!app.isPackaged || updateTimer || startupCheckTimer) return;
 
-  // Każdy komputer sprawdza nowe wydanie chwilę po uruchomieniu, a potem
-  // regularnie podczas pracy. autoDownload pobiera update bez klikania.
   startupCheckTimer = setTimeout(() => {
     startupCheckTimer = null;
     void checkForUpdates().catch(() => undefined);
