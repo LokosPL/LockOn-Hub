@@ -1,0 +1,47 @@
+name: Apply service unlock intake patch
+
+on:
+  push:
+    branches: ["feat/service-workflow-polish-20261001"]
+    paths:
+      - "scripts/patch-service-unlock.mjs"
+      - ".github/workflows/one-shot-service-unlock.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-service-unlock
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: feat/service-workflow-polish-20261001
+          fetch-depth: 0
+      - name: Apply exact source patch
+        run: node scripts/patch-service-unlock.mjs
+      - name: Verify expected changes exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq "unlockType: 'NONE' as 'NONE' | 'PIN' | 'PATTERN'" src/pages/ServicePage.tsx
+          grep -Fq "PIN powinien zawierać od 4 do 16 cyfr." src/pages/ServicePage.tsx
+          grep -Fq "service-pattern-grid" src/pages/ServicePage.tsx
+          grep -Fq "deviceUnlock?:{saved:boolean" src/types/electron.d.ts
+      - name: Commit patch and remove one-shot machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/pages/ServicePage.tsx src/types/electron.d.ts
+          git rm scripts/patch-service-unlock.mjs .github/workflows/one-shot-service-unlock.yml
+          git commit -m "feat: add protected phone unlock intake"
+          git push origin HEAD:feat/service-workflow-polish-20261001
