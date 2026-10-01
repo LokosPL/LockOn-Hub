@@ -98,9 +98,20 @@ test('1.0.5.22 retains high-resolution screen share and low-latency speech', () 
   assert.match(electron, /backgroundThrottling: false/);
 });
 
-test('1.0.5.24 product and updater versions stay aligned', () => {
-  assert.equal(read('RELEASE_VERSION').trim(), '1.0.5.24');
-  assert.equal(read('BUILD_VERSION').trim(), '1.5.24');
-  assert.equal(JSON.parse(read('package.json')).version, '1.5.24');
-  assert.match(read('electron/appConfig.ts'), /productVersion: '1\.0\.5\.24'/);
+test('1.0.5.25 product and updater versions stay aligned', () => {
+  assert.equal(read('RELEASE_VERSION').trim(), '1.0.5.25');
+  assert.equal(read('BUILD_VERSION').trim(), '1.5.25');
+  assert.equal(JSON.parse(read('package.json')).version, '1.5.25');
+  assert.match(read('electron/appConfig.ts'), /productVersion: '1\.0\.5\.25'/);
+});
+
+test('1.0.5.25 ships the polished meeting editor layer', () => {
+  const main = read('src/main.tsx');
+  const styles = read('src/meeting-editor-polish.css');
+
+  assert.match(main, /meeting-editor-polish\.css/);
+  assert.match(styles, /meeting-create-grid/);
+  assert.match(styles, /meeting-audience-picker/);
+  assert.match(styles, /:has\(input:checked\)/);
+  assert.match(styles, /meeting-editor-actions/);
 });
