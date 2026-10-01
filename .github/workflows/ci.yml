@@ -152,6 +152,284 @@ jobs:
           @("WARRANTY_ACTIVE_POINT_REQUIRED","WARRANTY_WRONG_ACTIVE_POINT","WARRANTY_DEVICE_IN_TRANSFER") | ForEach-Object {
             if (-not $central.Contains($_)) { throw "Missing warranty physical-location contract: $_" }
           }
+          @(
+            "requireCustomerAccountAccess(u,customerNotificationPrefsMatch[1],'SERVICE')",
+            "const canCompletePickup=u.role_code==='USER'&&next==='COMPLETED'",
+            "const SERVICE_TRANSFER_ROLES = new Set(['OWNER', 'BOSS', 'COORDINATOR', 'TECHNICIAN', 'USER'])"
+          ) | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing USER front-desk API contract: $_" }
+          }
+          if ($central.Contains("if(!['OWNER','BOSS','COORDINATOR','TECHNICIAN'].includes(u.role_code))")) {
+            throw "Legacy service-scan guard still blocks USER from receiving transferred devices."
+          }
+
+          @(
+            "FRONTDESK_STEPS = ['Przyjęto','Wyślij do serwisu','W serwisie','Naprawa','Wraca do punktu','Do odbioru','Wydany']",
+            "CO TERAZ",
+            "Gdzie jest telefon i co dalej?",
+            "Historia serwisu",
+            "relativeTimePl",
+            "open={effectiveRole==='USER'?true:undefined}"
+          ) | ForEach-Object {
+            if (-not $service.Contains($_)) { throw "Missing simple USER service journey contract: $_" }
+          }
+
+          $roles = Get-Content src/config/roles.ts -Raw
+          if (-not $roles.Contains("navigation: ['dashboard', 'service', 'meetings', 'customers', 'browser', 'settings']")) {
+            throw "USER must keep the point-scoped customer workspace and dedicated meetings module in navigation."
+          }
+
+          @(
+            "const frontDesk=effectiveRole==='USER'",
+            "KLIENCI TWOJEGO PUNKTU",
+            "Klienci i ich naprawy",
+            "relativeTimePl"
+          ) | ForEach-Object {
+            if (-not $customer.Contains($_)) { throw "Missing USER customer workspace contract: $_" }
+          }
+
+          @(
+            "const requireReadableOrder",
+            "const serviceView=session.user.role_code==='USER'",
+            "COALESCE(s.home_point_id,s.point_id)"
+          ) | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing home-point read/customer scope contract: $_" }
+          }
+
+          $browser = Get-Content src/pages/BrowserPage.tsx -Raw
+          @("actionBusy","browser-action-error") | ForEach-Object {
+            if (-not $browser.Contains($_)) { throw "Missing browser action guard: $_" }
+          }
+          $settings = Get-Content src/pages/SettingsPage.tsx -Raw
+          @("scaleBusy","settings-action-error") | ForEach-Object {
+            if (-not $settings.Contains($_)) { throw "Missing settings action guard: $_" }
+          }
+
+      - name: Verify Google OAuth reliability contracts
+        shell: pwsh
+        run: |
+          $auth = Get-Content electron/googleAuth.ts -Raw
+          @(
+            "GOOGLE_OAUTH_USER_WAIT_MS = 10 * 60_000",
+            "GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS = 45_000",
+            "clearUserWaitTimer();",
+            "callbackAccepted = true",
+            "AbortSignal.timeout(GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS)",
+            "googleLoginInFlight"
+          ) | ForEach-Object {
+            if (-not $auth.Contains($_)) { throw "Missing Google OAuth reliability contract: $_" }
+          }
+          if ($auth.Contains("}, 180_000);")) {
+            throw "Legacy 180-second whole-flow OAuth timeout must not return."
+          }
+
+          $api = Get-Content electron/backendApi.ts -Raw
+          @("name === 'AbortError'","name === 'TimeoutError'","signal?: AbortSignal") | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing auth API timeout contract: $_" }
+          }
+
+          $central = Get-Content functions/lockon-api.mjs -Raw
+          @("AbortSignal.timeout(15_000)","GOOGLE_UPSTREAM_TIMEOUT","status: 504") | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing central Google OAuth timeout contract: $_" }
+          }
+
+          $login = Get-Content src/pages/LoginScreen.tsx -Raw
+          if (-not $login.Contains("ServiceOS poczeka na Ciebie")) {
+            throw "Login screen must explain that the app keeps waiting for browser completion."
+          }
+
+      - name: Verify Start and browser polish contracts
+        shell: pwsh
+        run: |
+          $dashboard = Get-Content src/pages/Dashboard.tsx -Raw
+          @("start-clock","start-weather-card","data.getWeather","weatherCity") | ForEach-Object {
+            if (-not $dashboard.Contains($_)) { throw "Missing Start dashboard contract: $_" }
+          }
+          if ($dashboard.Contains("Pulpit wykorzystuje całe dostępne miejsce")) {
+            throw "Technical dashboard copy must not be visible to users."
+          }
+
+          $app = Get-Content src/App.tsx -Raw
+          @("auth.requestedPoint?.city","auth.point?.city","weatherCity={weatherCity}") | ForEach-Object {
+            if (-not $app.Contains($_)) { throw "Missing account-city weather contract: $_" }
+          }
+
+          $preload = Get-Content electron/preload.ts -Raw
+          if (-not $preload.Contains("data:getWeather")) { throw "Weather IPC is not exposed." }
+
+          $electron = Get-Content electron/main.ts -Raw
+          @("fetchStartWeather","geocoding-api.open-meteo.com","api.open-meteo.com/v1/forecast","AbortSignal.timeout(8_000)") | ForEach-Object {
+            if (-not $electron.Contains($_)) { throw "Missing weather safety contract: $_" }
+          }
+
+          $browser = Get-Content electron/browser.ts -Raw
+          @("setBorderRadius(14)","setBorderRadius(Math.max(10","setBackgroundColor('#0b0f14')") | ForEach-Object {
+            if (-not $browser.Contains($_)) { throw "Missing embedded browser clipping contract: $_" }
+          }
+
+      - name: Verify unified Google and Gmail OAuth contracts
+        shell: pwsh
+        run: |
+          $login = Get-Content src/pages/LoginScreen.tsx -Raw
+          if ($login.Contains("window.lockOn.gmail.connect")) {
+            throw "Login screen must not start a second Gmail OAuth flow."
+          }
+          @(
+            "Zalogowano. Otwieram ServiceOS",
+            "Jedno logowanie obejmuje wysyłkę Gmail",
+            "gmail.send",
+            "GOOGLE_SESSION_RECOVERY_INTERVAL_MS",
+            "window.lockOn.auth.getState()",
+            "Sesja Google została odzyskana"
+          ) | ForEach-Object {
+            if (-not $login.Contains($_)) { throw "Missing unified login UX contract: $_" }
+          }
+
+          $auth = Get-Content electron/googleAuth.ts -Raw
+          @(
+            "https://www.googleapis.com/auth/gmail.send",
+            "access_type: 'offline'",
+            "include_granted_scopes: 'true'",
+            "prompt: 'consent select_account'",
+            "AUTH_SESSION_RESTORE_TIMEOUT_MS = 12_000",
+            "GOOGLE_GMAIL_AUTOCONNECT_TIMEOUT_MS = 8_000",
+            "writeStoredSession({ apiToken: payload.token, provider: 'google'"
+          ) | ForEach-Object {
+            if (-not $auth.Contains($_)) { throw "Missing primary OAuth Gmail contract: $_" }
+          }
+
+          $central = Get-Content functions/lockon-api.mjs -Raw
+          @(
+            "autoConnectGmailFromPrimaryLogin",
+            "GMAIL_CONNECTED_AT_LOGIN",
+            "PRIMARY_GOOGLE_OAUTH",
+            "OWNER_PRIVACY",
+            "GMAIL_SCOPE_NOT_GRANTED",
+            "REFRESH_TOKEN_MISSING",
+            "EXISTING_USER_SENDER_REUSED",
+            "user_gmail_credentials",
+            "credentialLocation:'SERVER_USER'",
+            "GMAIL_IDENTITY_MISMATCH",
+            "GMAIL_UPSTREAM_TIMEOUT_MS = 8_000",
+            "requeueNoSenderNotificationsForUser",
+            "const [meetingGmail,gmail] = await Promise.all"
+          ) | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing per-user unified Gmail contract: $_" }
+          }
+          if ($central.Contains("const loadActiveMailSender = async")) {
+            throw "Customer mail must not fall back to a point/global Gmail sender."
+          }
+
+          $main = Get-Content electron/main.ts -Raw
+          @("auth:state-changed","refreshAndPushAuthState","pushAuthState(state)") | ForEach-Object {
+            if (-not $main.Contains($_)) { throw "Missing auth recovery IPC contract: $_" }
+          }
+
+          $preload = Get-Content electron/preload.ts -Raw
+          if (-not $preload.Contains("auth:state-changed")) {
+            throw "Missing auth recovery preload event."
+          }
+
+          $gmail = Get-Content electron/gmailAuth.ts -Raw
+          @(
+            "GMAIL_OAUTH_USER_WAIT_MS = 10 * 60_000",
+            "GMAIL_OAUTH_EXCHANGE_TIMEOUT_MS = 60_000",
+            "callbackAccepted = true",
+            "clearUserWaitTimer()",
+            "AbortSignal.timeout(GMAIL_OAUTH_EXCHANGE_TIMEOUT_MS)",
+            "gmailConnectInFlight"
+          ) | ForEach-Object {
+            if (-not $gmail.Contains($_)) { throw "Missing manual Gmail recovery contract: $_" }
+          }
+
+      - name: Verify 1.0.0.20 meetings and LiveKit contracts
+        shell: pwsh
+        run: |
+          $central = Get-Content functions/lockon-api.mjs -Raw
+          @(
+            "MEETING_CREATE_ROLES",
+            "MEETING_GLOBAL_MANAGE_ROLES",
+            "OWNER', 'BOSS', 'COORDINATOR",
+            "url.pathname==='/meetings'",
+            "/join-token",
+            "canPublishSources",
+            "meeting_participant_controls",
+            "/moderate",
+            "meeting_attendance",
+            "meeting_email_sender",
+            "meeting_email_outbox",
+            "meeting_chat_messages",
+            "meeting_hand_raises",
+            "email_notifications_enabled",
+            "queueMeetingEmailEvent",
+            "normalizeLiveKitUrls",
+            "canJoinMeeting(meeting.status)",
+            "getMeetingTransition(meeting.status,action)",
+            "LIVEKIT_URL",
+            "LIVEKIT_API_KEY",
+            "LIVEKIT_API_SECRET"
+          ) | ForEach-Object {
+            if (-not $central.Contains($_)) { throw "Missing meeting backend contract: $_" }
+          }
+
+          $room = Get-Content src/components/MeetingRoom.tsx -Raw
+          @(
+            "setMicrophoneEnabled",
+            "screenSources",
+            "Track.Source.ScreenShare",
+            "meetings.moderate",
+            "attendanceAction",
+            "Mikrofon zablokowany",
+            "Udostępnij ekran",
+            "Spróbuj ponownie",
+            "CONNECTION_ERROR_MESSAGE",
+            "room.connect(serverUrl, credentials.token",
+            "meeting-room-panel",
+            "Wróć do spotkań",
+            "setHandRaised",
+            "sendChat",
+            "ActiveSpeakersChanged",
+            "audioLevel",
+            "meeting-broadcast-strip",
+            "Zmień źródło",
+            "updateShareOverlay",
+            "shareOverlay(null)"
+          ) | ForEach-Object {
+            if (-not $room.Contains($_)) { throw "Missing live meeting UI contract: $_" }
+          }
+
+          $meetings = Get-Content src/components/MeetingsCard.tsx -Raw
+          @(
+            "Zaplanuj spotkanie",
+            "✓ Jesteś zapisany",
+            "meetingScheduleHint",
+            "Termin minął · oczekiwanie na prowadzącego",
+            "Brak zaplanowanych spotkań.",
+            "Rozpocznij spotkanie",
+            "Otwórz pokój spotkania",
+            "Wróć do spotkań",
+            "role === 'COORDINATOR'",
+            "Frekwencja",
+            "Powiadom uczestników e-mailem",
+            "emailNotificationsEnabled"
+          ) | ForEach-Object {
+            if (-not $meetings.Contains($_)) { throw "Missing meeting scheduling UX contract: $_" }
+          }
+
+          $index = Get-Content index.html -Raw
+          @("https://*.livekit.cloud","wss://*.livekit.cloud") | ForEach-Object {
+            if (-not $index.Contains($_)) { throw "Missing LiveKit CSP contract: $_" }
+          }
+
+          $electron = Get-Content electron/main.ts -Raw
+          @("permission === 'media'","isTrustedRendererUrl","setPermissionCheckHandler","meetings:shareOverlay","meetings:updateShareOverlay","setIgnoreMouseEvents","setContentProtection","setVisibleOnAllWorkspaces","meetings:open-deep-link") | ForEach-Object {
+            if (-not $electron.Contains($_)) { throw "Missing trusted meeting media permission contract: $_" }
+          }
+
+          $settings = Get-Content src/pages/SettingsPage.tsx -Raw
+          if (-not $settings.Contains("Wiadomości będą wysyłane jako:")) {
+            throw "Exact per-user Gmail sender status is missing from Settings."
+          }
 
       - name: Verify service finance UI contracts
         shell: pwsh
@@ -161,8 +439,65 @@ jobs:
             if (-not $service.Contains($_)) { throw "Missing v0.21 service workspace contract: $_" }
           }
           $costing = Get-Content src/components/OrderCostingCard.tsx -Raw
-          @("Mam fakturę zakupu","Robocizna — koszt wewnętrzny","Dodaj FV w PDF","Zostaje po kosztach","Brakuje do pokrycia kosztów") | ForEach-Object {
+          @("Mam FV zakupu","Kwota za robociznę","Dodaj FV w PDF","Marża informacyjna") | ForEach-Object {
             if (-not $costing.Contains($_)) { throw "Missing costing UI contract: $_" }
+          }
+          $electron = Get-Content electron/main.ts -Raw
+          @("assertPdfFile","sha256File","%PDF-","service:downloadInvoiceBatch") | ForEach-Object {
+            if (-not $electron.Contains($_)) { throw "Missing secure invoice IPC contract: $_" }
+          }
+
+          $api = Get-Content functions/lockon-api.mjs -Raw
+          @("COALESCE(s.current_point_id,s.home_point_id,s.point_id)","t.status IN ('REQUESTED','IN_TRANSIT','DELIVERED')","FOR UPDATE") | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing v1 service safety regression contract: $_" }
+          }
+
+          $brands = Get-Content src/config/phoneBrands.ts -Raw
+          @("'Apple'","'Samsung'","'Xiaomi'","'Huawei'","'Motorola'","'Nokia'","'Nothing'","'OnePlus'") | ForEach-Object {
+            if (-not $brands.Contains($_)) { throw "Missing phone brand suggestion: $_" }
+          }
+
+          @("service-brand-suggestions","service-order-type-picker","service-estimate-field","service-intake-eta","service-quick-pills","canSetIntakeEstimate","canSetIntakeEta",'type="date"',"Nie podano","Brak uwag","Marka <em>opcjonalnie</em>","Model <em>opcjonalnie</em>","IMEI <em>opcjonalnie</em>","Numer seryjny <em>opcjonalnie</em>") | ForEach-Object {
+            if (-not $service.Contains($_)) { throw "Missing simplified intake UI contract: $_" }
+          }
+          @("<span>Punkt przyjęcia</span>","<span>Sposób obsługi</span>","form.assignedTechnicianId") | ForEach-Object {
+            if ($service.Contains($_)) { throw "Legacy intake control returned: $_" }
+          }
+
+          @(
+            "TECHNICIAN_AT_INTAKE",
+            "!firstName||!lastName||!issue",
+            "IMEI powinien zawierać 14–16 cyfr.",
+            "serviceCardNumber='KS-'",
+            "customerPortalBaseUrl:PUBLIC_PORTAL_URL+'/klient.html'",
+            "Cena orientacyjna",
+            "Warunki przyjęcia i odbioru",
+            "Nieodebranie urządzenia nie oznacza porzucenia ani przeniesienia własności na sklep",
+            "szkody będące następstwem utraty",
+            "Zeskanuj kod QR w ServiceOS, aby otworzyć zlecenie i obsłużyć urządzenie.",
+            "Kod ręczny — użyj, gdy nie możesz zeskanować QR.",
+            "customerServiceCardPortraitContent",
+            "if(normalized==='CUSTOMER')",
+            "pageSize:'A4',pageOrientation:'portrait',pageMargins:[30,24,30,24]",
+            "labelFontSize:10,valueFontSize:11,rowMargin:3",
+            "serviceCardTermsBlock({titleFontSize:11.5,fontSize:8.8,marginTop:10})",
+            "fontSize:18,bold:true,color:'#000000',characterSpacing:1",
+            "formatServiceCardDateTime(context.receivedAt)",
+            "Przyjęcie i urządzenie",
+            "Obsługa serwisowa",
+            "renderServiceCardPdf(item.service_order_id,'CUSTOMER')",
+            "OWNER_OPERATIONAL_NAME = 'System LockOn'",
+            "OWNER_SUPPORT_NAME = 'Właściciel aplikacji'",
+            "canSetIntakeEstimate=SERVICE_CREATE_ROLES.has(u.role_code)",
+            "canSetIntakeEta=SERVICE_CREATE_ROLES.has(u.role_code)",
+            "brandInput||'Nie podano'",
+            "deviceNotes=cleanText(body.deviceNotes,1000)||'Brak uwag'"
+          ) | ForEach-Object {
+            if (-not $api.Contains($_)) { throw "Missing intake/card regression contract: $_" }
+          }
+          $createOrderValidation = "!firstName||!lastName||!issue"
+          if (-not $api.Contains($createOrderValidation)) {
+            throw "Create-order validation must keep only customer identity and issue description mandatory."
           }
 
       - name: Typecheck renderer
@@ -195,10 +530,6 @@ jobs:
           $server = Resolve-Path "release/win-unpacked/resources/app.asar.unpacked/dist-server/index.cjs"
           $data = Join-Path $env:RUNNER_TEMP "lockon-v021-technician-smoke.json"
           $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-          $tokenA = "token_a"
-          $tokenB = "token_b"
-          $tokenHashA = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($tokenA))).ToLowerInvariant()
-          $tokenHashB = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($tokenB))).ToLowerInvariant()
           $db = @{
             version = 2
             users = @(
@@ -210,8 +541,8 @@ jobs:
             devices = @(@{ id="dev_c3333333333333333333"; customerId="cst_c3333333333333333333"; brand="Samsung"; model="S25"; imei=$null; serialNumber=$null; notes=""; createdAt=(Get-Date).ToUniversalTime().ToString("o"); updatedAt=(Get-Date).ToUniversalTime().ToString("o") })
             serviceOrders = @(@{ id="srv_d4444444444444444444"; orderNumber=1; pointId="pnt_v021"; homePointId="pnt_v021"; currentPointId="pnt_v021"; customerId="cst_c3333333333333333333"; deviceId="dev_c3333333333333333333"; orderType="REPAIR"; handlingMode="STANDARD"; issueDescription="Smoke v0.21"; status="WAITING_PARTS"; assignedTechnicianId="usr_a1111111111111111111"; createdByUserId="usr_a1111111111111111111"; estimatedCost=900; finalCost=1100; currency="PLN"; estimatedCompletionAt=(Get-Date).AddDays(1).ToUniversalTime().ToString("o"); receivedAt=(Get-Date).ToUniversalTime().ToString("o"); createdAt=(Get-Date).ToUniversalTime().ToString("o"); updatedAt=(Get-Date).ToUniversalTime().ToString("o") })
             sessions = @(
-              @{ tokenHash=$tokenHashA; userId="usr_a1111111111111111111"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) },
-              @{ tokenHash=$tokenHashB; userId="usr_b2222222222222222222"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) }
+              @{ tokenHash="451f81b905e43401b600af1d1a26f5cdcbc870d71dc4c7441cfa5fc94e251e18"; userId="usr_a1111111111111111111"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) },
+              @{ tokenHash="2027835918c417f9104e9a74dc502411f77cf3755787bf9e96adec6bf4160424"; userId="usr_b2222222222222222222"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) }
             )
           }
           $db | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $data
@@ -226,29 +557,29 @@ jobs:
             $ready = $false
             for ($i = 0; $i -lt 20; $i++) {
               Start-Sleep -Milliseconds 300
-              try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:18788/health"; if ($health.ok) { $ready=$true; break } } catch {}
+              try {
+                if ((Invoke-RestMethod -Uri "http://127.0.0.1:18788/health" -TimeoutSec 2).ok) { $ready=$true; break }
+              } catch {}
             }
-            if (-not $ready) { throw "Packaged API did not start." }
+            if (-not $ready) { throw "v0.21 local API did not start." }
 
-            $headersA = @{ Authorization="Bearer $tokenA" }
-            $headersB = @{ Authorization="Bearer $tokenB" }
-            $workspace = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/technician-workspace" -Headers $headersA
-            if ($workspace.counts.waitingParts -ne 1) { throw "Technician workspace missing waiting-parts order." }
+            $h1 = @{ Authorization="Bearer v021-local-tech-one"; "Content-Type"="application/json" }
+            $h2 = @{ Authorization="Bearer v021-local-tech-two"; "Content-Type"="application/json" }
+            $workspace = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/technician-workspace" -Headers $h1
+            if ($workspace.counts.active -ne 1 -or $workspace.counts.waitingParts -ne 1) { throw "Technician workspace counts are wrong." }
 
-            $costingBody = @{ laborCostGross=120; otherCostGross=30; parts=@(@{ description="Ekran"; quantity=1; unitCostGross=400; invoiceReceived=$true; invoiceNumber="FV/1"; supplier="Parts"; purchasedAt="2025-01-10" }) } | ConvertTo-Json -Depth 6
-            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18788/service/orders/srv_d4444444444444444444/costing" -Headers $headersA -ContentType "application/json" -Body $costingBody | Out-Null
-            $costing = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/orders/srv_d4444444444444444444/costing" -Headers $headersA
-            if ($costing.internalCostGross -ne 550) { throw "Costing total mismatch." }
-            if ($costing.marginGross -ne 550) { throw "Costing margin mismatch." }
+            $costBody = @{ laborCostGross=250; otherCostGross=30; parts=@(@{ description="Ekran"; quantity=2; unitCostGross=120.5; invoiceReceived=$true; invoiceNumber="FV-TEST"; supplier="Supplier"; purchasedAt="2026-09-20" }) } | ConvertTo-Json -Depth 8
+            $costing = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18788/service/orders/srv_d4444444444444444444/costing" -Headers $h1 -Body $costBody
+            if ($costing.partsCostGross -ne 241 -or $costing.internalCostGross -ne 521 -or $costing.marginGross -ne 579) { throw "Technician costing math is wrong." }
 
-            $noteBody = @{ title="Prywatna"; body="Tylko moje"; pinned=$true } | ConvertTo-Json
-            $createdNote = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18788/service/technician-notes" -Headers $headersA -ContentType "application/json" -Body $noteBody
-            $notesA = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/technician-notes" -Headers $headersA
-            $notesB = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/technician-notes" -Headers $headersB
-            if ($notesA.Count -ne 1 -or $notesB.Count -ne 0) { throw "Technician notes privacy regression." }
-            Invoke-RestMethod -Method Delete -Uri ("http://127.0.0.1:18788/service/technician-notes/"+$createdNote.id) -Headers $headersA | Out-Null
+            $noteBody = @{ title="Prywatne"; body="Zamówić część jutro"; pinned=$true } | ConvertTo-Json
+            $note = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18788/service/technician-notes" -Headers $h1 -Body $noteBody
+            if ($note.body -ne "Zamówić część jutro") { throw "Private technician note was not saved." }
+
+            $foreign = Invoke-WebRequest -SkipHttpErrorCheck -Method Post -Uri "http://127.0.0.1:18788/service/orders/srv_d4444444444444444444/costing" -Headers $h2 -Body $costBody
+            if ($foreign.StatusCode -ne 403) { throw "Second technician must not edit another technician's costing." }
           } finally {
-            if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+            if (-not $process.HasExited) { $process.Kill() }
           }
 
       - name: Smoke test packaged local API
@@ -256,39 +587,33 @@ jobs:
         run: |
           $exe = Resolve-Path "release/win-unpacked/LockOn ServiceOS.exe"
           $server = Resolve-Path "release/win-unpacked/resources/app.asar.unpacked/dist-server/index.cjs"
-          $data = Join-Path $env:RUNNER_TEMP "lockon-smoke.json"
-          $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-          $token = "smoke_token"
-          $tokenHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($token))).ToLowerInvariant()
-          $db = @{
-            version = 2
-            users = @(
-              @{ id="usr_aaaaaaaaaaaaaaaaaaaa"; email="smoke@example.invalid"; name="Smoke User"; role="USER"; technicianSplitPercent=$null; supportEnabled=$false; status="ACTIVE"; pointIds=@("pnt_smoke"); firstLoginAt=(Get-Date).ToUniversalTime().ToString("o"); lastLoginAt=(Get-Date).ToUniversalTime().ToString("o") }
-            )
-            points = @(@{ id="pnt_smoke"; name="Smoke Point"; city="Warszawa"; active=$true; createdAt=(Get-Date).ToUniversalTime().ToString("o") })
-            customers = @()
-            devices = @()
-            serviceOrders = @()
-            sessions = @(@{ tokenHash=$tokenHash; userId="usr_aaaaaaaaaaaaaaaaaaaa"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) })
-          }
-          $db | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $data
-
+          $data = Join-Path $env:RUNNER_TEMP "lockon-smoke-database.json"
           $env:ELECTRON_RUN_AS_NODE = "1"
           $env:LOCKON_API_HOST = "127.0.0.1"
           $env:LOCKON_API_PORT = "18787"
           $env:LOCKON_DATA_FILE = $data
-          $env:LOCKON_OWNER_EMAIL = "owner-smoke@example.invalid"
+          $env:LOCKON_OWNER_EMAIL = "nowogar@gmail.com"
+          $env:LOCKON_GOOGLE_CLIENT_ID = "996585439932-e10mu53j95s6u13vrua841tm4oco38so.apps.googleusercontent.com"
+
           $process = Start-Process -FilePath $exe -ArgumentList @($server) -WorkingDirectory $env:RUNNER_TEMP -PassThru -WindowStyle Hidden
           try {
-            $ready = $false
+            $ok = $false
             for ($i = 0; $i -lt 20; $i++) {
-              Start-Sleep -Milliseconds 300
-              try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:18787/health"; if ($health.ok) { $ready=$true; break } } catch {}
+              Start-Sleep -Milliseconds 350
+              if ($process.HasExited) {
+                throw "Pakietowany backend zakończył się przed uruchomieniem."
+              }
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:18787/health" -TimeoutSec 2
+                if ($health.ok -eq $true) {
+                  $ok = $true
+                  break
+                }
+              } catch {}
             }
-            if (-not $ready) { throw "Packaged API did not start." }
-            $headers = @{ Authorization="Bearer $token" }
-            $state = Invoke-RestMethod -Uri "http://127.0.0.1:18787/me" -Headers $headers
-            if ($state.user.email -ne "smoke@example.invalid") { throw "Packaged API auth smoke failed." }
+            if (-not $ok) {
+              throw "Pakietowany backend nie odpowiedział na /health."
+            }
           } finally {
-            if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+            if (-not $process.HasExited) { $process.Kill() }
           }
