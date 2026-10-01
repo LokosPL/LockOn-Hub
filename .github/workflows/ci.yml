@@ -195,6 +195,10 @@ jobs:
           $server = Resolve-Path "release/win-unpacked/resources/app.asar.unpacked/dist-server/index.cjs"
           $data = Join-Path $env:RUNNER_TEMP "lockon-v021-technician-smoke.json"
           $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $tokenA = "token_a"
+          $tokenB = "token_b"
+          $tokenHashA = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($tokenA))).ToLowerInvariant()
+          $tokenHashB = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($tokenB))).ToLowerInvariant()
           $db = @{
             version = 2
             users = @(
@@ -206,8 +210,8 @@ jobs:
             devices = @(@{ id="dev_c3333333333333333333"; customerId="cst_c3333333333333333333"; brand="Samsung"; model="S25"; imei=$null; serialNumber=$null; notes=""; createdAt=(Get-Date).ToUniversalTime().ToString("o"); updatedAt=(Get-Date).ToUniversalTime().ToString("o") })
             serviceOrders = @(@{ id="srv_d4444444444444444444"; orderNumber=1; pointId="pnt_v021"; homePointId="pnt_v021"; currentPointId="pnt_v021"; customerId="cst_c3333333333333333333"; deviceId="dev_c3333333333333333333"; orderType="REPAIR"; handlingMode="STANDARD"; issueDescription="Smoke v0.21"; status="WAITING_PARTS"; assignedTechnicianId="usr_a1111111111111111111"; createdByUserId="usr_a1111111111111111111"; estimatedCost=900; finalCost=1100; currency="PLN"; estimatedCompletionAt=(Get-Date).AddDays(1).ToUniversalTime().ToString("o"); receivedAt=(Get-Date).ToUniversalTime().ToString("o"); createdAt=(Get-Date).ToUniversalTime().ToString("o"); updatedAt=(Get-Date).ToUniversalTime().ToString("o") })
             sessions = @(
-              @{ tokenHash="451f81b905e43401b600af1d1a26f5cdcbc870d71dc4c7441cfa5fc94e251e18"; userId="usr_a1111111111111111111"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) },
-              @{ tokenHash="2027835918c417f9104e9a74dc502411f77cf3755787bf9e96adec6bf4160424"; userId="usr_b2222222222222222222"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) }
+              @{ tokenHash=$tokenHashA; userId="usr_a1111111111111111111"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) },
+              @{ tokenHash=$tokenHashB; userId="usr_b2222222222222222222"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) }
             )
           }
           $db | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $data
@@ -226,8 +230,8 @@ jobs:
             }
             if (-not $ready) { throw "Packaged API did not start." }
 
-            $headersA = @{ Authorization="Bearer token_a" }
-            $headersB = @{ Authorization="Bearer token_b" }
+            $headersA = @{ Authorization="Bearer $tokenA" }
+            $headersB = @{ Authorization="Bearer $tokenB" }
             $workspace = Invoke-RestMethod -Uri "http://127.0.0.1:18788/service/technician-workspace" -Headers $headersA
             if ($workspace.counts.waitingParts -ne 1) { throw "Technician workspace missing waiting-parts order." }
 
