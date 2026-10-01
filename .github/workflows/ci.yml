@@ -258,6 +258,8 @@ jobs:
           $server = Resolve-Path "release/win-unpacked/resources/app.asar.unpacked/dist-server/index.cjs"
           $data = Join-Path $env:RUNNER_TEMP "lockon-smoke.json"
           $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $token = "smoke_token"
+          $tokenHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($token))).ToLowerInvariant()
           $db = @{
             version = 2
             users = @(
@@ -267,7 +269,7 @@ jobs:
             customers = @()
             devices = @()
             serviceOrders = @()
-            sessions = @(@{ tokenHash="a2ebf4ce71158d3179087473d79cc9186d0def067888b592d4ca0c5d0b26905"; userId="usr_aaaaaaaaaaaaaaaaaaaa"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) })
+            sessions = @(@{ tokenHash=$tokenHash; userId="usr_aaaaaaaaaaaaaaaaaaaa"; createdAt=$now; lastSeenAt=$now; expiresAt=($now+7200000); absoluteExpiresAt=($now+10800000) })
           }
           $db | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $data
 
@@ -284,9 +286,9 @@ jobs:
               try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:18787/health"; if ($health.ok) { $ready=$true; break } } catch {}
             }
             if (-not $ready) { throw "Packaged API did not start." }
-            $headers = @{ Authorization="Bearer smoke_token" }
-            $state = Invoke-RestMethod -Uri "http://127.0.0.1:18787/auth/state" -Headers $headers
-            if (-not $state.authenticated) { throw "Packaged API auth smoke failed." }
+            $headers = @{ Authorization="Bearer $token" }
+            $state = Invoke-RestMethod -Uri "http://127.0.0.1:18787/me" -Headers $headers
+            if ($state.user.email -ne "smoke@example.invalid") { throw "Packaged API auth smoke failed." }
           } finally {
             if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
